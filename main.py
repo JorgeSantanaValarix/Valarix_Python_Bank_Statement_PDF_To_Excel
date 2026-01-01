@@ -15,7 +15,7 @@ BANK_CONFIGS = {
             "fecha": (0, 80),              # Columna Fecha de Operación
             "liq": (80, 160),              # Columna LIQ (Liquidación)
             "descripcion": (160, 400),     # Columna Descripción
-            "cargos": (362, 398),          # Columna Cargos
+            "cargos": (360, 398),          # Columna Cargos
             "abonos": (422, 458),          # Columna Abonos
             "saldo": (539, 593),           # Columna Saldo
         }
@@ -171,6 +171,30 @@ BANK_KEYWORDS = {
 # Decimal / thousands amount regex (module-level so helpers can use it)
 DEC_AMOUNT_RE = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
 
+# Amount normalization function
+def normalize_amount_str(amount_str):
+    """Normalize amount string by removing commas, spaces, and converting to float."""
+    if not amount_str or pd.isna(amount_str):
+        return 0.0
+    # Remove commas, spaces, and extract numeric value
+    cleaned = str(amount_str).replace(',', '').replace(' ', '').replace('$', '')
+    try:
+        return float(cleaned)
+    except (ValueError, AttributeError):
+        return 0.0
+
+# Amount normalization function
+def normalize_amount_str(amount_str):
+    """Normalize amount string by removing commas, spaces, and converting to float."""
+    if not amount_str or pd.isna(amount_str):
+        return 0.0
+    # Remove commas, spaces, and extract numeric value
+    cleaned = str(amount_str).replace(',', '').replace(' ', '').replace('$', '')
+    try:
+        return float(cleaned)
+    except (ValueError, AttributeError):
+        return 0.0
+
 
 def find_column_coordinates(pdf_path: str, page_number: int = 1):
     """Extract all words from a page and show their coordinates.
@@ -290,6 +314,734 @@ def detect_bank_from_pdf(pdf_path: str) -> str:
     return DEFAULT_BANK
 
 
+def extract_summary_from_pdf(pdf_path: str) -> dict:
+    """
+    Extract summary information from PDF (totals, deposits, withdrawals, balance, movement count).
+    Uses bank-specific patterns to extract summary data accurately.
+    Returns a dictionary with extracted values or None if not found.
+    """
+    summary_data = {
+        'total_depositos': None,
+        'total_retiros': None,
+        'total_cargos': None,
+        'total_abonos': None,
+        'saldo_final': None,
+        'total_movimientos': None,
+        'saldo_anterior': None
+    }
+    
+    try:
+        # First, detect the bank
+        bank_name = detect_bank_from_pdf(pdf_path)
+        print(f"🏦 Extrayendo resumen para banco: {bank_name}")
+        
+        with pdfplumber.open(pdf_path) as pdf:
+            # Check first few pages and last page for summary information
+            pages_to_check = min(3, len(pdf.pages))
+            all_text = ""
+            all_lines = []
+            
+            # Collect text from first pages
+            for page_num in range(pages_to_check):
+                page = pdf.pages[page_num]
+                text = page.extract_text()
+                if text:
+                    all_text += text + "\n"
+                    all_lines.extend(text.split('\n'))
+            
+            # Also check last page for Santander and BanRegio
+            if len(pdf.pages) > pages_to_check:
+                last_page = pdf.pages[-1]
+                last_text = last_page.extract_text()
+                if last_text:
+                    all_lines.extend(last_text.split('\n'))
+            
+            # Bank-specific extraction
+            if bank_name == "BBVA":
+                # BBVA: "Depósitos / Abonos (+) 1 25,000.00" - el último número es el total
+                # "Retiros / Cargos (-) 25 53,877.37"
+                # "Saldo Final (+) 166,301.83"
+                print(f"🔍 Buscando patrones BBVA en {len(all_lines)} líneas...")
+                for i, line in enumerate(all_lines):
+                    # Try multiple patterns for BBVA depósitos
+                    if not summary_data['total_abonos']:
+                        patterns_bbva = [
+                            r'Dep[oó]sitos\s*/\s*Abonos\s*\(\+\)\s+\d+\s+([\d,\.]+)',  # Original pattern
+                            r'Dep[oó]sitos\s*/\s*Abonos\s*\(\+\).*?([\d,\.]+)',  # More flexible
+                            r'Dep[oó]sitos.*?Abonos.*?\(\+\).*?([\d,\.]+)',  # Even more flexible
+                        ]
+                        for pattern in patterns_bbva:
+                            match = re.search(pattern, line, re.I)
+                            if match:
+                                amount = normalize_amount_str(match.group(1))
+                                if amount > 0:
+                                    print(f"✅ BBVA: Encontrado depósitos/abonos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                    summary_data['total_abonos'] = amount
+                                    summary_data['total_depositos'] = amount
+                                    break
+                    
+                    # Search for Retiros / Cargos
+                    if not summary_data['total_cargos']:
+                        patterns_retiros = [
+                            r'Retiros\s*/\s*Cargos\s*\(\-\)\s+\d+\s+([\d,\.]+)',
+                            r'Retiros\s*/\s*Cargos\s*\(\-\).*?([\d,\.]+)',
+                            r'Retiros.*?Cargos.*?\(\-\).*?([\d,\.]+)',
+                        ]
+                        for pattern in patterns_retiros:
+                            match = re.search(pattern, line, re.I)
+                            if match:
+                                amount = normalize_amount_str(match.group(1))
+                                if amount > 0:
+                                    print(f"✅ BBVA: Encontrado retiros/cargos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                    summary_data['total_cargos'] = amount
+                                    summary_data['total_retiros'] = amount
+                                    break
+                    
+                    # Search for Saldo Final
+                    if not summary_data['saldo_final']:
+                        patterns_saldo = [
+                            r'Saldo\s+Final\s*\(\+\)\s+([\d,\.]+)',
+                            r'Saldo\s+Final.*?([\d,\.]+)',
+                        ]
+                        for pattern in patterns_saldo:
+                            match = re.search(pattern, line, re.I)
+                            if match:
+                                amount = normalize_amount_str(match.group(1))
+                                if amount > 0:
+                                    print(f"✅ BBVA: Encontrado saldo final: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                    summary_data['saldo_final'] = amount
+                                    break
+            
+            elif bank_name == "Inbursa":
+                # Inbursa: "ABONOS 9,375.49" - el número después de ABONOS
+                # "CARGOS 58,927.68"
+                # "SALDO ACTUAL 546,409.22"
+                # "SALDO ANTERIOR 595,961.41"
+                print(f"🔍 Buscando patrones Inbursa en {len(all_lines)} líneas...")
+                for i, line in enumerate(all_lines):
+                    if not summary_data['total_abonos']:
+                        match = re.search(r'ABONOS\s+([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Inbursa: Encontrado abonos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['total_abonos'] = amount
+                                summary_data['total_depositos'] = amount
+                    
+                    if not summary_data['total_cargos']:
+                        match = re.search(r'CARGOS\s+([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Inbursa: Encontrado cargos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['total_cargos'] = amount
+                                summary_data['total_retiros'] = amount
+                    
+                    if not summary_data['saldo_final']:
+                        match = re.search(r'SALDO\s+ACTUAL\s+([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Inbursa: Encontrado saldo actual: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['saldo_final'] = amount
+                    
+                    if not summary_data['saldo_anterior']:
+                        match = re.search(r'SALDO\s+ANTERIOR\s+([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Inbursa: Encontrado saldo anterior: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['saldo_anterior'] = amount
+            
+            elif bank_name == "Santander":
+                # Santander: "TOTAL 821,646.20 820,238.73 1,417.18" - primer valor es depósitos, segundo retiros, tercero saldo
+                # This appears at the end of movements table
+                print(f"🔍 Buscando patrones Santander en {len(all_lines)} líneas...")
+                for i, line in enumerate(all_lines):
+                    match = re.search(r'TOTAL\s+([\d,\.]+)\s+([\d,\.]+)\s+([\d,\.]+)', line, re.I)
+                    if match:
+                        depositos = normalize_amount_str(match.group(1))
+                        retiros = normalize_amount_str(match.group(2))
+                        saldo = normalize_amount_str(match.group(3))
+                        print(f"✅ Santander: Encontrado TOTAL en línea {i+1}: {line[:100]}")
+                        print(f"   Depósitos: ${depositos:,.2f}, Retiros: ${retiros:,.2f}, Saldo: ${saldo:,.2f}")
+                        if depositos > 0:
+                            summary_data['total_depositos'] = depositos
+                            summary_data['total_abonos'] = depositos
+                        if retiros > 0:
+                            summary_data['total_retiros'] = retiros
+                            summary_data['total_cargos'] = retiros
+                        if saldo > 0:
+                            summary_data['saldo_final'] = saldo
+                        break
+            
+            elif bank_name == "Banorte":
+                # Banorte: 
+                # "Saldo inicial del periodo $ 2,284.38"
+                # "+ Total de depósitos $ 38,396.00"
+                # "- Total de retiros $ 36,805.40"
+                # "Saldo actual $ 3,347.18"
+                print(f"🔍 Buscando patrones Banorte en {len(all_lines)} líneas...")
+                for i, line in enumerate(all_lines):
+                    # Saldo inicial
+                    if not summary_data['saldo_anterior']:
+                        match = re.search(r'Saldo\s+inicial\s+del\s+periodo\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Banorte: Encontrado saldo inicial: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['saldo_anterior'] = amount
+                    
+                    # Depósitos
+                    if not summary_data['total_depositos']:
+                        match = re.search(r'\+\s*Total\s+de\s+dep[oó]sitos\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Banorte: Encontrado depósitos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['total_depositos'] = amount
+                                summary_data['total_abonos'] = amount
+                    
+                    # Retiros
+                    if not summary_data['total_retiros']:
+                        match = re.search(r'-\s*Total\s+de\s+retiros\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Banorte: Encontrado retiros: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['total_retiros'] = amount
+                                summary_data['total_cargos'] = amount
+                    
+                    # Saldo actual
+                    if not summary_data['saldo_final']:
+                        match = re.search(r'Saldo\s+actual\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Banorte: Encontrado saldo actual: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['saldo_final'] = amount
+            
+            elif bank_name == "Banamex":
+                # Banamex: 
+                # "Saldo Anterior $5,297.64"
+                # "( + ) 8 Depósitos $344,527.26"
+                # "( - ) 16 Retiros $254,072.38"
+                # "SALDO AL 31 DE ENERO DE 2020 $95,752.52"
+                print(f"🔍 Buscando patrones Banamex en {len(all_lines)} líneas...")
+                for i, line in enumerate(all_lines):
+                    # Saldo Anterior
+                    if not summary_data['saldo_anterior']:
+                        match = re.search(r'Saldo\s+Anterior\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Banamex: Encontrado saldo anterior: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['saldo_anterior'] = amount
+                    
+                    # Depósitos
+                    if not summary_data['total_depositos']:
+                        match = re.search(r'\(\s*\+\s*\)\s+\d+\s+Dep[oó]sitos\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Banamex: Encontrado depósitos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['total_depositos'] = amount
+                                summary_data['total_abonos'] = amount
+                    
+                    # Retiros
+                    if not summary_data['total_retiros']:
+                        match = re.search(r'\(\s*-\s*\)\s+\d+\s+Retiros\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Banamex: Encontrado retiros: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['total_retiros'] = amount
+                                summary_data['total_cargos'] = amount
+                    
+                    # Saldo Final
+                    if not summary_data['saldo_final']:
+                        match = re.search(r'SALDO\s+AL\s+\d{1,2}\s+DE\s+\w+\s+DE\s+\d{4}\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Banamex: Encontrado saldo final: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['saldo_final'] = amount
+                        # Also try simpler pattern
+                        if not summary_data['saldo_final']:
+                            match = re.search(r'SALDO\s+AL.*?\$\s*([\d,\.]+)', line, re.I)
+                            if match:
+                                amount = normalize_amount_str(match.group(1))
+                                if amount > 0:
+                                    print(f"✅ Banamex: Encontrado saldo final (patrón simple): ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                    summary_data['saldo_final'] = amount
+            
+            elif bank_name == "Banbajío":
+                # BanBajío: tabla con "SALDO ANTERIOR (+) DEPOSITOS (-) CARGOS SALDO ACTUAL" y valores en la siguiente línea
+                # Pattern: "$ 5,280.55 $ 1,441,951.06 $ 1,350,565.02 $ 96,666.59"
+                print(f"🔍 Buscando patrones BanBajío en {len(all_lines)} líneas...")
+                for i, line in enumerate(all_lines):
+                    if re.search(r'SALDO\s+ANTERIOR.*DEPOSITOS.*CARGOS.*SALDO\s+ACTUAL', line, re.I):
+                        print(f"✅ BanBajío: Encontrada tabla en línea {i+1}: {line[:100]}")
+                        # Next line should have the values
+                        if i + 1 < len(all_lines):
+                            values_line = all_lines[i + 1]
+                            print(f"   Línea de valores: {values_line[:100]}")
+                            # Extract all amounts from the line
+                            amounts = re.findall(r'\$\s*([\d,\.]+)', values_line)
+                            if len(amounts) >= 4:
+                                summary_data['saldo_anterior'] = normalize_amount_str(amounts[0])
+                                summary_data['total_depositos'] = normalize_amount_str(amounts[1])
+                                summary_data['total_abonos'] = normalize_amount_str(amounts[1])
+                                summary_data['total_cargos'] = normalize_amount_str(amounts[2])
+                                summary_data['total_retiros'] = normalize_amount_str(amounts[2])
+                                summary_data['saldo_final'] = normalize_amount_str(amounts[3])
+                                print(f"   Extraídos: Saldo anterior=${summary_data['saldo_anterior']:,.2f}, Depósitos=${summary_data['total_depositos']:,.2f}, Cargos=${summary_data['total_cargos']:,.2f}, Saldo final=${summary_data['saldo_final']:,.2f}")
+                            else:
+                                print(f"   ⚠️  Solo se encontraron {len(amounts)} valores, se esperaban 4")
+                            break
+            
+            elif bank_name == "Banregio":
+                # BanRegio: 
+                # "Saldo Inicial $903.18"
+                # "+ Abonos $49,675.60"
+                # "- Retiros $7,000.00"
+                # "- Comisiones Efectivamente Cobradas $320.00"
+                # "- Otros Cargos $38,678.00"
+                # "= Saldo Final $4,580.78"
+                print(f"🔍 Buscando patrones BanRegio en {len(all_lines)} líneas...")
+                for i, line in enumerate(all_lines):
+                    # Saldo Inicial
+                    if not summary_data['saldo_anterior']:
+                        match = re.search(r'Saldo\s+Inicial\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ BanRegio: Encontrado saldo inicial: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['saldo_anterior'] = amount
+                    
+                    # Abonos
+                    if not summary_data['total_abonos']:
+                        match = re.search(r'\+\s*Abonos\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ BanRegio: Encontrado abonos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['total_abonos'] = amount
+                                summary_data['total_depositos'] = amount
+                    
+                    # Retiros (puede estar en línea separada)
+                    if not summary_data['total_retiros']:
+                        # First check if line has "Retiros" and next line has amount
+                        if re.search(r'-\s*Retiros', line, re.I) and i + 1 < len(all_lines):
+                            next_line = all_lines[i + 1]
+                            match = re.search(r'\$\s*([\d,\.]+)', next_line)
+                            if match:
+                                amount = normalize_amount_str(match.group(1))
+                                if amount > 0:
+                                    print(f"✅ BanRegio: Encontrado retiros: ${amount:,.2f} en línea {i+2}: {next_line[:80]}")
+                                    summary_data['total_retiros'] = amount
+                                    summary_data['total_cargos'] = amount
+                    
+                    # Saldo Final
+                    if not summary_data['saldo_final']:
+                        # First check if line has "Saldo Final" and next line has amount
+                        if re.search(r'=\s*Saldo\s+Final', line, re.I) and i + 1 < len(all_lines):
+                            next_line = all_lines[i + 1]
+                            match = re.search(r'\$\s*([\d,\.]+)', next_line)
+                            if match:
+                                amount = normalize_amount_str(match.group(1))
+                                if amount > 0:
+                                    print(f"✅ BanRegio: Encontrado saldo final: ${amount:,.2f} en línea {i+2}: {next_line[:80]}")
+                                    summary_data['saldo_final'] = amount
+            
+            elif bank_name == "Clara":
+                # Clara:
+                # "+ Saldo anterior 3,305.40"
+                # "- Pagos -3,305.40"
+                # "+ Compras y cargos del periodo 3,115.30"
+                # "Saldo al corte 3,115.30"
+                print(f"🔍 Buscando patrones Clara en {len(all_lines)} líneas...")
+                for i, line in enumerate(all_lines):
+                    # Saldo anterior
+                    if not summary_data['saldo_anterior']:
+                        match = re.search(r'\+\s*Saldo\s+anterior\s+([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Clara: Encontrado saldo anterior: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['saldo_anterior'] = amount
+                    
+                    # Compras y cargos (esto son los cargos)
+                    if not summary_data['total_cargos']:
+                        match = re.search(r'\+\s*Compras\s+y\s+cargos\s+del\s+periodo\s+([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Clara: Encontrado cargos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['total_cargos'] = amount
+                                summary_data['total_retiros'] = amount
+                    
+                    # Saldo al corte
+                    if not summary_data['saldo_final']:
+                        match = re.search(r'Saldo\s+al\s+corte\s+([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Clara: Encontrado saldo al corte: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['saldo_final'] = amount
+            
+            elif bank_name == "Konfio":
+                # Konfio:
+                # "Saldo anterior $ 317,215.14"
+                # "Pagos - $ 97,000.00"
+                # "Compras y cargos $ 56,176.79"
+                # "Saldo total al corte $ 312,227.05"
+                print(f"🔍 Buscando patrones Konfio en {len(all_lines)} líneas...")
+                for i, line in enumerate(all_lines):
+                    # Saldo anterior
+                    if not summary_data['saldo_anterior']:
+                        match = re.search(r'Saldo\s+anterior\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Konfio: Encontrado saldo anterior: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['saldo_anterior'] = amount
+                    
+                    # Compras y cargos
+                    if not summary_data['total_cargos']:
+                        match = re.search(r'Compras\s+y\s+cargos\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Konfio: Encontrado cargos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['total_cargos'] = amount
+                                summary_data['total_retiros'] = amount
+                    
+                    # Saldo total al corte
+                    if not summary_data['saldo_final']:
+                        match = re.search(r'Saldo\s+total\s+al\s+corte\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Konfio: Encontrado saldo total al corte: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['saldo_final'] = amount
+            
+            elif bank_name == "Scotiabank":
+                # Scotiabank:
+                # "Saldo inicial $1,031,652.97"
+                # "(+) Depósitos $35,461,511.04"
+                # "(-) Retiros $33,018,203.16"
+                # "(=) Saldo final de la cuenta $3,473,941.21"
+                print(f"🔍 Buscando patrones Scotiabank en {len(all_lines)} líneas...")
+                for i, line in enumerate(all_lines):
+                    # Saldo inicial
+                    if not summary_data['saldo_anterior']:
+                        match = re.search(r'Saldo\s+inicial\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Scotiabank: Encontrado saldo inicial: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['saldo_anterior'] = amount
+                    
+                    # Depósitos
+                    if not summary_data['total_depositos']:
+                        match = re.search(r'\(\+\)\s+Dep[oó]sitos\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Scotiabank: Encontrado depósitos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['total_depositos'] = amount
+                                summary_data['total_abonos'] = amount
+                    
+                    # Retiros
+                    if not summary_data['total_retiros']:
+                        match = re.search(r'\(-\s*\)\s+Retiros\s+\$\s*([\d,\.]+)', line, re.I)
+                        if not match:
+                            # Try alternative pattern without space after minus
+                            match = re.search(r'\(-\s*\)\s*Retiros\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Scotiabank: Encontrado retiros: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['total_retiros'] = amount
+                                summary_data['total_cargos'] = amount
+                    
+                    # Saldo final
+                    if not summary_data['saldo_final']:
+                        match = re.search(r'\(=\s*\)\s+Saldo\s+final\s+de\s+la\s+cuenta\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                print(f"✅ Scotiabank: Encontrado saldo final: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['saldo_final'] = amount
+            
+            else:
+                # Generic patterns for other banks
+                patterns = {
+                    'depositos': [
+                        r'(?:dep[oó]sitos?|abonos?)\s*[:\-]?\s*\$?\s*([\d,\.\s]+)',
+                        r'(?:\+\s*)?\d+\s+dep[oó]sitos?\s+([\d,\.\s]+)',
+                        r'total\s+dep[oó]sitos?\s*[:\-]?\s*\$?\s*([\d,\.\s]+)',
+                    ],
+                    'retiros': [
+                        r'(?:retiros?|cargos?)\s*[:\-]?\s*\$?\s*([\d,\.\s]+)',
+                        r'(?:\-\s*)?\d+\s+retiros?\s+([\d,\.\s]+)',
+                        r'total\s+retiros?\s*[:\-]?\s*\$?\s*([\d,\.\s]+)',
+                        r'total\s+cargos?\s*[:\-]?\s*\$?\s*([\d,\.\s]+)',
+                    ],
+                    'abonos': [
+                        r'total\s+abonos?\s*[:\-]?\s*\$?\s*([\d,\.\s]+)',
+                        r'abonos?\s*[:\-]?\s*\$?\s*([\d,\.\s]+)',
+                    ],
+                    'cargos': [
+                        r'total\s+cargos?\s*[:\-]?\s*\$?\s*([\d,\.\s]+)',
+                        r'cargos?\s*[:\-]?\s*\$?\s*([\d,\.\s]+)',
+                    ],
+                    'saldo_final': [
+                        r'saldo\s+(?:al|final|al\s+\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\s*[:\-]?\s*\$?\s*([\d,\.\s]+)',
+                        r'saldo\s+(?:final|total)\s*[:\-]?\s*\$?\s*([\d,\.\s]+)',
+                        r'saldo\s*[:\-]?\s*\$?\s*([\d,\.\s]+)',
+                    ],
+                    'saldo_anterior': [
+                        r'saldo\s+anterior\s*[:\-]?\s*\$?\s*([\d,\.\s]+)',
+                    ],
+                    'movimientos': [
+                        r'total\s+de\s+movimientos?\s*[:\-]?\s*(\d+)',
+                        r'(\d+)\s+movimientos?',
+                    ]
+                }
+                
+                # Search for patterns in all lines
+                for line in all_lines:
+                    # Look for depositos/abonos
+                    if not summary_data['total_depositos'] and not summary_data['total_abonos']:
+                        for pattern in patterns['depositos']:
+                            match = re.search(pattern, line, re.I)
+                            if match:
+                                amount = normalize_amount_str(match.group(1))
+                                if amount > 0:
+                                    summary_data['total_depositos'] = amount
+                                    summary_data['total_abonos'] = amount
+                                    break
+                    
+                    # Look for retiros/cargos
+                    if not summary_data['total_retiros'] and not summary_data['total_cargos']:
+                        for pattern in patterns['retiros']:
+                            match = re.search(pattern, line, re.I)
+                            if match:
+                                amount = normalize_amount_str(match.group(1))
+                                if amount > 0:
+                                    summary_data['total_retiros'] = amount
+                                    summary_data['total_cargos'] = amount
+                                    break
+                    
+                    # Look for abonos specifically
+                    if not summary_data['total_abonos']:
+                        for pattern in patterns['abonos']:
+                            match = re.search(pattern, line, re.I)
+                            if match:
+                                amount = normalize_amount_str(match.group(1))
+                                if amount > 0:
+                                    summary_data['total_abonos'] = amount
+                                    break
+                    
+                    # Look for cargos specifically
+                    if not summary_data['total_cargos']:
+                        for pattern in patterns['cargos']:
+                            match = re.search(pattern, line, re.I)
+                            if match:
+                                amount = normalize_amount_str(match.group(1))
+                                if amount > 0:
+                                    summary_data['total_cargos'] = amount
+                                    break
+                    
+                    # Look for saldo final
+                    if not summary_data['saldo_final']:
+                        for pattern in patterns['saldo_final']:
+                            match = re.search(pattern, line, re.I)
+                            if match:
+                                amount = normalize_amount_str(match.group(1))
+                                if amount > 0:
+                                    summary_data['saldo_final'] = amount
+                                    break
+                    
+                    # Look for saldo anterior
+                    if not summary_data['saldo_anterior']:
+                        for pattern in patterns['saldo_anterior']:
+                            match = re.search(pattern, line, re.I)
+                            if match:
+                                amount = normalize_amount_str(match.group(1))
+                                if amount > 0:
+                                    summary_data['saldo_anterior'] = amount
+                                    break
+                    
+                    # Look for total movimientos
+                    if not summary_data['total_movimientos']:
+                        for pattern in patterns['movimientos']:
+                            match = re.search(pattern, line, re.I)
+                            if match:
+                                count = int(match.group(1))
+                                if count > 0:
+                                    summary_data['total_movimientos'] = count
+                                    break
+    
+    except Exception as e:
+        print(f"⚠️  Error al extraer resumen del PDF: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Print what was found
+    found_items = [k for k, v in summary_data.items() if v is not None]
+    if found_items:
+        print(f"✅ Valores encontrados en PDF: {', '.join(found_items)}")
+    else:
+        print("⚠️  No se encontraron valores de resumen en el PDF")
+    
+    return summary_data
+
+
+def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
+    """
+    Calculate totals from extracted movements DataFrame.
+    Returns a dictionary with calculated totals.
+    """
+    totals = {
+        'total_abonos': 0.0,
+        'total_cargos': 0.0,
+        'total_retiros': 0.0,
+        'total_depositos': 0.0,
+        'saldo_final': 0.0,
+        'total_movimientos': len(df_mov)
+    }
+    
+    # Calculate based on available columns
+    if 'Abonos' in df_mov.columns:
+        totals['total_abonos'] = df_mov['Abonos'].apply(normalize_amount_str).sum()
+        totals['total_depositos'] = totals['total_abonos']
+    
+    if 'Cargos' in df_mov.columns:
+        totals['total_cargos'] = df_mov['Cargos'].apply(normalize_amount_str).sum()
+        totals['total_retiros'] = totals['total_cargos']
+    
+    # Get final balance (last row's saldo if available)
+    # Use the last non-empty value from the "Saldo" column in Movements tab
+    # This is called BEFORE adding the "Total" row, so we can safely get the last value
+    if 'Saldo' in df_mov.columns:
+        saldo_col = df_mov['Saldo']
+        # Get last non-empty saldo value (iterate from end to beginning)
+        for idx in range(len(saldo_col) - 1, -1, -1):
+            val = saldo_col.iloc[idx]
+            if val and pd.notna(val) and str(val).strip() and str(val).strip() != '':
+                totals['saldo_final'] = normalize_amount_str(val)
+                print(f"✅ Saldo final extraído de Movements: ${totals['saldo_final']:,.2f} (fila {idx+1} de {len(saldo_col)})")
+                break
+    
+    return totals
+
+
+def create_validation_sheet(pdf_summary: dict, extracted_totals: dict) -> pd.DataFrame:
+    """
+    Create a validation DataFrame comparing PDF summary with extracted totals.
+    """
+    validation_data = []
+    
+    # Tolerance for floating point comparison (0.01 for cents)
+    tolerance = 0.01
+    
+    # Compare Abonos/Depositos
+    pdf_abonos = pdf_summary.get('total_abonos') or pdf_summary.get('total_depositos')
+    ext_abonos = extracted_totals.get('total_abonos', 0.0)
+    abonos_match = pdf_abonos is None or abs(pdf_abonos - ext_abonos) < tolerance
+    validation_data.append({
+        'Concepto': 'Total Abonos / Depósitos',
+        'Valor en PDF': f"${pdf_abonos:,.2f}" if pdf_abonos else "No encontrado",
+        'Valor Extraído': f"${ext_abonos:,.2f}",
+        'Diferencia': f"${abs(pdf_abonos - ext_abonos):,.2f}" if pdf_abonos else "N/A",
+        'Estado': '✓' if abonos_match else '✗'
+    })
+    
+    # Compare Cargos/Retiros
+    pdf_cargos = pdf_summary.get('total_cargos') or pdf_summary.get('total_retiros')
+    ext_cargos = extracted_totals.get('total_cargos', 0.0)
+    cargos_match = pdf_cargos is None or abs(pdf_cargos - ext_cargos) < tolerance
+    validation_data.append({
+        'Concepto': 'Total Cargos / Retiros',
+        'Valor en PDF': f"${pdf_cargos:,.2f}" if pdf_cargos else "No encontrado",
+        'Valor Extraído': f"${ext_cargos:,.2f}",
+        'Diferencia': f"${abs(pdf_cargos - ext_cargos):,.2f}" if pdf_cargos else "N/A",
+        'Estado': '✓' if cargos_match else '✗'
+    })
+    
+    # Compare Saldo Final
+    pdf_saldo = pdf_summary.get('saldo_final')
+    ext_saldo = extracted_totals.get('saldo_final', 0.0)
+    saldo_match = pdf_saldo is None or abs(pdf_saldo - ext_saldo) < tolerance
+    validation_data.append({
+        'Concepto': 'Saldo Final',
+        'Valor en PDF': f"${pdf_saldo:,.2f}" if pdf_saldo else "No encontrado",
+        'Valor Extraído': f"${ext_saldo:,.2f}",
+        'Diferencia': f"${abs(pdf_saldo - ext_saldo):,.2f}" if pdf_saldo else "N/A",
+        'Estado': '✓' if saldo_match else '✗'
+    })
+    
+    # Compare Total Movimientos
+    pdf_mov = pdf_summary.get('total_movimientos')
+    ext_mov = extracted_totals.get('total_movimientos', 0)
+    mov_match = pdf_mov is None or pdf_mov == ext_mov
+    validation_data.append({
+        'Concepto': 'Total de Movimientos',
+        'Valor en PDF': str(pdf_mov) if pdf_mov else "No encontrado",
+        'Valor Extraído': str(ext_mov),
+        'Diferencia': str(abs(pdf_mov - ext_mov)) if pdf_mov else "N/A",
+        'Estado': '✓' if mov_match else '✗'
+    })
+    
+    # Overall status
+    all_match = abonos_match and cargos_match and saldo_match and mov_match
+    validation_data.append({
+        'Concepto': 'VALIDACIÓN GENERAL',
+        'Valor en PDF': '',
+        'Valor Extraído': '',
+        'Diferencia': '',
+        'Estado': '✓ TODO CORRECTO' if all_match else '✗ HAY DISCREPANCIAS'
+    })
+    
+    return pd.DataFrame(validation_data)
+
+
+def print_validation_summary(pdf_summary: dict, extracted_totals: dict, validation_df: pd.DataFrame):
+    """
+    Print validation summary to console with checkmarks or X marks.
+    """
+    print("\n" + "=" * 80)
+    print("📊 VALIDACIÓN DE DATOS")
+    print("=" * 80)
+    
+    # Check overall status
+    overall_status = validation_df[validation_df['Concepto'] == 'VALIDACIÓN GENERAL']['Estado'].values[0]
+    
+    if '✓' in overall_status:
+        print("✅ VALIDACIÓN: TODO CORRECTO")
+    else:
+        print("❌ VALIDACIÓN: HAY DISCREPANCIAS")
+    
+    print("\nComparación de Totales:")
+    print("-" * 80)
+    
+    for _, row in validation_df.iterrows():
+        if row['Concepto'] == 'VALIDACIÓN GENERAL':
+            print(f"\n{row['Concepto']}: {row['Estado']}")
+        else:
+            status_icon = "✅" if row['Estado'] == '✓' else "❌"
+            print(f"{status_icon} {row['Concepto']}")
+            print(f"   PDF: {row['Valor en PDF']}")
+            print(f"   Extraído: {row['Valor Extraído']}")
+            if row['Diferencia'] != "N/A":
+                print(f"   Diferencia: {row['Diferencia']}")
+    
+    print("=" * 80 + "\n")
+
+
 def extract_text_from_pdf(pdf_path: str) -> list:
     """
     Extract text and word positions from each page of a PDF.
@@ -387,11 +1139,25 @@ def group_words_by_row(words, y_tolerance=5):
 def assign_word_to_column(word_x0, word_x1, columns):
     """Assign a word (with x0, x1 coordinates) to a column based on X-ranges.
     Returns column name or None if not in any range.
+    Prioritizes numeric columns (cargos, abonos, saldo) over description when there's overlap.
     """
     word_center = (word_x0 + word_x1) / 2
+    
+    # First, check numeric columns (cargos, abonos, saldo) to prioritize them
+    # This fixes the issue where cargos (360-398) overlaps with descripcion (160-400)
+    numeric_cols = ['cargos', 'abonos', 'saldo']
+    for col_name in numeric_cols:
+        if col_name in columns:
+            x_min, x_max = columns[col_name]
+            if x_min <= word_center <= x_max:
+                return col_name
+    
+    # Then check other columns (fecha, liq, descripcion, etc.)
     for col_name, (x_min, x_max) in columns.items():
-        if x_min <= word_center <= x_max:
-            return col_name
+        if col_name not in numeric_cols:  # Skip numeric cols, already checked
+            if x_min <= word_center <= x_max:
+                return col_name
+    
     return None
 
 
@@ -864,35 +1630,53 @@ def main():
             # We'll assign each detected amount to the appropriate numeric column
             # ONLY if it's within the column's coordinate range
             for amt_text, center in amounts:
-                # Skip if amount is within description range (don't assign to numeric columns)
-                if descripcion_range and descripcion_range[0] <= center <= descripcion_range[1]:
-                    continue
-                
                 # Find which numeric column this amount belongs to based on coordinate range
                 # Use a small tolerance for edge cases (amounts near column boundaries)
                 tolerance = 10
                 assigned = False
+                
+                # First, check if amount is within any numeric column range
+                # This takes priority over description range check
                 for col in ('cargos', 'abonos', 'saldo'):
                     if col in col_ranges:
                         x0, x1 = col_ranges[col]
                         # Check with tolerance to handle amounts slightly outside the range
                         if (x0 - tolerance) <= center <= (x1 + tolerance):
+                            # Amount is within a numeric column range - assign it regardless of description range
                             # Amount is within this column's range (with tolerance)
-                            existing = r.get(col) or ''
+                            existing = r.get(col, '').strip()
                             # Check if this amount is already in the column (to avoid duplicates)
                             if existing and amt_text in existing:
                                 assigned = True
                                 break
                             # Only assign if column is empty or if this amount is not already there
-                            if not existing or amt_text not in existing:
-                                if existing:
-                                    r[col] = (existing + ' ' + amt_text).strip()
+                            # IMPORTANT: Preserve existing values if they're already valid numbers
+                            if not existing:
+                                # Column is empty, assign the amount
+                                r[col] = amt_text
+                                assigned = True
+                                break
+                            elif amt_text not in existing:
+                                # Column has a value but this amount is different
+                                # Check if existing is a valid amount (has digits and decimal)
+                                if DEC_AMOUNT_RE.search(existing):
+                                    # Existing looks like a valid amount - preserve it
+                                    # Don't overwrite or append, just keep the existing value
+                                    # This preserves values extracted during initial coordinate-based extraction
+                                    assigned = True
+                                    break
                                 else:
+                                    # Existing doesn't look like an amount, replace it
                                     r[col] = amt_text
-                            assigned = True
-                            break
+                                    assigned = True
+                                    break
+                            else:
+                                # Amount already in column
+                                assigned = True
+                                break
                 
-                # If not assigned by range, use proximity as fallback (but still exclude description range)
+                # If not assigned by range, use proximity as fallback
+                # Only exclude from description range if it's NOT in any numeric column range
                 if not assigned and col_centers:
                     # Calculate distances, but only consider columns that are reasonably close
                     valid_cols = {}
@@ -905,14 +1689,41 @@ def main():
                     
                     if valid_cols:
                         nearest = min(valid_cols.keys(), key=lambda c: valid_cols[c])
-                        # Double check it's not in description range
-                        if not descripcion_range or not (descripcion_range[0] <= center <= descripcion_range[1]):
-                            existing = r.get(nearest) or ''
+                        # Check if amount is in description range AND not in any numeric column
+                        # If it's close to a numeric column, assign it even if it's also in description range
+                        in_desc_range = descripcion_range and descripcion_range[0] <= center <= descripcion_range[1]
+                        in_num_range = False
+                        for col in col_ranges.keys():
+                            x0, x1 = col_ranges[col]
+                            if (x0 - 20) <= center <= (x1 + 20):
+                                in_num_range = True
+                                break
+                        
+                        # Only skip if in description range AND NOT in any numeric column range
+                        if not in_desc_range or in_num_range:
+                            existing = r.get(nearest, '').strip()
                             if existing:
-                                if amt_text not in existing:
+                                # If existing is a valid amount, preserve it
+                                if DEC_AMOUNT_RE.search(existing):
+                                    # Existing is a valid amount, preserve it
+                                    assigned = True
+                                    break
+                                elif amt_text not in existing:
                                     r[nearest] = (existing + ' ' + amt_text).strip()
+                                    assigned = True
+                                    break
                             else:
                                 r[nearest] = amt_text
+                                assigned = True
+                                break
+                
+                # Only skip if amount is in description range AND NOT assigned to any numeric column
+                # This prevents amounts in cargos/abonos/saldo from being skipped
+                if not assigned and descripcion_range:
+                    if descripcion_range[0] <= center <= descripcion_range[1]:
+                        # Amount is in description range and wasn't assigned to any numeric column
+                        # Skip it to avoid assigning description amounts to numeric columns
+                        continue
 
             # Remove amount tokens from descripcion if present
             if r.get('descripcion'):
@@ -921,6 +1732,14 @@ def main():
             # cleanup helper key
             if '_amounts' in r:
                 del r['_amounts']
+            
+            # Debug: Print row data for BBVA to see what's happening with cargos
+            if bank_config['name'] == 'BBVA' and len([x for x in movement_rows if x.get('cargos')]) <= 5:  # Only print first 5 rows with cargos for debugging
+                cargos_val = r.get('cargos', '')
+                abonos_val = r.get('abonos', '')
+                saldo_val = r.get('saldo', '')
+                if cargos_val or abonos_val or saldo_val:
+                    print(f"DEBUG BBVA Row: cargos='{cargos_val}', abonos='{abonos_val}', saldo='{saldo_val}'")
         
         # If columns_config was empty, we may have rows but without cargos/abonos/saldo
         # Try to extract them from raw text or _amounts
@@ -1215,14 +2034,103 @@ def main():
         df_mov = df_mov[desired_order]
 
     print("📊 Exporting to Excel...")
-    # write two sheets: summary and movements
+    
+    # Extract summary from PDF and calculate totals for validation
+    # IMPORTANT: Calculate totals BEFORE adding the "Total" row
+    print("🔍 Extrayendo información de resumen del PDF para validación...")
+    pdf_summary = extract_summary_from_pdf(pdf_path)
+    extracted_totals = calculate_extracted_totals(df_mov, bank_config['name'])
+    
+    # Add a "Total" row at the end summing only "Abonos" and "Cargos" columns
+    # This is done AFTER calculating totals for validation
+    print("📊 Agregando fila de totales...")
+    total_row = {}
+    
+    # For each column, only calculate sum for "Abonos" and "Cargos"
+    for col in df_mov.columns:
+        if col in ['Fecha', 'Fecha Oper', 'Fecha Liq.', 'Descripción']:
+            # Text columns: put "Total" in the first column, empty in others
+            if col == df_mov.columns[0]:
+                total_row[col] = 'Total'
+            else:
+                total_row[col] = ''
+        elif col in ['Abonos', 'Cargos']:
+            # Only sum Abonos and Cargos columns
+            try:
+                # Try to convert to numeric and sum
+                numeric_values = df_mov[col].apply(lambda x: normalize_amount_str(x) if pd.notna(x) and str(x).strip() else 0.0)
+                total = numeric_values.sum()
+                if total > 0:
+                    # Format as currency with 2 decimals
+                    total_row[col] = f"{total:,.2f}"
+                else:
+                    total_row[col] = ''
+            except:
+                # If conversion fails, leave empty
+                total_row[col] = ''
+        else:
+            # All other columns (Saldo, Operación, Liquidación, etc.) - leave empty
+            total_row[col] = ''
+    
+    # Append the total row to the dataframe
+    total_df = pd.DataFrame([total_row])
+    df_mov = pd.concat([df_mov, total_df], ignore_index=True)
+    print(f"✅ Fila de totales agregada (solo Abonos y Cargos)")
+    
+    # Create validation sheet
+    print("📋 Creando pestaña de validación...")
+    df_validation = create_validation_sheet(pdf_summary, extracted_totals)
+    print(f"✅ DataFrame de validación creado con {len(df_validation)} filas")
+    print(f"   Columnas: {list(df_validation.columns)}")
+    
+    # Print validation summary to console
+    print_validation_summary(pdf_summary, extracted_totals, df_validation)
+    
+    # write three sheets: summary, movements, and validation
     try:
+        print(f"📝 Escribiendo Excel con 3 pestañas: Summary, Movements, Data Validation")
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
+            print("   - Escribiendo pestaña 'Summary'...")
             df_summary.to_excel(writer, sheet_name='Summary', index=False)
+            
+            print("   - Escribiendo pestaña 'Movements'...")
             df_mov.to_excel(writer, sheet_name='Movements', index=False)
+            
+            # Ensure validation DataFrame exists and is not empty
+            print("   - Escribiendo pestaña 'Data Validation'...")
+            if df_validation is not None and not df_validation.empty:
+                try:
+                    df_validation.to_excel(writer, sheet_name='Data Validation', index=False)
+                    print(f"   ✅ Pestaña 'Data Validation' creada exitosamente con {len(df_validation)} filas")
+                except Exception as e:
+                    print(f"   ❌ Error al escribir pestaña 'Data Validation': {e}")
+                    # Try with a simpler name
+                    try:
+                        df_validation.to_excel(writer, sheet_name='Validation', index=False)
+                        print(f"   ✅ Pestaña 'Validation' creada exitosamente (nombre alternativo)")
+                    except Exception as e2:
+                        print(f"   ❌ Error también con nombre alternativo: {e2}")
+            else:
+                print("   ⚠️  DataFrame de validación está vacío o es None")
+                # Create a minimal validation sheet even if empty
+                empty_validation = pd.DataFrame({
+                    'Concepto': ['No se pudo crear la validación'],
+                    'Valor en PDF': [''],
+                    'Valor Extraído': [''],
+                    'Diferencia': [''],
+                    'Estado': ['⚠️']
+                })
+                try:
+                    empty_validation.to_excel(writer, sheet_name='Data Validation', index=False)
+                    print("   ✅ Pestaña 'Data Validation' creada con datos mínimos")
+                except Exception as e:
+                    print(f"   ❌ Error al crear pestaña mínima: {e}")
+        
         print(f"✅ Excel file created -> {output_excel}")
     except Exception as e:
-        print('Error writing Excel:', e)
+        print(f'❌ Error writing Excel: {e}')
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
