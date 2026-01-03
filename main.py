@@ -1065,7 +1065,8 @@ def extract_digitem_section(pdf_path: str, columns_config: dict) -> pd.DataFrame
     try:
         # Use the same extraction method as Movements
         extracted_data = extract_text_from_pdf(pdf_path)
-        date_pattern = re.compile(r"\b(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}\b")
+        # Pattern for dates: supports both "DIA MES" (01 ABR) and "MES DIA" (ABR 01) formats
+        date_pattern = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01]))\b", re.I)
         dec_amount_re = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
         
         in_digitem_section = False
@@ -1329,7 +1330,8 @@ def _extract_two_dates(txt):
     """Helper function to extract dates (same as in main function)"""
     if not txt or not isinstance(txt, str):
         return (None, None)
-    date_pattern = re.compile(r"(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}", re.I)
+    # Pattern for dates: supports both "DIA MES" (01 ABR) and "MES DIA" (ABR 01) formats
+    date_pattern = re.compile(r"(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01]))", re.I)
     found = date_pattern.findall(txt)
     if not found:
         return (None, None)
@@ -1575,7 +1577,8 @@ def is_transaction_row(row_data):
     saldo = (row_data.get('saldo') or '').strip()
     
     # Must have a date matching DD/MMM pattern
-    day_re = re.compile(r"\b(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}\b")
+    # Pattern for dates: supports both "DIA MES" (01 ABR) and "MES DIA" (ABR 01) formats
+    day_re = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01]))\b", re.I)
     has_date = bool(day_re.search(fecha))
     
     # Must have at least one numeric amount
@@ -1673,7 +1676,9 @@ def main():
     columns_config = bank_config.get("columns", {})
 
     # find where movements start (first line anywhere that matches a date or contains header keywords)
-    day_re = re.compile(r"\b(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}\b")
+    # Pattern for dates: supports both "DIA MES" (01 ABR) and "MES DIA" (ABR 01) formats
+    # Common month abbreviations: ENE, FEB, MAR, ABR, MAY, JUN, JUL, AGO, SEP, OCT, NOV, DIC
+    day_re = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01]))\b", re.I)
     # match lines that contain both 'fecha' AND 'descripcion', OR lines that contain 'concepto'
     # Implemented with lookahead for the AND case, and an alternation for 'concepto'
     header_keywords_re = re.compile(r"(?:(?=.*\bfecha\b)(?=.*\bdescripcion\b))|(?:\bconcepto\b)", re.I)
@@ -1683,16 +1688,54 @@ def main():
     movement_start_page = None
     movement_start_index = None
     movements_lines = []
+    
+    # For Inbursa, movements start after "DETALLE DE MOVIMIENTOS" and the header line
+    inbursa_detalle_pattern = None
+    detalle_found = False
+    header_line_skipped = False
+    if bank_config['name'] == 'Inbursa':
+        inbursa_detalle_pattern = re.compile(r'DETALLE\s+DE\s+MOVIMIENTOS', re.I)
+        # Pattern to detect the header line: "FECHA REFERENCIA CONCEPTO CARGOS ABONOS SALDO"
+        # Make it more flexible to handle variations in spacing
+        inbursa_header_pattern = re.compile(r'FECHA.*?REFERENCIA.*?CONCEPTO.*?CARGOS.*?ABONOS.*?SALDO', re.I)
+    
     for p in pages_lines:
         if not movement_start_found:
             for i, ln in enumerate(p['lines']):
-                if day_re.search(ln) or header_keywords_re.search(ln):
-                    movement_start_found = True
-                    movement_start_page = p['page']
-                    movement_start_index = i
-                    # collect from this line onward in this page
-                    movements_lines.extend(p['lines'][i:])
-                    break
+                # For Inbursa, first find "DETALLE DE MOVIMIENTOS"
+                if inbursa_detalle_pattern and not detalle_found:
+                    if inbursa_detalle_pattern.search(ln):
+                        detalle_found = True
+                        continue  # Skip the "DETALLE DE MOVIMIENTOS" line itself
+                
+                # After finding "DETALLE DE MOVIMIENTOS", skip the header line
+                if inbursa_detalle_pattern and detalle_found and not header_line_skipped:
+                    if inbursa_header_pattern and inbursa_header_pattern.search(ln):
+                        header_line_skipped = True
+                        continue  # Skip the header line
+                
+                # After finding "DETALLE DE MOVIMIENTOS" and skipping header for Inbursa, or for other banks, look for date/header
+                if (inbursa_detalle_pattern and detalle_found and header_line_skipped) or not inbursa_detalle_pattern:
+                    # For Inbursa, only look for dates (not headers, as we already skipped the header line)
+                    # For other banks, look for dates or headers
+                    if inbursa_detalle_pattern:
+                        # For Inbursa, only start when we find a date (actual movement row)
+                        if day_re.search(ln):
+                            movement_start_found = True
+                            movement_start_page = p['page']
+                            movement_start_index = i
+                            # collect from this line onward in this page
+                            movements_lines.extend(p['lines'][i:])
+                            break
+                    else:
+                        # For other banks, look for date or header
+                        if day_re.search(ln) or header_keywords_re.search(ln):
+                            movement_start_found = True
+                            movement_start_page = p['page']
+                            movement_start_index = i
+                            # collect from this line onward in this page
+                            movements_lines.extend(p['lines'][i:])
+                            break
         else:
             movements_lines.extend(p['lines'])
 
@@ -2296,7 +2339,8 @@ def main():
 
     # Split combined fecha values into two separate columns: Fecha Oper and Fecha Liq
     # Works for coordinate-based extraction (column 'fecha') and for fallback raw lines ('raw').
-    date_pattern = re.compile(r"(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}", re.I)
+    # Pattern for dates: supports both "DIA MES" (01 ABR) and "MES DIA" (ABR 01) formats
+    date_pattern = re.compile(r"(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01]))", re.I)
 
     def _extract_two_dates(txt):
         if not txt or not isinstance(txt, str):
