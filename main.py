@@ -59,7 +59,8 @@ BANK_CONFIGS = {
         "columns": {
             "fecha": (59, 89),             # Columna Fecha de Operación
             "descripcion": (170, 228),     # Columna Descripción
-            "cargos": (354, 375),          # Columna Cargos
+            "cargos": (340, 388),          # Columna Cargos
+            "cargos en otra divisa": (420, 451),          # Columna Cargos
             "abonos": (527, 548),          # Columna Abonos
         }
     },
