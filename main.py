@@ -60,7 +60,8 @@ BANK_CONFIGS = {
             "fecha": (59, 89),             # Columna Fecha de Operación
             "descripcion": (170, 228),     # Columna Descripción
             "cargos": (340, 388),          # Columna Cargos
-            "cargos en otra divisa": (420, 451),          # Columna Cargos
+            #"cargos": (340, 388),          # Columna Cargos
+            #"cargos en otra divisa": (420, 451),          # Columna Cargos
             "abonos": (527, 548),          # Columna Abonos
         }
     },
@@ -1066,8 +1067,11 @@ def extract_digitem_section(pdf_path: str, columns_config: dict) -> pd.DataFrame
     try:
         # Use the same extraction method as Movements
         extracted_data = extract_text_from_pdf(pdf_path)
-        # Pattern for dates: supports both "DIA MES" (01 ABR) and "MES DIA" (ABR 01) formats
-        date_pattern = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01]))\b", re.I)
+        # Pattern for dates: supports multiple formats:
+        # - "DIA MES" (01 ABR)
+        # - "MES DIA" (ABR 01)
+        # - "DIA MES AÑO" (06 mar 2023) - for Konfio
+        date_pattern = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:\s+\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
         dec_amount_re = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
         
         in_digitem_section = False
@@ -1331,8 +1335,11 @@ def _extract_two_dates(txt):
     """Helper function to extract dates (same as in main function)"""
     if not txt or not isinstance(txt, str):
         return (None, None)
-    # Pattern for dates: supports both "DIA MES" (01 ABR) and "MES DIA" (ABR 01) formats
-    date_pattern = re.compile(r"(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01]))", re.I)
+    # Pattern for dates: supports multiple formats:
+    # - "DIA MES" (01 ABR)
+    # - "MES DIA" (ABR 01)
+    # - "DIA MES AÑO" (06 mar 2023) - for Konfio
+    date_pattern = re.compile(r"(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:\s+\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})", re.I)
     found = date_pattern.findall(txt)
     if not found:
         return (None, None)
@@ -1494,7 +1501,8 @@ def split_pages_into_lines(pages: list) -> list:
 
 def group_entries_from_lines(lines):
     """Group lines into transaction entries: a line starting with a date begins a new entry."""
-    day_re = re.compile(r"\b(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}\b")
+    # Pattern for dates: supports multiple formats including "DIA MES AÑO" (06 mar 2023)
+    day_re = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:\s+\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
     entries = []
     for line in lines:
         if day_re.search(line):
@@ -1579,7 +1587,8 @@ def is_transaction_row(row_data):
     
     # Must have a date matching DD/MMM pattern
     # Pattern for dates: supports both "DIA MES" (01 ABR) and "MES DIA" (ABR 01) formats
-    day_re = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01]))\b", re.I)
+    # Pattern for dates: supports multiple formats including "DIA MES AÑO" (06 mar 2023)
+    day_re = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:\s+\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
     has_date = bool(day_re.search(fecha))
     
     # Must have at least one numeric amount
@@ -1677,9 +1686,12 @@ def main():
     columns_config = bank_config.get("columns", {})
 
     # find where movements start (first line anywhere that matches a date or contains header keywords)
-    # Pattern for dates: supports both "DIA MES" (01 ABR) and "MES DIA" (ABR 01) formats
+    # Pattern for dates: supports multiple formats:
+    # - "DIA MES" (01 ABR)
+    # - "MES DIA" (ABR 01)
+    # - "DIA MES AÑO" (06 mar 2023) - for Konfio
     # Common month abbreviations: ENE, FEB, MAR, ABR, MAY, JUN, JUL, AGO, SEP, OCT, NOV, DIC
-    day_re = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01]))\b", re.I)
+    day_re = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:\s+\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
     # match lines that contain both 'fecha' AND 'descripcion', OR lines that contain 'concepto'
     # Implemented with lookahead for the AND case, and an alternation for 'concepto'
     header_keywords_re = re.compile(r"(?:(?=.*\bfecha\b)(?=.*\bdescripcion\b))|(?:\bconcepto\b)", re.I)
@@ -1751,174 +1763,295 @@ def main():
         summary_lines = []
 
     # Extract movements using coordinate-based column detection
-    movement_rows = []
-    # regex to detect decimal-like amounts (used to strip amounts from descriptions and detect amounts)
-    dec_amount_re = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
-    # Pattern to detect end of movements table for Banamex
-    movement_end_pattern = None
-    if bank_config['name'] == 'Banamex':
-        movement_end_pattern = re.compile(r'SALDO\s+MINIMO\s+REQUERIDO', re.I)
-    
-    extraction_stopped = False
-    for page_data in extracted_data:
-        if extraction_stopped:
-            break
-            
-        page_num = page_data['page']
-        words = page_data.get('words', [])
+    # Special handling for Konfio: always use text-based extraction since data is not in fixed columns
+    movement_rows = []  # Initialize to avoid UnboundLocalError
+    if bank_config['name'] == 'Konfio':
+        # Use text-based extraction for Konfio
+        movement_entries = group_entries_from_lines(movements_lines)
+        konfio_rows = []
+        current_entry = None
         
-        if not words:
-            continue
-        
-        # Check if this page contains movements (page >= movement_start_page if found)
-        if movement_start_found and page_num < movement_start_page:
-            continue
-        
-        # Group words by row
-        word_rows = group_words_by_row(words)
-        
-        for row_words in word_rows:
-            if not row_words or extraction_stopped:
+        for entry in movement_entries:
+            if not entry or not isinstance(entry, str):
                 continue
-
-            # Check for end pattern (for Banamex)
-            if movement_end_pattern:
-                all_text = ' '.join([w.get('text', '') for w in row_words])
-                if movement_end_pattern.search(all_text):
-                    #print(f"🛑 Fin de tabla de movimientos detectado en página {page_num}: 'SALDO MINIMO REQUERIDO'")
-                    extraction_stopped = True
-                    break
-
-            # Extract structured row using coordinates
-            row_data = extract_movement_row(row_words, columns_config)
-
-            # Determine if this row starts a new movement (contains a date)
-            # If columns_config is empty, check all words for dates
-            if not columns_config:
-                # Check all words in the row for dates
-                all_text = ' '.join([w.get('text', '') for w in row_words])
-                has_date = bool(date_pattern.search(all_text))
-                if has_date:
-                    # Create a basic row_data structure
-                    row_data = {'raw': all_text, '_amounts': row_data.get('_amounts', [])}
-            else:
-                # A new movement begins when the 'fecha' column contains a date token.
-                fecha_val = str(row_data.get('fecha') or '')
-                has_date = bool(date_pattern.search(fecha_val))
             
-            # Check if row has valid data (date, description, or amounts)
-            has_valid_data = has_date
-            if not has_valid_data:
-                # Check if row has description or amounts
-                desc_val = str(row_data.get('descripcion') or '').strip()
-                has_amounts = len(row_data.get('_amounts', [])) > 0
-                has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
-                has_valid_data = bool(desc_val or has_amounts or has_cargos_abonos)
-
-            if has_date:
-                # Only add rows that have date AND (description OR amounts)
-                # This ensures we don't add incomplete rows
-                desc_val = str(row_data.get('descripcion') or '').strip()
-                has_amounts = len(row_data.get('_amounts', [])) > 0
-                has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
-                has_description_or_amounts = bool(desc_val or has_amounts or has_cargos_abonos)
+            # Pattern for Konfio date: "06 mar 2023"
+            date_match = date_pattern.search(entry)
+            if date_match:
+                # Save previous entry if exists
+                if current_entry:
+                    konfio_rows.append(current_entry)
                 
-                if has_description_or_amounts:
-                    row_data['page'] = page_num
-                    movement_rows.append(row_data)
-                # If row has date but no description/amounts, skip it (incomplete row)
-            elif has_valid_data:
-                # Row has valid data but no date - treat as continuation or standalone row
-                if movement_rows:
-                    # Continuation row: append description-like text and amounts to previous movement
-                    prev = movement_rows[-1]
-                    
-                    # First, capture amounts from continuation row and assign to appropriate columns
-                    cont_amounts = row_data.get('_amounts', [])
-                    if cont_amounts and columns_config:
-                        # Get description range to exclude amounts from it
-                        descripcion_range = None
-                        if 'descripcion' in columns_config:
-                            x0, x1 = columns_config['descripcion']
-                            descripcion_range = (x0, x1)
-                        
-                        # Get column ranges for numeric columns
-                        col_ranges = {}
-                        for col in ('cargos', 'abonos', 'saldo'):
-                            if col in columns_config:
-                                x0, x1 = columns_config[col]
-                                col_ranges[col] = (x0, x1)
-                        
-                        # Assign amounts from continuation row
-                        tolerance = 10
-                        for amt_text, center in cont_amounts:
-                            # Skip if amount is within description range
-                            if descripcion_range and descripcion_range[0] <= center <= descripcion_range[1]:
-                                continue
-                            
-                            # Find which numeric column this amount belongs to
-                            assigned = False
-                            for col in ('cargos', 'abonos', 'saldo'):
-                                if col in col_ranges:
-                                    x0, x1 = col_ranges[col]
-                                    if (x0 - tolerance) <= center <= (x1 + tolerance):
-                                        # Only assign if the column is empty or if this is a better match
-                                        existing = prev.get(col) or ''
-                                        if not existing or amt_text not in existing:
-                                            if existing:
-                                                prev[col] = (existing + ' ' + amt_text).strip()
-                                            else:
-                                                prev[col] = amt_text
-                                        assigned = True
-                                        break
-                            
-                            # If not assigned by range, use proximity as fallback
-                            if not assigned and col_ranges:
-                                valid_cols = {}
-                                for col in col_ranges.keys():
-                                    x0, x1 = col_ranges[col]
-                                    if center >= (x0 - 20) and center <= (x1 + 20):
-                                        col_center = (x0 + x1) / 2
-                                        valid_cols[col] = abs(center - col_center)
-                                
-                                if valid_cols:
-                                    nearest = min(valid_cols.keys(), key=lambda c: valid_cols[c])
-                                    if not descripcion_range or not (descripcion_range[0] <= center <= descripcion_range[1]):
-                                        existing = prev.get(nearest) or ''
-                                        if not existing or amt_text not in existing:
-                                            if existing:
-                                                prev[nearest] = (existing + ' ' + amt_text).strip()
-                                            else:
-                                                prev[nearest] = amt_text
-                    
-                    # Also merge amounts list for later processing
-                    prev_amounts = prev.get('_amounts', [])
-                    prev['_amounts'] = prev_amounts + cont_amounts
-                    
-                    # Collect possible text pieces from this row (prefer descripcion, then liq, then any other text)
-                    cont_parts = []
-                    for k in ('descripcion', 'fecha'):
-                        v = row_data.get(k)
-                        if v:
-                            cont_parts.append(str(v))
-                    # Also capture any stray text in other columns
-                    for k, v in row_data.items():
-                        if k in ('descripcion', 'fecha', 'cargos', 'abonos', 'saldo', 'page', '_amounts'):
-                            continue
-                        if v:
-                            cont_parts.append(str(v))
-
-                    cont_text = ' '.join(cont_parts)
-                    # Remove decimal amounts (they belong to cargos/abonos/saldo)
-                    cont_text = dec_amount_re.sub('', cont_text)
-                    cont_text = ' '.join(cont_text.split()).strip()
-
-                    if cont_text:
-                        # append to previous 'descripcion' field
-                        if prev.get('descripcion'):
-                            prev['descripcion'] = (prev.get('descripcion') or '') + ' ' + cont_text
+                # Start new entry
+                fecha = date_match.group().strip()
+                
+                # Find the position of the date in the entry
+                date_pos = entry.find(fecha)
+                if date_pos == -1:
+                    continue
+                
+                # Everything after the date is description and amount
+                text_after_date = entry[date_pos + len(fecha):].strip()
+                
+                # Find amounts (with $ symbol or without)
+                # Pattern: $50,000.00 or 50,000.00
+                amount_pattern = re.compile(r'\$?\s*(\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2}))', re.I)
+                amounts = amount_pattern.findall(text_after_date)
+                
+                # Remove amounts from description
+                desc_text = text_after_date
+                for amt in amounts:
+                    # Remove the amount and $ symbol from description
+                    desc_text = re.sub(r'\$?\s*' + re.escape(amt), '', desc_text, flags=re.I)
+                
+                # Clean up description
+                desc_text = ' '.join(desc_text.split()).strip()
+                
+                # Determine if it's cargo or abono based on keywords
+                text_lower = text_after_date.lower()
+                # Keywords for charges: gasol, servicio, compra, pago (when it's a payment out)
+                is_cargo = any(keyword in text_lower for keyword in ['gasol', 'servicio', 'servi', 'compra', 'cargo', 'retiro'])
+                # Keywords for deposits: deposito, abono, ingreso, pago via spei (when it's a payment in)
+                is_abono = any(keyword in text_lower for keyword in ['deposito', 'depósito', 'abono', 'ingreso', 'pago via spei', 'pago vía spei'])
+                
+                # Special case: "PAGO VIA SPEI" without other charge keywords is usually an abono (payment received)
+                if 'pago' in text_lower and 'spei' in text_lower and not is_cargo:
+                    is_abono = True
+                
+                current_entry = {
+                    'fecha': fecha,
+                    'descripcion': desc_text,
+                    'cargos': '',
+                    'abonos': ''
+                }
+                
+                if amounts:
+                    if is_cargo:
+                        current_entry['cargos'] = amounts[-1].replace(',', '').replace(' ', '')
+                    elif is_abono:
+                        current_entry['abonos'] = amounts[-1].replace(',', '').replace(' ', '')
+                    else:
+                        # Default: if description has keywords suggesting charge, it's cargo, otherwise abono
+                        if any(keyword in text_lower for keyword in ['gasol', 'servicio', 'servi', 'compra']):
+                            current_entry['cargos'] = amounts[-1].replace(',', '').replace(' ', '')
                         else:
-                            prev['descripcion'] = cont_text
+                            current_entry['abonos'] = amounts[-1].replace(',', '').replace(' ', '')
+            else:
+                # Continuation line: append to current entry's description
+                if current_entry:
+                    # Check if this line has an amount
+                    amount_pattern = re.compile(r'\$?\s*(\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2}))', re.I)
+                    amounts = amount_pattern.findall(entry)
+                    
+                    if amounts:
+                        # This line has an amount, assign it
+                        text_lower = entry.lower()
+                        is_cargo = any(keyword in text_lower for keyword in ['gasol', 'servicio', 'servi', 'compra', 'cargo', 'retiro'])
+                        is_abono = any(keyword in text_lower for keyword in ['deposito', 'depósito', 'abono', 'ingreso'])
+                        
+                        if is_cargo and not current_entry.get('cargos'):
+                            current_entry['cargos'] = amounts[-1].replace(',', '').replace(' ', '')
+                        elif is_abono and not current_entry.get('abonos'):
+                            current_entry['abonos'] = amounts[-1].replace(',', '').replace(' ', '')
+                        elif not current_entry.get('cargos') and not current_entry.get('abonos'):
+                            # If no keywords, check previous description context
+                            prev_desc_lower = current_entry.get('descripcion', '').lower()
+                            if any(keyword in prev_desc_lower for keyword in ['gasol', 'servicio', 'servi', 'compra']):
+                                current_entry['cargos'] = amounts[-1].replace(',', '').replace(' ', '')
+                            else:
+                                current_entry['abonos'] = amounts[-1].replace(',', '').replace(' ', '')
+                        
+                        # Remove amount from continuation text
+                        cont_text = entry
+                        for amt in amounts:
+                            cont_text = re.sub(r'\$?\s*' + re.escape(amt), '', cont_text, flags=re.I)
+                        cont_text = ' '.join(cont_text.split()).strip()
+                        if cont_text:
+                            current_entry['descripcion'] = (current_entry.get('descripcion', '') + ' ' + cont_text).strip()
+                    else:
+                        # Just description continuation
+                        cont_text = ' '.join(entry.split()).strip()
+                        if cont_text:
+                            current_entry['descripcion'] = (current_entry.get('descripcion', '') + ' ' + cont_text).strip()
+        
+        # Don't forget the last entry
+        if current_entry:
+            konfio_rows.append(current_entry)
+        
+        if konfio_rows:
+            df_mov = pd.DataFrame(konfio_rows)
+        else:
+            df_mov = pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos'])
+    else:
+        # For other banks, use coordinate-based extraction
+        movement_rows = []
+        # regex to detect decimal-like amounts (used to strip amounts from descriptions and detect amounts)
+        dec_amount_re = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
+        # Pattern to detect end of movements table for Banamex
+        movement_end_pattern = None
+        if bank_config['name'] == 'Banamex':
+            movement_end_pattern = re.compile(r'SALDO\s+MINIMO\s+REQUERIDO', re.I)
+        
+        extraction_stopped = False
+        for page_data in extracted_data:
+            if extraction_stopped:
+                break
+                
+            page_num = page_data['page']
+            words = page_data.get('words', [])
+            
+            if not words:
+                continue
+            
+            # Check if this page contains movements (page >= movement_start_page if found)
+            if movement_start_found and page_num < movement_start_page:
+                continue
+            
+            # Group words by row
+            word_rows = group_words_by_row(words)
+            
+            for row_words in word_rows:
+                if not row_words or extraction_stopped:
+                    continue
+
+                # Check for end pattern (for Banamex)
+                if movement_end_pattern:
+                    all_text = ' '.join([w.get('text', '') for w in row_words])
+                    if movement_end_pattern.search(all_text):
+                        #print(f"🛑 Fin de tabla de movimientos detectado en página {page_num}: 'SALDO MINIMO REQUERIDO'")
+                        extraction_stopped = True
+                        break
+
+                # Extract structured row using coordinates
+                row_data = extract_movement_row(row_words, columns_config)
+
+                # Determine if this row starts a new movement (contains a date)
+                # If columns_config is empty, check all words for dates
+                if not columns_config:
+                    # Check all words in the row for dates
+                    all_text = ' '.join([w.get('text', '') for w in row_words])
+                    has_date = bool(date_pattern.search(all_text))
+                    if has_date:
+                        # Create a basic row_data structure
+                        row_data = {'raw': all_text, '_amounts': row_data.get('_amounts', [])}
+                else:
+                    # A new movement begins when the 'fecha' column contains a date token.
+                    fecha_val = str(row_data.get('fecha') or '')
+                    has_date = bool(date_pattern.search(fecha_val))
+                
+                # Check if row has valid data (date, description, or amounts)
+                has_valid_data = has_date
+                if not has_valid_data:
+                    # Check if row has description or amounts
+                    desc_val = str(row_data.get('descripcion') or '').strip()
+                    has_amounts = len(row_data.get('_amounts', [])) > 0
+                    has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
+                    has_valid_data = bool(desc_val or has_amounts or has_cargos_abonos)
+
+                if has_date:
+                    # Only add rows that have date AND (description OR amounts)
+                    # This ensures we don't add incomplete rows
+                    desc_val = str(row_data.get('descripcion') or '').strip()
+                    has_amounts = len(row_data.get('_amounts', [])) > 0
+                    has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
+                    has_description_or_amounts = bool(desc_val or has_amounts or has_cargos_abonos)
+                    
+                    if has_description_or_amounts:
+                        row_data['page'] = page_num
+                        movement_rows.append(row_data)
+                    # If row has date but no description/amounts, skip it (incomplete row)
+                elif has_valid_data:
+                    # Row has valid data but no date - treat as continuation or standalone row
+                    if movement_rows:
+                        # Continuation row: append description-like text and amounts to previous movement
+                        prev = movement_rows[-1]
+                        
+                        # First, capture amounts from continuation row and assign to appropriate columns
+                        cont_amounts = row_data.get('_amounts', [])
+                        if cont_amounts and columns_config:
+                            # Get description range to exclude amounts from it
+                            descripcion_range = None
+                            if 'descripcion' in columns_config:
+                                x0, x1 = columns_config['descripcion']
+                                descripcion_range = (x0, x1)
+                            
+                            # Get column ranges for numeric columns
+                            col_ranges = {}
+                            for col in ('cargos', 'abonos', 'saldo'):
+                                if col in columns_config:
+                                    x0, x1 = columns_config[col]
+                                    col_ranges[col] = (x0, x1)
+                            
+                            # Assign amounts from continuation row
+                            tolerance = 10
+                            for amt_text, center in cont_amounts:
+                                # Skip if amount is within description range
+                                if descripcion_range and descripcion_range[0] <= center <= descripcion_range[1]:
+                                    continue
+                                
+                                # Find which numeric column this amount belongs to
+                                assigned = False
+                                for col in ('cargos', 'abonos', 'saldo'):
+                                    if col in col_ranges:
+                                        x0, x1 = col_ranges[col]
+                                        if (x0 - tolerance) <= center <= (x1 + tolerance):
+                                            # Only assign if the column is empty or if this is a better match
+                                            existing = prev.get(col) or ''
+                                            if not existing or amt_text not in existing:
+                                                if existing:
+                                                    prev[col] = (existing + ' ' + amt_text).strip()
+                                                else:
+                                                    prev[col] = amt_text
+                                            assigned = True
+                                            break
+                                
+                                # If not assigned by range, use proximity as fallback
+                                if not assigned and col_ranges:
+                                    valid_cols = {}
+                                    for col in col_ranges.keys():
+                                        x0, x1 = col_ranges[col]
+                                        if center >= (x0 - 20) and center <= (x1 + 20):
+                                            col_center = (x0 + x1) / 2
+                                            valid_cols[col] = abs(center - col_center)
+                                    
+                                    if valid_cols:
+                                        nearest = min(valid_cols.keys(), key=lambda c: valid_cols[c])
+                                        if not descripcion_range or not (descripcion_range[0] <= center <= descripcion_range[1]):
+                                            existing = prev.get(nearest) or ''
+                                            if not existing or amt_text not in existing:
+                                                if existing:
+                                                    prev[nearest] = (existing + ' ' + amt_text).strip()
+                                                else:
+                                                    prev[nearest] = amt_text
+                        
+                        # Also merge amounts list for later processing
+                        prev_amounts = prev.get('_amounts', [])
+                        prev['_amounts'] = prev_amounts + cont_amounts
+                        
+                        # Collect possible text pieces from this row (prefer descripcion, then liq, then any other text)
+                        cont_parts = []
+                        for k in ('descripcion', 'fecha'):
+                            v = row_data.get(k)
+                            if v:
+                                cont_parts.append(str(v))
+                        # Also capture any stray text in other columns
+                        for k, v in row_data.items():
+                            if k in ('descripcion', 'fecha', 'cargos', 'abonos', 'saldo', 'page', '_amounts'):
+                                continue
+                            if v:
+                                cont_parts.append(str(v))
+
+                        cont_text = ' '.join(cont_parts)
+                        # Remove decimal amounts (they belong to cargos/abonos/saldo)
+                        cont_text = dec_amount_re.sub('', cont_text)
+                        cont_text = ' '.join(cont_text.split()).strip()
+
+                        if cont_text:
+                            # append to previous 'descripcion' field
+                            if prev.get('descripcion'):
+                                prev['descripcion'] = (prev.get('descripcion') or '') + ' ' + cont_text
+                            else:
+                                prev['descripcion'] = cont_text
                 else:
                     # No previous movement and no date - skip this row
                     # Only rows with dates should be added to movements
@@ -2082,7 +2215,8 @@ def main():
         df_summary = pd.DataFrame({'Título': [], 'Dato': []})
     
     # Reassign amounts to cargos/abonos/saldo by proximity when needed
-    if movement_rows:
+    # Only process movement_rows if we're not using Konfio (which already has df_mov created)
+    if movement_rows and bank_config['name'] != 'Konfio':
         # prepare column centers and ranges
         col_centers = {}
         col_ranges = {}
@@ -2263,7 +2397,7 @@ def main():
                         if has_saldo:
                             r['saldo'] = amounts_list[0]
 
-        df_mov = pd.DataFrame(movement_rows)
+            df_mov = pd.DataFrame(movement_rows)
     else:
         # No coordinate-based extraction available, use raw text extraction
         movement_entries = group_entries_from_lines(movements_lines)
@@ -2340,8 +2474,11 @@ def main():
 
     # Split combined fecha values into two separate columns: Fecha Oper and Fecha Liq
     # Works for coordinate-based extraction (column 'fecha') and for fallback raw lines ('raw').
-    # Pattern for dates: supports both "DIA MES" (01 ABR) and "MES DIA" (ABR 01) formats
-    date_pattern = re.compile(r"(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01]))", re.I)
+    # Pattern for dates: supports multiple formats:
+    # - "DIA MES" (01 ABR)
+    # - "MES DIA" (ABR 01)
+    # - "DIA MES AÑO" (06 mar 2023) - for Konfio
+    date_pattern = re.compile(r"(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:\s+\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})", re.I)
 
     def _extract_two_dates(txt):
         if not txt or not isinstance(txt, str):
