@@ -91,11 +91,11 @@ BANK_CONFIGS = {
      "Banbajío": {
         "name": "Banbajío",
         "columns": {
-            "fecha": (19, 43),             # Columna Fecha de Operación
-            "descripcion": (135, 300),     # Columna Descripción
-            "cargos": (474, 525),          # Columna Cargos
-            "abonos": (395, 451),          # Columna Abonos
-            "saldo": (530, 585),           # Columna Saldo
+            "fecha": (21, 41),             # Columna Fecha de Operación
+            "descripcion": (87, 362),     # Columna Descripción
+            "cargos": (490, 525),          # Columna Cargos
+            "abonos": (415, 451),          # Columna Abonos
+            "saldo": (550, 585),           # Columna Saldo
         }
     },
     
