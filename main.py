@@ -69,11 +69,11 @@ BANK_CONFIGS = {
     "Banregio": {
         "name": "Banregio",
         "columns": {
-            "fecha": (35, 45),             # Columna Fecha de Operación
-            "descripcion": (50, 300),     # Columna Descripción
-            "cargos": (350, 399),          # Columna Cargos
-            "abonos": (440, 475),          # Columna Abonos
-            "saldo": (520, 573),           # Columna Saldo
+            "fecha": (37, 45),             # Columna Fecha de Operación
+            "descripcion": (53, 275),     # Columna Descripción
+            "cargos": (380, 418),          # Columna Cargos
+            "abonos": (460, 498),          # Columna Abonos
+            "saldo": (530, 573),           # Columna Saldo
         }
     },
     
@@ -341,24 +341,34 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
         
         with pdfplumber.open(pdf_path) as pdf:
             # Check first few pages and last page for summary information
+            # For Banregio, check all pages to find "Total" line which can be on any page
             pages_to_check = min(3, len(pdf.pages))
             all_text = ""
             all_lines = []
             
-            # Collect text from first pages
-            for page_num in range(pages_to_check):
-                page = pdf.pages[page_num]
-                text = page.extract_text()
-                if text:
-                    all_text += text + "\n"
-                    all_lines.extend(text.split('\n'))
-            
-            # Also check last page for Santander and BanRegio
-            if len(pdf.pages) > pages_to_check:
-                last_page = pdf.pages[-1]
-                last_text = last_page.extract_text()
-                if last_text:
-                    all_lines.extend(last_text.split('\n'))
+            # For Banregio, collect text from all pages to find "Total" line
+            if bank_name == "Banregio":
+                for page_num in range(len(pdf.pages)):
+                    page = pdf.pages[page_num]
+                    text = page.extract_text()
+                    if text:
+                        all_text += text + "\n"
+                        all_lines.extend(text.split('\n'))
+            else:
+                # Collect text from first pages
+                for page_num in range(pages_to_check):
+                    page = pdf.pages[page_num]
+                    text = page.extract_text()
+                    if text:
+                        all_text += text + "\n"
+                        all_lines.extend(text.split('\n'))
+                
+                # Also check last page for Santander and BanRegio
+                if len(pdf.pages) > pages_to_check:
+                    last_page = pdf.pages[-1]
+                    last_text = last_page.extract_text()
+                    if last_text:
+                        all_lines.extend(last_text.split('\n'))
             
             # Bank-specific extraction
             if bank_name == "BBVA":
@@ -674,8 +684,31 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                 # "- Comisiones Efectivamente Cobradas $320.00"
                 # "- Otros Cargos $38,678.00"
                 # "= Saldo Final $4,580.78"
+                # Also: "Total 45,998.00 49,675.60 4,580.78" (Cargos, Abonos, Saldo)
                 #print(f"🔍 Buscando patrones BanRegio en {len(all_lines)} líneas...")
                 for i, line in enumerate(all_lines):
+                    # First, try to extract from "Total" line (most reliable)
+                    # Pattern: "Total 45,998.00 49,675.60 4,580.78" (Cargos, Abonos, Saldo)
+                    # Make pattern more flexible to handle variations in spacing and allow for optional leading text
+                    total_match = re.search(r'\bTotal\s+([\d,\.]+)\s+([\d,\.]+)\s+([\d,\.]+)', line, re.I)
+                    if total_match:
+                        cargos = normalize_amount_str(total_match.group(1))
+                        abonos = normalize_amount_str(total_match.group(2))
+                        saldo = normalize_amount_str(total_match.group(3))
+                        if cargos > 0:
+                            summary_data['total_cargos'] = cargos
+                            summary_data['total_retiros'] = cargos
+                        if abonos > 0:
+                            summary_data['total_abonos'] = abonos
+                            summary_data['total_depositos'] = abonos
+                        if saldo > 0:
+                            summary_data['saldo_final'] = saldo
+                        # If we found all values from Total line, we can break early
+                        if summary_data['total_cargos'] and summary_data['total_abonos'] and summary_data['saldo_final']:
+                            break
+                        # Continue to next iteration to avoid checking fallback patterns if we found Total line
+                        continue
+                    
                     # Saldo Inicial
                     if not summary_data['saldo_anterior']:
                         match = re.search(r'Saldo\s+Inicial\s+\$\s*([\d,\.]+)', line, re.I)
@@ -685,7 +718,7 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                                 #print(f"✅ BanRegio: Encontrado saldo inicial: ${amount:,.2f} en línea {i+1}: {line[:80]}")
                                 summary_data['saldo_anterior'] = amount
                     
-                    # Abonos
+                    # Abonos (fallback if not found in Total line)
                     if not summary_data['total_abonos']:
                         match = re.search(r'\+\s*Abonos\s+\$\s*([\d,\.]+)', line, re.I)
                         if match:
@@ -695,7 +728,7 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                                 summary_data['total_abonos'] = amount
                                 summary_data['total_depositos'] = amount
                     
-                    # Retiros (puede estar en línea separada)
+                    # Retiros (fallback if not found in Total line)
                     if not summary_data['total_retiros']:
                         # First check if line has "Retiros" and next line has amount
                         if re.search(r'-\s*Retiros', line, re.I) and i + 1 < len(all_lines):
@@ -708,7 +741,7 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                                     summary_data['total_retiros'] = amount
                                     summary_data['total_cargos'] = amount
                     
-                    # Saldo Final
+                    # Saldo Final (fallback if not found in Total line)
                     if not summary_data['saldo_final']:
                         # First check if line has "Saldo Final" and next line has amount
                         if re.search(r'=\s*Saldo\s+Final', line, re.I) and i + 1 < len(all_lines):
@@ -2083,9 +2116,11 @@ def main():
     # For Inbursa, movements start after "DETALLE DE MOVIMIENTOS" and the header line
     # For Banorte, movements start after "DETALLE DE MOVIMIENTOS (PESOS)"
     # For Banbajío, movements start after the header line "FECHA NO. REF. / DOCTO DESCRIPCION DE LA OPERACION DEPOSITOS RETIROS SALDO"
+    # For Banregio, movements start after the header line "DIA CONCEPTO CARGOS ABONOS SALDO"
     inbursa_detalle_pattern = None
     banorte_detalle_pattern = None
     banbajio_header_pattern = None
+    banregio_header_pattern = None
     detalle_found = False
     header_line_skipped = False
     if bank_config['name'] == 'Inbursa':
@@ -2099,6 +2134,10 @@ def main():
         # Pattern to detect the header line: "FECHA NO. REF. / DOCTO DESCRIPCION DE LA OPERACION DEPOSITOS RETIROS SALDO"
         # Make it flexible to handle variations in spacing and line breaks
         banbajio_header_pattern = re.compile(r'FECHA.*?NO\.?\s*REF\.?.*?DOCTO.*?DESCRIPCION.*?OPERACION.*?DEPOSITOS.*?RETIROS.*?SALDO', re.I)
+    elif bank_config['name'] == 'Banregio':
+        # Pattern to detect the header line: "DIA CONCEPTO CARGOS ABONOS SALDO"
+        # Make it flexible to handle variations in spacing
+        banregio_header_pattern = re.compile(r'DIA.*?CONCEPTO.*?CARGOS.*?ABONOS.*?SALDO', re.I)
     
     for p in pages_lines:
         if not movement_start_found:
@@ -2122,14 +2161,21 @@ def main():
                         detalle_found = True
                         continue  # Skip the header line
                 
+                # For Banregio, find the header line "DIA CONCEPTO CARGOS ABONOS SALDO"
+                if banregio_header_pattern and not header_line_skipped:
+                    if banregio_header_pattern.search(ln):
+                        header_line_skipped = True
+                        detalle_found = True
+                        continue  # Skip the header line
+                
                 # After finding "DETALLE DE MOVIMIENTOS", skip the header line (for Inbursa)
                 if inbursa_detalle_pattern and detalle_found and not header_line_skipped:
                     if inbursa_header_pattern and inbursa_header_pattern.search(ln):
                         header_line_skipped = True
                         continue  # Skip the header line
                 
-                # After finding "DETALLE DE MOVIMIENTOS" and skipping header for Inbursa, or for Banorte, or for Banbajío, or for other banks, look for date/header
-                if (inbursa_detalle_pattern and detalle_found and header_line_skipped) or (banorte_detalle_pattern and detalle_found) or (banbajio_header_pattern and detalle_found and header_line_skipped) or (not inbursa_detalle_pattern and not banorte_detalle_pattern and not banbajio_header_pattern):
+                # After finding "DETALLE DE MOVIMIENTOS" and skipping header for Inbursa, or for Banorte, or for Banbajío, or for Banregio, or for other banks, look for date/header
+                if (inbursa_detalle_pattern and detalle_found and header_line_skipped) or (banorte_detalle_pattern and detalle_found) or (banbajio_header_pattern and detalle_found and header_line_skipped) or (banregio_header_pattern and detalle_found and header_line_skipped) or (not inbursa_detalle_pattern and not banorte_detalle_pattern and not banbajio_header_pattern and not banregio_header_pattern):
                     # For Inbursa, only look for dates (not headers, as we already skipped the header line)
                     if inbursa_detalle_pattern:
                         # For Inbursa, only start when we find a date (actual movement row)
@@ -2158,6 +2204,15 @@ def main():
                             # collect from this line onward in this page
                             movements_lines.extend(p['lines'][i:])
                             break
+                    elif banregio_header_pattern:
+                        # For Banregio, start when we find a date (actual movement row) after the header
+                        if day_re.search(ln):
+                            movement_start_found = True
+                            movement_start_page = p['page']
+                            movement_start_index = i
+                            # collect from this line onward in this page
+                            movements_lines.extend(p['lines'][i:])
+                            break
                     else:
                         # For other banks, look for date or header
                         if day_re.search(ln) or header_keywords_re.search(ln):
@@ -2169,9 +2224,13 @@ def main():
                             break
         else:
             # Already found movement start, collect all lines from this page
-            # For Banbajío, filter out the header line if it appears again on subsequent pages
+            # For Banbajío and Banregio, filter out the header line if it appears again on subsequent pages
             if bank_config['name'] == 'Banbajío' and banbajio_header_pattern:
                 filtered_lines = [ln for ln in p['lines'] if not banbajio_header_pattern.search(ln)]
+                movements_lines.extend(filtered_lines)
+            elif bank_config['name'] == 'Banregio' and banregio_header_pattern:
+                # Filter out header line and rows starting with "del 01 al"
+                filtered_lines = [ln for ln in p['lines'] if not banregio_header_pattern.search(ln) and not re.search(r'^del\s+01\s+al', ln, re.I)]
                 movements_lines.extend(filtered_lines)
             else:
                 movements_lines.extend(p['lines'])
@@ -2322,6 +2381,9 @@ def main():
         elif bank_config['name'] == 'Banorte':
             # Banorte: "INVERSION ENLACE NEGOCIOS" - indicates end of movements table
             movement_end_pattern = re.compile(r'INVERSION\s+ENLACE\s+NEGOCIOS', re.I)
+        elif bank_config['name'] == 'Banregio':
+            # Banregio: "Total" - indicates end of movements table
+            movement_end_pattern = re.compile(r'^Total\b', re.I)
         
         extraction_stopped = False
         for page_data in extracted_data:
@@ -2362,13 +2424,24 @@ def main():
                 if not row_words or extraction_stopped:
                     continue
 
-                # For Banbajío, skip the header line if it appears on subsequent pages
+                # For Banbajío and Banregio, skip the header line if it appears on subsequent pages
                 if bank_config['name'] == 'Banbajío' and banbajio_header_pattern:
                     all_row_text = ' '.join([w.get('text', '') for w in row_words])
                     if banbajio_header_pattern.search(all_row_text):
                         continue  # Skip the header line
+                
+                if bank_config['name'] == 'Banregio' and banregio_header_pattern:
+                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    if banregio_header_pattern.search(all_row_text):
+                        continue  # Skip the header line
+                
+                # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
+                if bank_config['name'] == 'Banregio':
+                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    if re.search(r'^del\s+01\s+al', all_row_text, re.I):
+                        continue  # Skip irrelevant information rows
 
-                # Check for end pattern (for Banamex, Santander, etc.)
+                # Check for end pattern (for Banamex, Santander, Banregio, etc.)
                 if movement_end_pattern:
                     all_text = ' '.join([w.get('text', '') for w in row_words])
                     if movement_end_pattern.search(all_text):
@@ -3146,6 +3219,31 @@ def main():
             #print(f"   📝 Removiendo {len(info_rows_to_remove)} filas de información de Movements...")
             df_mov = df_mov.drop(index=info_rows_to_remove).reset_index(drop=True)
             #print(f"   ✅ Filas removidas de Movements")
+    
+    # Filter info rows from Movements for Banregio
+    # These should not appear in Movements: rows starting with "del 01 al"
+    if bank_config['name'] == 'Banregio':
+        info_rows_to_remove = []
+        
+        # Check each row in df_mov for info rows
+        for idx, row in df_mov.iterrows():
+            # Get description from various possible column names
+            desc_col = None
+            for col in ['Descripción', 'Descripcion', 'descripcion', 'raw', 'Fecha']:
+                if col in df_mov.columns:
+                    desc_col = col
+                    break
+            
+            if desc_col:
+                desc_text = str(row.get(desc_col, '')).strip()
+                
+                # Check if this row starts with "del 01 al" (irrelevant information)
+                if re.search(r'^del\s+01\s+al', desc_text, re.I):
+                    info_rows_to_remove.append(idx)
+        
+        # Remove info rows from Movements
+        if info_rows_to_remove:
+            df_mov = df_mov.drop(index=info_rows_to_remove).reset_index(drop=True)
     
     # Extract DIGITEM and Transferencias sections directly from PDF for Banamex
     # This must be done BEFORE calculating totals for validation
