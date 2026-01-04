@@ -2082,8 +2082,10 @@ def main():
     
     # For Inbursa, movements start after "DETALLE DE MOVIMIENTOS" and the header line
     # For Banorte, movements start after "DETALLE DE MOVIMIENTOS (PESOS)"
+    # For Banbajío, movements start after the header line "FECHA NO. REF. / DOCTO DESCRIPCION DE LA OPERACION DEPOSITOS RETIROS SALDO"
     inbursa_detalle_pattern = None
     banorte_detalle_pattern = None
+    banbajio_header_pattern = None
     detalle_found = False
     header_line_skipped = False
     if bank_config['name'] == 'Inbursa':
@@ -2093,6 +2095,10 @@ def main():
         inbursa_header_pattern = re.compile(r'FECHA.*?REFERENCIA.*?CONCEPTO.*?CARGOS.*?ABONOS.*?SALDO', re.I)
     elif bank_config['name'] == 'Banorte':
         banorte_detalle_pattern = re.compile(r'DETALLE\s+DE\s+MOVIMIENTOS\s*\(PESOS\)', re.I)
+    elif bank_config['name'] == 'Banbajío':
+        # Pattern to detect the header line: "FECHA NO. REF. / DOCTO DESCRIPCION DE LA OPERACION DEPOSITOS RETIROS SALDO"
+        # Make it flexible to handle variations in spacing and line breaks
+        banbajio_header_pattern = re.compile(r'FECHA.*?NO\.?\s*REF\.?.*?DOCTO.*?DESCRIPCION.*?OPERACION.*?DEPOSITOS.*?RETIROS.*?SALDO', re.I)
     
     for p in pages_lines:
         if not movement_start_found:
@@ -2109,14 +2115,21 @@ def main():
                         detalle_found = True
                         continue  # Skip the "DETALLE DE MOVIMIENTOS (PESOS)" line itself
                 
+                # For Banbajío, find the header line "FECHA NO. REF. / DOCTO DESCRIPCION DE LA OPERACION DEPOSITOS RETIROS SALDO"
+                if banbajio_header_pattern and not header_line_skipped:
+                    if banbajio_header_pattern.search(ln):
+                        header_line_skipped = True
+                        detalle_found = True
+                        continue  # Skip the header line
+                
                 # After finding "DETALLE DE MOVIMIENTOS", skip the header line (for Inbursa)
                 if inbursa_detalle_pattern and detalle_found and not header_line_skipped:
                     if inbursa_header_pattern and inbursa_header_pattern.search(ln):
                         header_line_skipped = True
                         continue  # Skip the header line
                 
-                # After finding "DETALLE DE MOVIMIENTOS" and skipping header for Inbursa, or for Banorte, or for other banks, look for date/header
-                if (inbursa_detalle_pattern and detalle_found and header_line_skipped) or (banorte_detalle_pattern and detalle_found) or (not inbursa_detalle_pattern and not banorte_detalle_pattern):
+                # After finding "DETALLE DE MOVIMIENTOS" and skipping header for Inbursa, or for Banorte, or for Banbajío, or for other banks, look for date/header
+                if (inbursa_detalle_pattern and detalle_found and header_line_skipped) or (banorte_detalle_pattern and detalle_found) or (banbajio_header_pattern and detalle_found and header_line_skipped) or (not inbursa_detalle_pattern and not banorte_detalle_pattern and not banbajio_header_pattern):
                     # For Inbursa, only look for dates (not headers, as we already skipped the header line)
                     if inbursa_detalle_pattern:
                         # For Inbursa, only start when we find a date (actual movement row)
@@ -2136,6 +2149,15 @@ def main():
                             # collect from this line onward in this page
                             movements_lines.extend(p['lines'][i:])
                             break
+                    elif banbajio_header_pattern:
+                        # For Banbajío, start when we find a date (actual movement row) after the header
+                        if day_re.search(ln):
+                            movement_start_found = True
+                            movement_start_page = p['page']
+                            movement_start_index = i
+                            # collect from this line onward in this page
+                            movements_lines.extend(p['lines'][i:])
+                            break
                     else:
                         # For other banks, look for date or header
                         if day_re.search(ln) or header_keywords_re.search(ln):
@@ -2146,7 +2168,13 @@ def main():
                             movements_lines.extend(p['lines'][i:])
                             break
         else:
-            movements_lines.extend(p['lines'])
+            # Already found movement start, collect all lines from this page
+            # For Banbajío, filter out the header line if it appears again on subsequent pages
+            if bank_config['name'] == 'Banbajío' and banbajio_header_pattern:
+                filtered_lines = [ln for ln in p['lines'] if not banbajio_header_pattern.search(ln)]
+                movements_lines.extend(filtered_lines)
+            else:
+                movements_lines.extend(p['lines'])
 
     # build summary from first page (lines before movements start if movements begin on page 1)
     if pages_lines:
@@ -2309,7 +2337,7 @@ def main():
             # Check if this page contains movements (page >= movement_start_page if found)
             if movement_start_found and page_num < movement_start_page:
                 continue
-        
+            
             # Group words by row
             # Use y_tolerance=3 for all banks to avoid grouping multiple movements into one row
             # The split_row_if_multiple_movements function will handle cases where movements are still grouped
@@ -2333,6 +2361,12 @@ def main():
             for row_words in word_rows:
                 if not row_words or extraction_stopped:
                     continue
+
+                # For Banbajío, skip the header line if it appears on subsequent pages
+                if bank_config['name'] == 'Banbajío' and banbajio_header_pattern:
+                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    if banbajio_header_pattern.search(all_row_text):
+                        continue  # Skip the header line
 
                 # Check for end pattern (for Banamex, Santander, etc.)
                 if movement_end_pattern:
@@ -2360,14 +2394,14 @@ def main():
                     fecha_val = str(row_data.get('fecha') or '')
                     has_date = bool(date_pattern.search(fecha_val))
                     
-                # Check if row has valid data (date, description, or amounts)
-                has_valid_data = has_date
-                if not has_valid_data:
-                    # Check if row has description or amounts
-                    desc_val = str(row_data.get('descripcion') or '').strip()
-                    has_amounts = len(row_data.get('_amounts', [])) > 0
-                    has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
-                    has_valid_data = bool(desc_val or has_amounts or has_cargos_abonos)
+                    # Check if row has valid data (date, description, or amounts)
+                    has_valid_data = has_date
+                    if not has_valid_data:
+                        # Check if row has description or amounts
+                        desc_val = str(row_data.get('descripcion') or '').strip()
+                        has_amounts = len(row_data.get('_amounts', [])) > 0
+                        has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
+                        has_valid_data = bool(desc_val or has_amounts or has_cargos_abonos)
 
                 if has_date:
                     # Only add rows that have date AND (description OR amounts)
