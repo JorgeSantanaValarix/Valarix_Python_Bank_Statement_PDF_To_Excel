@@ -12,8 +12,8 @@ BANK_CONFIGS = {
     "BBVA": {
         "name": "BBVA",
         "columns": {
-            "fecha": (0, 80),              # Columna Fecha de Operación
-            "liq": (80, 160),              # Columna LIQ (Liquidación)
+            "fecha": (9, 38),              # Columna Fecha de Operación
+            "liq": (52, 81),                # Columna LIQ (Liquidación)
             "descripcion": (160, 400),     # Columna Descripción
             "cargos": (360, 398),          # Columna Cargos
             "abonos": (422, 458),          # Columna Abonos
@@ -3143,7 +3143,33 @@ def main():
     if bank_config['name'] == 'Banregio' and 'fecha' in df_mov.columns:
         df_mov['Fecha'] = df_mov['fecha'].astype(str)
         df_mov = df_mov.drop(columns=['fecha'])
+    elif bank_config['name'] == 'BBVA':
+        # For BBVA, extract dates from separate 'fecha' and 'liq' columns
+        fecha_oper_dates = None
+        fecha_liq_dates = None
+        
+        if 'fecha' in df_mov.columns:
+            fecha_oper_dates = df_mov['fecha'].astype(str).apply(_extract_two_dates)
+        elif 'raw' in df_mov.columns:
+            fecha_oper_dates = df_mov['raw'].astype(str).apply(_extract_two_dates)
+        else:
+            fecha_oper_dates = pd.Series([(None, None)] * len(df_mov))
+        
+        if 'liq' in df_mov.columns:
+            fecha_liq_dates = df_mov['liq'].astype(str).apply(_extract_two_dates)
+        else:
+            fecha_liq_dates = pd.Series([(None, None)] * len(df_mov))
+        
+        # Extract first date from 'fecha' column for Fecha Oper
+        df_mov['Fecha Oper'] = fecha_oper_dates.apply(lambda t: t[0])
+        # Extract first date from 'liq' column for Fecha Liq
+        df_mov['Fecha Liq'] = fecha_liq_dates.apply(lambda t: t[0])
+        
+        # Remove original 'fecha' column (liq will be removed later when building description)
+        if 'fecha' in df_mov.columns:
+            df_mov = df_mov.drop(columns=['fecha'])
     else:
+        # For other banks, use existing logic (search for two dates in 'fecha' column)
         if 'fecha' in df_mov.columns:
             dates = df_mov['fecha'].astype(str).apply(_extract_two_dates)
         elif 'raw' in df_mov.columns:
