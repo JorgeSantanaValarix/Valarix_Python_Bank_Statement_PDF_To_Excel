@@ -14,7 +14,7 @@ BANK_CONFIGS = {
         "columns": {
             "fecha": (9, 38),              # Columna Fecha de Operación
             "liq": (52, 81),                # Columna LIQ (Liquidación)
-            "descripcion": (160, 400),     # Columna Descripción
+            "descripcion": (86, 322),     # Columna Descripción
             "cargos": (360, 398),          # Columna Cargos
             "abonos": (422, 458),          # Columna Abonos
             "saldo": (539, 593),           # Columna Saldo
@@ -3234,14 +3234,24 @@ def main():
 
     def _build_description(row):
         parts = []
-        # prefer explicit columns if present
-        if 'liq' in row and row.get('liq'):
-            parts.append(str(row.get('liq')))
-        if 'descripcion' in row and row.get('descripcion'):
-            parts.append(str(row.get('descripcion')))
-        # fallback to raw if no column-based description
-        if not parts and 'raw' in row and row.get('raw'):
-            parts = [str(row.get('raw'))]
+        # For BBVA, don't include 'liq' in description (it only contains the date which is already extracted)
+        if bank_config['name'] == 'BBVA':
+            # Only use 'descripcion' column for BBVA
+            if 'descripcion' in row and row.get('descripcion'):
+                parts.append(str(row.get('descripcion')))
+            # fallback to raw if no column-based description
+            if not parts and 'raw' in row and row.get('raw'):
+                parts = [str(row.get('raw'))]
+        else:
+            # For other banks, use existing logic
+            # prefer explicit columns if present
+            if 'liq' in row and row.get('liq'):
+                parts.append(str(row.get('liq')))
+            if 'descripcion' in row and row.get('descripcion'):
+                parts.append(str(row.get('descripcion')))
+            # fallback to raw if no column-based description
+            if not parts and 'raw' in row and row.get('raw'):
+                parts = [str(row.get('raw'))]
 
         text = ' '.join(parts)
         # remove extracted dates from description (handle both BBVA and non-BBVA formats)
