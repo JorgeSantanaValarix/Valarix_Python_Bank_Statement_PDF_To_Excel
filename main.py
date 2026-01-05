@@ -69,8 +69,8 @@ BANK_CONFIGS = {
     "Banregio": {
         "name": "Banregio",
         "columns": {
-            "fecha": (37, 45),             # Columna Fecha de Operación
-            "descripcion": (53, 275),     # Columna Descripción
+            "fecha": (35, 42),             # Columna Fecha de Operación
+            "descripcion": (53, 310),     # Columna Descripción
             "cargos": (380, 418),          # Columna Cargos
             "abonos": (460, 498),          # Columna Abonos
             "saldo": (530, 573),           # Columna Saldo
@@ -1669,7 +1669,7 @@ def assign_word_to_column(word_x0, word_x1, columns):
     return None
 
 
-def is_transaction_row(row_data):
+def is_transaction_row(row_data, bank_name=None):
     """Check if a row is an actual bank transaction (not a header or empty row).
     A transaction must have:
     - A date in 'fecha' column
@@ -1681,9 +1681,18 @@ def is_transaction_row(row_data):
     saldo = (row_data.get('saldo') or '').strip()
     
     # Must have a date matching DD/MMM pattern
-    # Pattern for dates: supports both "DIA MES" (01 ABR) and "MES DIA" (ABR 01) formats
+    # For Banregio: date is only 2 digits (01-31)
+    # For other banks: supports both "DIA MES" (01 ABR) and "MES DIA" (ABR 01) formats
     # Pattern for dates: supports multiple formats including "DIA MES AÑO" (06 mar 2023)
-    day_re = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:[\/\-\s]\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
+    has_date = False
+    if bank_name == 'Banregio':
+        # For Banregio, date is only 2 digits (01-31)
+        banregio_date_re = re.compile(r'^(0[1-9]|[12][0-9]|3[01])$')
+        has_date = bool(banregio_date_re.match(fecha))
+        print("Debug: has_date", has_date, banregio_date_re)
+    else:
+        # For other banks, use the general date pattern
+        day_re = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:[\/\-\s]\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
     has_date = bool(day_re.search(fecha))
     
     # Must have at least one numeric amount
@@ -1699,7 +1708,12 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
     
     # Pattern to detect dates (for separating date from description)
     if date_pattern is None:
-        date_pattern = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:[\/\-\s]\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
+        if bank_name == 'Banregio':
+            # For Banregio, date is only 2 digits (01-31) at the start of the text
+            # Pattern should match "04" or "04 TRA ..." but not "004" or "40"
+            date_pattern = re.compile(r"^(0[1-9]|[12][0-9]|3[01])(?=\s|$)")
+        else:
+            date_pattern = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:[\/\-\s]\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
     
     # Sort words by X coordinate within the row
     sorted_words = sorted(words, key=lambda w: w.get('x0', 0))
@@ -1715,12 +1729,39 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
         if m:
             amounts.append((m.group(), center))
 
-        # Check if word contains a date followed by description text (especially for Banorte)
-        # Example: "12-ENE-23EST EPIGMENIO" or "30-ENE-23I.V.A" should be split correctly
+        # Check if word contains a date followed by description text
+        # For Banregio: date is only 2 digits at the start, e.g., "04 TRA ..."
+        # For Banorte: date format is "DIA-MES-AÑO", e.g., "12-ENE-23EST EPIGMENIO"
         date_match = date_pattern.search(text)
+        #print("Debug: date_match", date_match, "text", text)
         if date_match and 'fecha' in columns and 'descripcion' in columns:
             date_text = date_match.group()
             date_end_pos = date_match.end()
+            # For Banregio, ensure we split the 2-digit date from the rest of the text
+            if bank_name == 'Banregio':
+                # The date should be exactly 2 digits (01-31) at the start
+                # Extract the 2 digits and everything after as description
+                banregio_date_match = re.match(r'^(0[1-9]|[12][0-9]|3[01])(\s+.*)?', text)
+                if banregio_date_match:
+                    date_text = banregio_date_match.group(1)  # Just the 2 digits (01-31)
+                    description_text = banregio_date_match.group(2)  # Everything after (with leading space)
+                    if description_text:
+                        description_text = description_text.strip()  # Remove leading space
+                    else:
+                        description_text = ''
+                    
+                    # Assign date to fecha column
+                    # For Banregio, always replace (don't concatenate) since date is only 2 digits
+                    row_data['fecha'] = date_text
+                    
+                    # Assign description to descripcion column
+                    if description_text:
+                        if row_data['descripcion']:
+                            row_data['descripcion'] += ' ' + description_text
+                        else:
+                            row_data['descripcion'] = description_text
+                    
+                    continue  # Skip normal assignment for this word
             
             # For Banorte format "DIA-MES-AÑO", check if the date pattern captured the full date
             # Sometimes the pattern might only capture "30-ENE" and miss "-23"
@@ -2107,7 +2148,11 @@ def main():
     # Implemented with lookahead for the AND case, and an alternation for 'concepto'
     header_keywords_re = re.compile(r"(?:(?=.*\bfecha\b)(?=.*\bdescripcion\b))|(?:\bconcepto\b)", re.I)
     # ensure a reusable date pattern is available for later checks
-    date_pattern = day_re
+    # For Banregio, date is only 2 digits (01-31) at the start
+    if bank_config['name'] == 'Banregio':
+        date_pattern = re.compile(r"^(0[1-9]|[12][0-9]|3[01])(?=\s|$)")
+    else:
+        date_pattern = day_re
     movement_start_found = False
     movement_start_page = None
     movement_start_index = None
@@ -2465,7 +2510,11 @@ def main():
                 else:
                     # A new movement begins when the 'fecha' column contains a date token.
                     fecha_val = str(row_data.get('fecha') or '')
-                    has_date = bool(date_pattern.search(fecha_val))
+                    # For Banregio, use match() instead of search() since we want to verify the entire string is the date
+                    if bank_config['name'] == 'Banregio':
+                        has_date = bool(date_pattern.match(fecha_val))
+                    else:
+                        has_date = bool(date_pattern.search(fecha_val))
                     
                     # Check if row has valid data (date, description, or amounts)
                     has_valid_data = has_date
@@ -2485,6 +2534,12 @@ def main():
                     has_description_or_amounts = bool(desc_val or has_amounts or has_cargos_abonos)
                     
                     if has_description_or_amounts:
+                        # For Banregio, only include rows where description starts with "TRA" or "DOC"
+                        if bank_config['name'] == 'Banregio':
+                            desc_val_check = str(row_data.get('descripcion') or '').strip()
+                            if not (desc_val_check.startswith('TRA') or desc_val_check.startswith('DOC')):
+                                # Skip this row - doesn't start with TRA or DOC
+                                continue
                         row_data['page'] = page_num
                         movement_rows.append(row_data)
                     # If row has date but no description/amounts, skip it (incomplete row)
@@ -3021,24 +3076,29 @@ def main():
         # If more than two, take first two
         return (found[0], found[1])
 
-    if 'fecha' in df_mov.columns:
-        dates = df_mov['fecha'].astype(str).apply(_extract_two_dates)
-    elif 'raw' in df_mov.columns:
-        dates = df_mov['raw'].astype(str).apply(_extract_two_dates)
-    else:
-        dates = pd.Series([(None, None)] * len(df_mov))
-
-    df_mov['Fecha Oper'] = dates.apply(lambda t: t[0])
-    df_mov['Fecha Liq'] = dates.apply(lambda t: t[1])
-
-    # Remove original 'fecha' if present
-    if 'fecha' in df_mov.columns:
+    # For Banregio, preserve the 'fecha' column as-is (it's already 2 digits)
+    if bank_config['name'] == 'Banregio' and 'fecha' in df_mov.columns:
+        df_mov['Fecha'] = df_mov['fecha'].astype(str)
         df_mov = df_mov.drop(columns=['fecha'])
-    
-    # For non-BBVA banks, use only 'Fecha' column (based on Fecha Oper) and remove Fecha Liq
-    if bank_config['name'] != 'BBVA':
-        df_mov['Fecha'] = df_mov['Fecha Oper']
-        df_mov = df_mov.drop(columns=['Fecha Oper', 'Fecha Liq'])
+    else:
+        if 'fecha' in df_mov.columns:
+            dates = df_mov['fecha'].astype(str).apply(_extract_two_dates)
+        elif 'raw' in df_mov.columns:
+            dates = df_mov['raw'].astype(str).apply(_extract_two_dates)
+        else:
+            dates = pd.Series([(None, None)] * len(df_mov))
+
+        df_mov['Fecha Oper'] = dates.apply(lambda t: t[0])
+        df_mov['Fecha Liq'] = dates.apply(lambda t: t[1])
+
+        # Remove original 'fecha' if present
+        if 'fecha' in df_mov.columns:
+            df_mov = df_mov.drop(columns=['fecha'])
+        
+        # For non-BBVA banks, use only 'Fecha' column (based on Fecha Oper) and remove Fecha Liq
+        if bank_config['name'] != 'BBVA':
+            df_mov['Fecha'] = df_mov['Fecha Oper']
+            df_mov = df_mov.drop(columns=['Fecha Oper', 'Fecha Liq'])
 
     # For BBVA, split 'saldo' column into 'OPERACIÓN' and 'LIQUIDACIÓN'
     if bank_config['name'] == 'BBVA' and 'saldo' in df_mov.columns:
