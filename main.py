@@ -35,11 +35,11 @@ BANK_CONFIGS = {
     "Scotiabank": {
         "name": "Scotiabank",
         "columns": {
-            "fecha": (56, 79),             # Columna Fecha de Operación
-            "descripcion": (152, 189),     # Columna Descripción
-            "cargos": (465, 488),          # Columna Cargos
-            "abonos": (392, 426),          # Columna Abonos
-            "saldo": (539, 561),           # Columna Saldo
+            "fecha": (56, 81),             # Columna Fecha de Operación
+            "descripcion": (92, 240),     # Columna Descripción
+            "cargos": (465, 509),          # Columna Cargos
+            "abonos": (385, 437),          # Columna Abonos
+            "saldo": (532, 584),           # Columna Saldo
         }
     },
 
@@ -2175,6 +2175,7 @@ def main():
     banorte_detalle_pattern = None
     banbajio_header_pattern = None
     banregio_header_pattern = None
+    scotiabank_header_pattern = None
     detalle_found = False
     header_line_skipped = False
     if bank_config['name'] == 'Inbursa':
@@ -2192,6 +2193,10 @@ def main():
         # Pattern to detect the header line: "DIA CONCEPTO CARGOS ABONOS SALDO"
         # Make it flexible to handle variations in spacing
         banregio_header_pattern = re.compile(r'DIA.*?CONCEPTO.*?CARGOS.*?ABONOS.*?SALDO', re.I)
+    elif bank_config['name'] == 'Scotiabank':
+        # Pattern to detect the header line: "Fecha Concepto Origen / Referencia Depósito Retiro Saldo"
+        # Make it flexible to handle variations in spacing
+        scotiabank_header_pattern = re.compile(r'Fecha.*?Concepto.*?Origen.*?Referencia.*?Dep[oó]sito.*?Retiro.*?Saldo', re.I)
     
     for p in pages_lines:
         if not movement_start_found:
@@ -2222,14 +2227,21 @@ def main():
                         detalle_found = True
                         continue  # Skip the header line
                 
+                # For Scotiabank, find the header line "Fecha Concepto Origen / Referencia Depósito Retiro Saldo"
+                if scotiabank_header_pattern and not header_line_skipped:
+                    if scotiabank_header_pattern.search(ln):
+                        header_line_skipped = True
+                        detalle_found = True
+                        continue  # Skip the header line
+                
                 # After finding "DETALLE DE MOVIMIENTOS", skip the header line (for Inbursa)
                 if inbursa_detalle_pattern and detalle_found and not header_line_skipped:
                     if inbursa_header_pattern and inbursa_header_pattern.search(ln):
                         header_line_skipped = True
                         continue  # Skip the header line
                 
-                # After finding "DETALLE DE MOVIMIENTOS" and skipping header for Inbursa, or for Banorte, or for Banbajío, or for Banregio, or for other banks, look for date/header
-                if (inbursa_detalle_pattern and detalle_found and header_line_skipped) or (banorte_detalle_pattern and detalle_found) or (banbajio_header_pattern and detalle_found and header_line_skipped) or (banregio_header_pattern and detalle_found and header_line_skipped) or (not inbursa_detalle_pattern and not banorte_detalle_pattern and not banbajio_header_pattern and not banregio_header_pattern):
+                # After finding "DETALLE DE MOVIMIENTOS" and skipping header for Inbursa, or for Banorte, or for Banbajío, or for Banregio, or for Scotiabank, or for other banks, look for date/header
+                if (inbursa_detalle_pattern and detalle_found and header_line_skipped) or (banorte_detalle_pattern and detalle_found) or (banbajio_header_pattern and detalle_found and header_line_skipped) or (banregio_header_pattern and detalle_found and header_line_skipped) or (scotiabank_header_pattern and detalle_found and header_line_skipped) or (not inbursa_detalle_pattern and not banorte_detalle_pattern and not banbajio_header_pattern and not banregio_header_pattern and not scotiabank_header_pattern):
                     # For Inbursa, only look for dates (not headers, as we already skipped the header line)
                     if inbursa_detalle_pattern:
                         # For Inbursa, only start when we find a date (actual movement row)
@@ -2267,6 +2279,15 @@ def main():
                             # collect from this line onward in this page
                             movements_lines.extend(p['lines'][i:])
                             break
+                    elif scotiabank_header_pattern:
+                        # For Scotiabank, start when we find a date (actual movement row) after the header
+                        if day_re.search(ln):
+                            movement_start_found = True
+                            movement_start_page = p['page']
+                            movement_start_index = i
+                            # collect from this line onward in this page
+                            movements_lines.extend(p['lines'][i:])
+                            break
                     else:
                         # For other banks, look for date or header
                         if day_re.search(ln) or header_keywords_re.search(ln):
@@ -2285,6 +2306,9 @@ def main():
             elif bank_config['name'] == 'Banregio' and banregio_header_pattern:
                 # Filter out header line and rows starting with "del 01 al"
                 filtered_lines = [ln for ln in p['lines'] if not banregio_header_pattern.search(ln) and not re.search(r'^del\s+01\s+al', ln, re.I)]
+                movements_lines.extend(filtered_lines)
+            elif bank_config['name'] == 'Scotiabank' and scotiabank_header_pattern:
+                filtered_lines = [ln for ln in p['lines'] if not scotiabank_header_pattern.search(ln)]
                 movements_lines.extend(filtered_lines)
             else:
                 movements_lines.extend(p['lines'])
@@ -2438,6 +2462,9 @@ def main():
         elif bank_config['name'] == 'Banregio':
             # Banregio: "Total" - indicates end of movements table
             movement_end_pattern = re.compile(r'^Total\b', re.I)
+        elif bank_config['name'] == 'Scotiabank':
+            # Scotiabank: "LAS TASAS DE INTERES ESTAN EXPRESADAS EN TERMINOS ANUALES SIMPLES." - indicates end of movements table
+            movement_end_pattern = re.compile(r'LAS\s+TASAS\s+DE\s+INTERES\s+ESTAN\s+EXPRESADAS\s+EN\s+TERMINOS\s+ANUALES\s+SIMPLES\.', re.I)
         
         extraction_stopped = False
         # For Banregio, initialize flag to track when we're in the commission zone
@@ -2490,6 +2517,12 @@ def main():
                 if bank_config['name'] == 'Banregio' and banregio_header_pattern:
                     all_row_text = ' '.join([w.get('text', '') for w in row_words])
                     if banregio_header_pattern.search(all_row_text):
+                        continue  # Skip the header line
+                
+                # For Scotiabank, skip the header line if it appears during coordinate-based extraction
+                if bank_config['name'] == 'Scotiabank' and scotiabank_header_pattern:
+                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    if scotiabank_header_pattern.search(all_row_text):
                         continue  # Skip the header line
                 
                 # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
