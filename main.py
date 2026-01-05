@@ -406,7 +406,7 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                             if match:
                                 amount = normalize_amount_str(match.group(1))
                                 if amount > 0:
-                                    #print(f"✅ BBVA: Encontrado retiros/cargos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                    print(f"✅ BBVA: Encontrado retiros/cargos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
                                     summary_data['total_cargos'] = amount
                                     summary_data['total_retiros'] = amount
                                     break
@@ -422,7 +422,7 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                             if match:
                                 amount = normalize_amount_str(match.group(1))
                                 if amount > 0:
-                                    #print(f"✅ BBVA: Encontrado saldo final: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                    print(f"✅ BBVA: Encontrado saldo final: ${amount:,.2f} en línea {i+1}: {line[:80]}")
                                     summary_data['saldo_final'] = amount
                                     break
             
@@ -506,7 +506,7 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                         match = re.search(r'[-\s]+RETIROS\s+([\d,\.]+)', section_text, re.I)
                         if match:
                             retiros = normalize_amount_str(match.group(1))
-                            #print(f"✅ Santander: Encontrado RETIROS: ${retiros:,.2f}")
+                            print(f"✅ Santander: Encontrado RETIROS: ${retiros:,.2f}")
                             if retiros > 0:
                                 summary_data['total_retiros'] = retiros
                                 summary_data['total_cargos'] = retiros
@@ -834,27 +834,30 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                 #print(f"🔍 Buscando patrones Scotiabank en {len(all_lines)} líneas...")
                 for i, line in enumerate(all_lines):
                     # Saldo inicial
-                    if not summary_data['saldo_anterior']:
-                        match = re.search(r'Saldo\s+inicial\s+\$\s*([\d,\.]+)', line, re.I)
-                        if match:
-                            amount = normalize_amount_str(match.group(1))
-                            if amount > 0:
+                    #if not summary_data['saldo_anterior']:
+                     #   match = re.search(r'Saldo\s+inicial\s+\$\s*([\d,\.]+)', line, re.I)
+                      #  if match:
+                       #     amount = normalize_amount_str(match.group(1))
+                        #    if amount > 0:
                                 #print(f"✅ Scotiabank: Encontrado saldo inicial: ${amount:,.2f} en línea {i+1}: {line[:80]}")
-                                summary_data['saldo_anterior'] = amount
+                         #       summary_data['saldo_anterior'] = amount
                     
                     # Depósitos
                     if not summary_data['total_depositos']:
-                        match = re.search(r'\(\+\)\s+Dep[oó]sitos\s+\$\s*([\d,\.]+)', line, re.I)
+                        match = re.search(r'\(\+\s*\)\s*Dep[oóOÓ]sitos\s*\$\s*([\d,\.]+)', line, re.I)
+                        #print(f"✅ Scotiabank: Encontrado depósitos: {match}")
                         if match:
                             amount = normalize_amount_str(match.group(1))
+                         #   print(f"✅ Scotiabank: Encontrado depósitos: {amount}")
                             if amount > 0:
-                                #print(f"✅ Scotiabank: Encontrado depósitos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                          #      print(f"✅ Scotiabank: Encontrado depósitos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
                                 summary_data['total_depositos'] = amount
                                 summary_data['total_abonos'] = amount
                     
                     # Retiros
                     if not summary_data['total_retiros']:
                         match = re.search(r'\(-\s*\)\s+Retiros\s+\$\s*([\d,\.]+)', line, re.I)
+                        #print(f"✅ Scotiabank: Encontrado retiros: {match}")
                         if not match:
                             # Try alternative pattern without space after minus
                             match = re.search(r'\(-\s*\)\s*Retiros\s+\$\s*([\d,\.]+)', line, re.I)
@@ -867,11 +870,14 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                     
                     # Saldo final
                     if not summary_data['saldo_final']:
-                        match = re.search(r'\(=\s*\)\s+Saldo\s+final\s+de\s+la\s+cuenta\s+\$\s*([\d,\.]+)', line, re.I)
+                        match = re.search(r'\(=\s*\)\s*Saldo\s+final\s+de\s+la\s+cuenta\s*\$\s*([\d,\.]+)', line, re.I)
+                        
+                        #print(f"✅ Scotiabank: Encontrado Saldo Final: {match}")
                         if match:
                             amount = normalize_amount_str(match.group(1))
+                            #print(f"✅ Scotiabank: Encontrado Saldo Final: {amount}")
                             if amount > 0:
-                                #print(f"✅ Scotiabank: Encontrado saldo final: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                print(f"✅ Scotiabank: Encontrado saldo final: ${amount:,.2f} en línea {i+1}: {line[:80]}")
                                 summary_data['saldo_final'] = amount
             
             else:
@@ -2487,7 +2493,7 @@ def main():
             # Use y_tolerance=3 for all banks to avoid grouping multiple movements into one row
             # The split_row_if_multiple_movements function will handle cases where movements are still grouped
             word_rows = group_words_by_row(words, y_tolerance=3)
-            
+        
             # Check if grouped rows contain multiple movements and split them
             # This applies to all banks to ensure each movement is in its own row
             if columns_config:
@@ -2539,11 +2545,11 @@ def main():
                         extraction_stopped = True
                         break
 
-                # Extract structured row using coordinates
+            # Extract structured row using coordinates
                 # Pass bank_name and date_pattern to enable date/description separation
                 row_data = extract_movement_row(row_words, columns_config, bank_config['name'], date_pattern)
 
-                # Determine if this row starts a new movement (contains a date)
+            # Determine if this row starts a new movement (contains a date)
                 # If columns_config is empty, check all words for dates
                 if not columns_config:
                     # Check all words in the row for dates
@@ -2570,76 +2576,76 @@ def main():
                         has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
                         has_valid_data = bool(desc_val or has_amounts or has_cargos_abonos)
 
-                if has_date:
-                    # Only add rows that have date AND (description OR amounts)
-                    # This ensures we don't add incomplete rows
-                    desc_val = str(row_data.get('descripcion') or '').strip()
-                    has_amounts = len(row_data.get('_amounts', [])) > 0
-                    has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
-                    has_description_or_amounts = bool(desc_val or has_amounts or has_cargos_abonos)
-                    
-                    if has_description_or_amounts:
-                        # For Banregio, only include rows where description starts with "TRA" or "DOC"
-                        if bank_config['name'] == 'Banregio':
-                            desc_val_check = str(row_data.get('descripcion') or '').strip()
-                            if not (desc_val_check.startswith('TRA') or desc_val_check.startswith('DOC') or desc_val_check.startswith('INT') or desc_val_check.startswith('EFE')):
-                                # Skip this row - doesn't start with TRA or DOC or INT or EFE
-                                continue
-                        #row_data['page'] = page_num
-                        movement_rows.append(row_data)
+                    if has_date:
+                        # Only add rows that have date AND (description OR amounts)
+                        # This ensures we don't add incomplete rows
+                        desc_val = str(row_data.get('descripcion') or '').strip()
+                        has_amounts = len(row_data.get('_amounts', [])) > 0
+                        has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
+                        has_description_or_amounts = bool(desc_val or has_amounts or has_cargos_abonos)
                         
-                        # For Banregio, check if this is a monthly commission (last movement) - stop extraction
-                        if bank_config['name'] == 'Banregio':
-                            desc_val_check = str(row_data.get('descripcion') or '').strip()
-                            cargos_val = str(row_data.get('cargos') or '').strip()
-                            saldo_val = str(row_data.get('saldo') or '').strip()
-                            # Check if description contains "COMISION MENSUAL" and has cargos and saldo values
-                            has_comision = bool(re.search(r'COMISION\s+MENSUAL', desc_val_check, re.I) and cargos_val and saldo_val)
+                        if has_description_or_amounts:
+                            # For Banregio, only include rows where description starts with "TRA" or "DOC"
+                            if bank_config['name'] == 'Banregio':
+                                desc_val_check = str(row_data.get('descripcion') or '').strip()
+                                if not (desc_val_check.startswith('TRA') or desc_val_check.startswith('DOC') or desc_val_check.startswith('INT') or desc_val_check.startswith('EFE')):
+                                    # Skip this row - doesn't start with TRA or DOC or INT or EFE
+                                    continue
+                            #row_data['page'] = page_num
+                            movement_rows.append(row_data)
                             
-                            if has_comision:
-                                # Mark that we're in the commission zone and continue extracting
-                                in_comision_zone = True
-                            elif in_comision_zone:
-                                # We were in commission zone but this row is not a commission - stop extraction
-                                extraction_stopped = True
-                                break  # Stop extraction - no more monthly commissions
+                            # For Banregio, check if this is a monthly commission (last movement) - stop extraction
+                            if bank_config['name'] == 'Banregio':
+                                desc_val_check = str(row_data.get('descripcion') or '').strip()
+                                cargos_val = str(row_data.get('cargos') or '').strip()
+                                saldo_val = str(row_data.get('saldo') or '').strip()
+                                # Check if description contains "COMISION MENSUAL" and has cargos and saldo values
+                                has_comision = bool(re.search(r'COMISION\s+MENSUAL', desc_val_check, re.I) and cargos_val and saldo_val)
+                                
+                                if has_comision:
+                                    # Mark that we're in the commission zone and continue extracting
+                                    in_comision_zone = True
+                                elif in_comision_zone:
+                                    # We were in commission zone but this row is not a commission - stop extraction
+                                    extraction_stopped = True
+                                    break  # Stop extraction - no more monthly commissions
                     
                     # If row has date but no description/amounts, skip it (incomplete row)
-                elif has_valid_data:
-                    # Row has valid data but no date - treat as continuation or standalone row
-                    # For Banregio, if we're in commission zone, check for irrelevant rows and stop extraction
-                    if bank_config['name'] == 'Banregio' and in_comision_zone:
-                        # Collect all text from the row to check for irrelevant content
-                        all_row_text_check = ' '.join([w.get('text', '') for w in row_words])
-                        all_row_text_check = all_row_text_check.strip()
-                        
-                        # Check if row contains "Total" (summary line)
-                        if re.search(r'\bTotal\b', all_row_text_check, re.I):
+                    elif has_valid_data:
+                        # Row has valid data but no date - treat as continuation or standalone row
+                        # For Banregio, if we're in commission zone, check for irrelevant rows and stop extraction
+                        if bank_config['name'] == 'Banregio' and in_comision_zone:
+                            # Collect all text from the row to check for irrelevant content
+                            all_row_text_check = ' '.join([w.get('text', '') for w in row_words])
+                            all_row_text_check = all_row_text_check.strip()
+                            
+                            # Check if row contains "Total" (summary line)
+                            if re.search(r'\bTotal\b', all_row_text_check, re.I):
+                                extraction_stopped = True
+                                break  # Stop extraction - "Total" line detected
+                            
+                            # Check if text is too long (likely not part of a movement description)
+                            if len(all_row_text_check) > 200:
+                                extraction_stopped = True
+                                break  # Stop extraction - text too long, likely irrelevant
+                            
+                            # Check if text contains keywords indicating legal/informational content
+                            irrelevant_keywords = [
+                                'FOLIO FISCAL', 'Sello Digital', 'Institución de Banca', 'Certificado',
+                                'Regimen Fiscal', 'Método de Pago', 'Cadena Original', 'Complemento',
+                                'Gráfico', 'Transaccional', 'Mensajes', 'Abreviaturas', 'Origen de la Operación',
+                                'Sociedades de', 'Inversión', 'Escala de Calificaciones', 'Riesgo',
+                                'OFRECEMOS', 'CONSULTE', 'INFORMACION RELEVANTE', 'UNIDAD ESPECIALIZADA',
+                                'NOTA', 'CONCEPTO DIA', 'Saldo Inicial', 'Saldo Final'
+                            ]
+                            all_row_text_upper = all_row_text_check.upper()
+                            if any(keyword.upper() in all_row_text_upper for keyword in irrelevant_keywords):
+                                extraction_stopped = True
+                                break  # Stop extraction - irrelevant information detected
+                            
+                            # If none of the above, stop extraction anyway (we're past commissions)
                             extraction_stopped = True
-                            break  # Stop extraction - "Total" line detected
-                        
-                        # Check if text is too long (likely not part of a movement description)
-                        if len(all_row_text_check) > 200:
-                            extraction_stopped = True
-                            break  # Stop extraction - text too long, likely irrelevant
-                        
-                        # Check if text contains keywords indicating legal/informational content
-                        irrelevant_keywords = [
-                            'FOLIO FISCAL', 'Sello Digital', 'Institución de Banca', 'Certificado',
-                            'Regimen Fiscal', 'Método de Pago', 'Cadena Original', 'Complemento',
-                            'Gráfico', 'Transaccional', 'Mensajes', 'Abreviaturas', 'Origen de la Operación',
-                            'Sociedades de', 'Inversión', 'Escala de Calificaciones', 'Riesgo',
-                            'OFRECEMOS', 'CONSULTE', 'INFORMACION RELEVANTE', 'UNIDAD ESPECIALIZADA',
-                            'NOTA', 'CONCEPTO DIA', 'Saldo Inicial', 'Saldo Final'
-                        ]
-                        all_row_text_upper = all_row_text_check.upper()
-                        if any(keyword.upper() in all_row_text_upper for keyword in irrelevant_keywords):
-                            extraction_stopped = True
-                            break  # Stop extraction - irrelevant information detected
-                        
-                        # If none of the above, stop extraction anyway (we're past commissions)
-                        extraction_stopped = True
-                        break  # Stop extraction - no more monthly commissions
+                            break  # Stop extraction - no more monthly commissions
                     
                     if movement_rows:
                         # Continuation row: append description-like text and amounts to previous movement
@@ -3210,17 +3216,17 @@ def main():
         else:
             dates = pd.Series([(None, None)] * len(df_mov))
 
-        df_mov['Fecha Oper'] = dates.apply(lambda t: t[0])
-        df_mov['Fecha Liq'] = dates.apply(lambda t: t[1])
+    df_mov['Fecha Oper'] = dates.apply(lambda t: t[0])
+    df_mov['Fecha Liq'] = dates.apply(lambda t: t[1])
 
-        # Remove original 'fecha' if present
-        if 'fecha' in df_mov.columns:
-            df_mov = df_mov.drop(columns=['fecha'])
-        
-        # For non-BBVA banks, use only 'Fecha' column (based on Fecha Oper) and remove Fecha Liq
-        if bank_config['name'] != 'BBVA':
-            df_mov['Fecha'] = df_mov['Fecha Oper']
-            df_mov = df_mov.drop(columns=['Fecha Oper', 'Fecha Liq'])
+    # Remove original 'fecha' if present
+    if 'fecha' in df_mov.columns:
+        df_mov = df_mov.drop(columns=['fecha'])
+    
+    # For non-BBVA banks, use only 'Fecha' column (based on Fecha Oper) and remove Fecha Liq
+    if bank_config['name'] != 'BBVA':
+        df_mov['Fecha'] = df_mov['Fecha Oper']
+        df_mov = df_mov.drop(columns=['Fecha Oper', 'Fecha Liq'])
 
     # For BBVA, split 'saldo' column into 'OPERACIÓN' and 'LIQUIDACIÓN'
     if bank_config['name'] == 'BBVA' and 'saldo' in df_mov.columns:
