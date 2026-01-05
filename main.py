@@ -2431,6 +2431,8 @@ def main():
             movement_end_pattern = re.compile(r'^Total\b', re.I)
         
         extraction_stopped = False
+        # For Banregio, initialize flag to track when we're in the commission zone
+        in_comision_zone = False
         for page_data in extracted_data:
             if extraction_stopped:
                 break
@@ -2464,6 +2466,7 @@ def main():
                     split_rows.extend(split_result)
                 
                 word_rows = split_rows
+            
             
             for row_words in word_rows:
                 if not row_words or extraction_stopped:
@@ -2549,13 +2552,53 @@ def main():
                             cargos_val = str(row_data.get('cargos') or '').strip()
                             saldo_val = str(row_data.get('saldo') or '').strip()
                             # Check if description contains "COMISION MENSUAL" and has cargos and saldo values
-                            if re.search(r'COMISION\s+MENSUAL', desc_val_check, re.I) and cargos_val and saldo_val:
+                            has_comision = bool(re.search(r'COMISION\s+MENSUAL', desc_val_check, re.I) and cargos_val and saldo_val)
+                            
+                            if has_comision:
+                                # Mark that we're in the commission zone and continue extracting
+                                in_comision_zone = True
+                            elif in_comision_zone:
+                                # We were in commission zone but this row is not a commission - stop extraction
                                 extraction_stopped = True
-                                break  # Stop extraction - last movement (monthly commission) reached
+                                break  # Stop extraction - no more monthly commissions
                     
                     # If row has date but no description/amounts, skip it (incomplete row)
                 elif has_valid_data:
                     # Row has valid data but no date - treat as continuation or standalone row
+                    # For Banregio, if we're in commission zone, check for irrelevant rows and stop extraction
+                    if bank_config['name'] == 'Banregio' and in_comision_zone:
+                        # Collect all text from the row to check for irrelevant content
+                        all_row_text_check = ' '.join([w.get('text', '') for w in row_words])
+                        all_row_text_check = all_row_text_check.strip()
+                        
+                        # Check if row contains "Total" (summary line)
+                        if re.search(r'\bTotal\b', all_row_text_check, re.I):
+                            extraction_stopped = True
+                            break  # Stop extraction - "Total" line detected
+                        
+                        # Check if text is too long (likely not part of a movement description)
+                        if len(all_row_text_check) > 200:
+                            extraction_stopped = True
+                            break  # Stop extraction - text too long, likely irrelevant
+                        
+                        # Check if text contains keywords indicating legal/informational content
+                        irrelevant_keywords = [
+                            'FOLIO FISCAL', 'Sello Digital', 'Institución de Banca', 'Certificado',
+                            'Regimen Fiscal', 'Método de Pago', 'Cadena Original', 'Complemento',
+                            'Gráfico', 'Transaccional', 'Mensajes', 'Abreviaturas', 'Origen de la Operación',
+                            'Sociedades de', 'Inversión', 'Escala de Calificaciones', 'Riesgo',
+                            'OFRECEMOS', 'CONSULTE', 'INFORMACION RELEVANTE', 'UNIDAD ESPECIALIZADA',
+                            'NOTA', 'CONCEPTO DIA', 'Saldo Inicial', 'Saldo Final'
+                        ]
+                        all_row_text_upper = all_row_text_check.upper()
+                        if any(keyword.upper() in all_row_text_upper for keyword in irrelevant_keywords):
+                            extraction_stopped = True
+                            break  # Stop extraction - irrelevant information detected
+                        
+                        # If none of the above, stop extraction anyway (we're past commissions)
+                        extraction_stopped = True
+                        break  # Stop extraction - no more monthly commissions
+                    
                     if movement_rows:
                         # Continuation row: append description-like text and amounts to previous movement
                         prev = movement_rows[-1]
