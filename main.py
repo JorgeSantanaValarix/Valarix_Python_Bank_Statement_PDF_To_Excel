@@ -2537,8 +2537,8 @@ def main():
                         # For Banregio, only include rows where description starts with "TRA" or "DOC"
                         if bank_config['name'] == 'Banregio':
                             desc_val_check = str(row_data.get('descripcion') or '').strip()
-                            if not (desc_val_check.startswith('TRA') or desc_val_check.startswith('DOC') or desc_val_check.startswith('INT')):
-                                # Skip this row - doesn't start with TRA or DOC or INT
+                            if not (desc_val_check.startswith('TRA') or desc_val_check.startswith('DOC') or desc_val_check.startswith('INT') or desc_val_check.startswith('EFE')):
+                                # Skip this row - doesn't start with TRA or DOC or INT or EFE
                                 continue
                         row_data['page'] = page_num
                         movement_rows.append(row_data)
