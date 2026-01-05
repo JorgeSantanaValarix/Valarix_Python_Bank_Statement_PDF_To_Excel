@@ -2537,11 +2537,22 @@ def main():
                         # For Banregio, only include rows where description starts with "TRA" or "DOC"
                         if bank_config['name'] == 'Banregio':
                             desc_val_check = str(row_data.get('descripcion') or '').strip()
-                            if not (desc_val_check.startswith('TRA') or desc_val_check.startswith('DOC')):
-                                # Skip this row - doesn't start with TRA or DOC
+                            if not (desc_val_check.startswith('TRA') or desc_val_check.startswith('DOC') or desc_val_check.startswith('INT')):
+                                # Skip this row - doesn't start with TRA or DOC or INT
                                 continue
                         row_data['page'] = page_num
                         movement_rows.append(row_data)
+                        
+                        # For Banregio, check if this is a monthly commission (last movement) - stop extraction
+                        if bank_config['name'] == 'Banregio':
+                            desc_val_check = str(row_data.get('descripcion') or '').strip()
+                            cargos_val = str(row_data.get('cargos') or '').strip()
+                            saldo_val = str(row_data.get('saldo') or '').strip()
+                            # Check if description contains "COMISION MENSUAL" and has cargos and saldo values
+                            if re.search(r'COMISION\s+MENSUAL', desc_val_check, re.I) and cargos_val and saldo_val:
+                                extraction_stopped = True
+                                break  # Stop extraction - last movement (monthly commission) reached
+                    
                     # If row has date but no description/amounts, skip it (incomplete row)
                 elif has_valid_data:
                     # Row has valid data but no date - treat as continuation or standalone row
