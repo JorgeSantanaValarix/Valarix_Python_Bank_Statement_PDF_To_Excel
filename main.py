@@ -2552,7 +2552,7 @@ def main():
                             if not (desc_val_check.startswith('TRA') or desc_val_check.startswith('DOC') or desc_val_check.startswith('INT') or desc_val_check.startswith('EFE')):
                                 # Skip this row - doesn't start with TRA or DOC or INT or EFE
                                 continue
-                        row_data['page'] = page_num
+                        #row_data['page'] = page_num
                         movement_rows.append(row_data)
                         
                         # For Banregio, check if this is a monthly commission (last movement) - stop extraction
