@@ -1027,7 +1027,16 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
     # Get final balance (last row's saldo if available)
     # Use the last non-empty value from the "Saldo" column in Movements tab
     # This is called BEFORE adding the "Total" row, so we can safely get the last value
-    if 'Saldo' in df_mov.columns:
+    # For BBVA, use the last value from "LIQUIDACIÓN" column instead of "Saldo"
+    if bank_name == 'BBVA' and 'Liquidación' in df_mov.columns:
+        liquidacion_col = df_mov['Liquidación']
+        # Get last non-empty liquidacion value (iterate from end to beginning)
+        for idx in range(len(liquidacion_col) - 1, -1, -1):
+            val = liquidacion_col.iloc[idx]
+            if val and pd.notna(val) and str(val).strip() and str(val).strip() != '':
+                totals['saldo_final'] = normalize_amount_str(val)
+                break
+    elif 'Saldo' in df_mov.columns:
         saldo_col = df_mov['Saldo']
         # Get last non-empty saldo value (iterate from end to beginning)
         for idx in range(len(saldo_col) - 1, -1, -1):
