@@ -870,14 +870,28 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                     
                     # Saldo final
                     if not summary_data['saldo_final']:
+                        # Try multiple patterns to handle variations
                         match = re.search(r'\(=\s*\)\s*Saldo\s+final\s+de\s+la\s+cuenta\s*\$\s*([\d,\.]+)', line, re.I)
-                        
+                        if not match:
+                            # Try with space before =
+                            match = re.search(r'\(\s*=\s*\)\s*Saldo\s+final\s+de\s+la\s+cuenta\s*\$\s*([\d,\.]+)', line, re.I)
+                        if not match:
+                            # Try more flexible pattern
+                            match = re.search(r'\(=\s*\)\s*Saldo.*?final.*?de.*?la.*?cuenta\s*\$\s*([\d,\.]+)', line, re.I)
+                        # If not found in single line, try with next line (in case text is split)
+                        if not match and i + 1 < len(all_lines):
+                            combined_line = line + " " + all_lines[i + 1]
+                            match = re.search(r'\(=\s*\)\s*Saldo\s+final\s+de\s+la\s+cuenta\s*\$\s*([\d,\.]+)', combined_line, re.I)
+                            if not match:
+                                match = re.search(r'\(\s*=\s*\)\s*Saldo\s+final\s+de\s+la\s+cuenta\s*\$\s*([\d,\.]+)', combined_line, re.I)
+                            if not match:
+                                match = re.search(r'\(=\s*\)\s*Saldo.*?final.*?de.*?la.*?cuenta\s*\$\s*([\d,\.]+)', combined_line, re.I)
                         #print(f"✅ Scotiabank: Encontrado Saldo Final: {match}")
                         if match:
                             amount = normalize_amount_str(match.group(1))
                             #print(f"✅ Scotiabank: Encontrado Saldo Final: {amount}")
                             if amount > 0:
-                                print(f"✅ Scotiabank: Encontrado saldo final: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                #print(f"✅ Scotiabank: Encontrado saldo final: ${amount:,.2f} en línea {i+1}: {line[:80]}")
                                 summary_data['saldo_final'] = amount
             
             else:
