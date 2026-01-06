@@ -57,12 +57,12 @@ BANK_CONFIGS = {
     "Konfio": {
         "name": "Konfio",
         "columns": {
-            "fecha": (59, 89),             # Columna Fecha de Operación
-            "descripcion": (170, 228),     # Columna Descripción
+            "fecha": (48, 102),             # Columna Fecha de Operación
+            "descripcion": (120, 240),     # Columna Descripción
             "cargos": (340, 388),          # Columna Cargos
             #"cargos": (340, 388),          # Columna Cargos
             #"cargos en otra divisa": (420, 451),          # Columna Cargos
-            "abonos": (527, 548),          # Columna Abonos
+            "abonos": (510, 565),          # Columna Abonos
         }
     },
 
