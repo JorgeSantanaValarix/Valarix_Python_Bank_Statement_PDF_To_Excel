@@ -46,8 +46,8 @@ BANK_CONFIGS = {
     "Inbursa": {
         "name": "Inbursa",
         "columns": {
-            "fecha": (11, 27),             # Columna Fecha de Operación
-            "descripcion": (145, 283),     # Columna Descripción
+            "fecha": (11, 40),             # Columna Fecha de Operación
+            "descripcion": (145, 369),     # Columna Descripción
             "cargos": (400, 441),          # Columna Cargos
             "abonos": (475, 510),          # Columna Abonos
             "saldo": (525, 563),           # Columna Saldo
