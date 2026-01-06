@@ -2191,7 +2191,7 @@ def main():
     # For Banorte, movements start after "DETALLE DE MOVIMIENTOS (PESOS)"
     # For Banbajío, movements start after the header line "FECHA NO. REF. / DOCTO DESCRIPCION DE LA OPERACION DEPOSITOS RETIROS SALDO"
     # For Banregio, movements start after the header line "DIA CONCEPTO CARGOS ABONOS SALDO"
-    inbursa_detalle_pattern = None
+    inbursa_header_pattern = None
     banorte_detalle_pattern = None
     banbajio_header_pattern = None
     banregio_header_pattern = None
@@ -2199,7 +2199,6 @@ def main():
     detalle_found = False
     header_line_skipped = False
     if bank_config['name'] == 'Inbursa':
-        inbursa_detalle_pattern = re.compile(r'DETALLE\s+DE\s+MOVIMIENTOS', re.I)
         # Pattern to detect the header line: "FECHA REFERENCIA CONCEPTO CARGOS ABONOS SALDO"
         # Make it more flexible to handle variations in spacing
         inbursa_header_pattern = re.compile(r'FECHA.*?REFERENCIA.*?CONCEPTO.*?CARGOS.*?ABONOS.*?SALDO', re.I)
@@ -2221,11 +2220,12 @@ def main():
     for p in pages_lines:
         if not movement_start_found:
             for i, ln in enumerate(p['lines']):
-                # For Inbursa, first find "DETALLE DE MOVIMIENTOS"
-                if inbursa_detalle_pattern and not detalle_found:
-                    if inbursa_detalle_pattern.search(ln):
+                # For Inbursa, find the header line "FECHA REFERENCIA CONCEPTO CARGOS ABONOS SALDO"
+                if inbursa_header_pattern and not header_line_skipped:
+                    if inbursa_header_pattern.search(ln):
+                        header_line_skipped = True
                         detalle_found = True
-                        continue  # Skip the "DETALLE DE MOVIMIENTOS" line itself
+                        continue  # Skip the header line
                 
                 # For Banorte, find "DETALLE DE MOVIMIENTOS (PESOS)"
                 if banorte_detalle_pattern and not detalle_found:
@@ -2254,17 +2254,11 @@ def main():
                         detalle_found = True
                         continue  # Skip the header line
                 
-                # After finding "DETALLE DE MOVIMIENTOS", skip the header line (for Inbursa)
-                if inbursa_detalle_pattern and detalle_found and not header_line_skipped:
-                    if inbursa_header_pattern and inbursa_header_pattern.search(ln):
-                        header_line_skipped = True
-                        continue  # Skip the header line
-                
-                # After finding "DETALLE DE MOVIMIENTOS" and skipping header for Inbursa, or for Banorte, or for Banbajío, or for Banregio, or for Scotiabank, or for other banks, look for date/header
-                if (inbursa_detalle_pattern and detalle_found and header_line_skipped) or (banorte_detalle_pattern and detalle_found) or (banbajio_header_pattern and detalle_found and header_line_skipped) or (banregio_header_pattern and detalle_found and header_line_skipped) or (scotiabank_header_pattern and detalle_found and header_line_skipped) or (not inbursa_detalle_pattern and not banorte_detalle_pattern and not banbajio_header_pattern and not banregio_header_pattern and not scotiabank_header_pattern):
+                # After finding header for Inbursa, or for Banorte, or for Banbajío, or for Banregio, or for Scotiabank, or for other banks, look for date/header
+                if (inbursa_header_pattern and detalle_found and header_line_skipped) or (banorte_detalle_pattern and detalle_found) or (banbajio_header_pattern and detalle_found and header_line_skipped) or (banregio_header_pattern and detalle_found and header_line_skipped) or (scotiabank_header_pattern and detalle_found and header_line_skipped) or (not inbursa_header_pattern and not banorte_detalle_pattern and not banbajio_header_pattern and not banregio_header_pattern and not scotiabank_header_pattern):
                     # For Inbursa, only look for dates (not headers, as we already skipped the header line)
-                    if inbursa_detalle_pattern:
-                        # For Inbursa, only start when we find a date (actual movement row)
+                    if inbursa_header_pattern:
+                        # For Inbursa, only start when we find a date (actual movement row) after the header
                         if day_re.search(ln):
                             movement_start_found = True
                             movement_start_page = p['page']
@@ -2319,13 +2313,16 @@ def main():
                             break
         else:
             # Already found movement start, collect all lines from this page
-            # For Banbajío and Banregio, filter out the header line if it appears again on subsequent pages
+            # For Banbajío, Banregio, Inbursa, and Scotiabank, filter out the header line if it appears again on subsequent pages
             if bank_config['name'] == 'Banbajío' and banbajio_header_pattern:
                 filtered_lines = [ln for ln in p['lines'] if not banbajio_header_pattern.search(ln)]
                 movements_lines.extend(filtered_lines)
             elif bank_config['name'] == 'Banregio' and banregio_header_pattern:
                 # Filter out header line and rows starting with "del 01 al"
                 filtered_lines = [ln for ln in p['lines'] if not banregio_header_pattern.search(ln) and not re.search(r'^del\s+01\s+al', ln, re.I)]
+                movements_lines.extend(filtered_lines)
+            elif bank_config['name'] == 'Inbursa' and inbursa_header_pattern:
+                filtered_lines = [ln for ln in p['lines'] if not inbursa_header_pattern.search(ln)]
                 movements_lines.extend(filtered_lines)
             elif bank_config['name'] == 'Scotiabank' and scotiabank_header_pattern:
                 filtered_lines = [ln for ln in p['lines'] if not scotiabank_header_pattern.search(ln)]
@@ -2486,6 +2483,10 @@ def main():
             # Scotiabank: "LAS TASAS DE INTERES ESTAN EXPRESADAS EN TERMINOS ANUALES SIMPLES." - indicates end of movements table
             # Use a more flexible pattern to handle variations in spacing and formatting
             movement_end_pattern = re.compile(r'LAS\s+TASAS\s+DE\s+INTERES\s+ESTAN\s+EXPRESADAS\s+EN\s+TERMINOS\s+ANUALES\s+SIMPLES\.?', re.I)
+        elif bank_config['name'] == 'Inbursa':
+            # Inbursa: "Si desea recibir pagos a través de transferencias bancarias electrónicas" - indicates end of movements table
+            # Use a flexible pattern to handle variations in spacing and formatting
+            movement_end_pattern = re.compile(r'Si\s+desea\s+recibir\s+pagos\s+a\s+trav[eé]s\s+de\s+transferencias\s+bancarias\s+electr[oó]nicas', re.I)
         
         extraction_stopped = False
         # For Banregio, initialize flag to track when we're in the commission zone
@@ -2529,7 +2530,7 @@ def main():
                 if not row_words or extraction_stopped:
                     continue
 
-                # For Banbajío and Banregio, skip the header line if it appears on subsequent pages
+                # For Banbajío, Banregio, Inbursa, and Scotiabank, skip the header line if it appears on subsequent pages
                 if bank_config['name'] == 'Banbajío' and banbajio_header_pattern:
                     all_row_text = ' '.join([w.get('text', '') for w in row_words])
                     if banbajio_header_pattern.search(all_row_text):
@@ -2538,6 +2539,11 @@ def main():
                 if bank_config['name'] == 'Banregio' and banregio_header_pattern:
                     all_row_text = ' '.join([w.get('text', '') for w in row_words])
                     if banregio_header_pattern.search(all_row_text):
+                        continue  # Skip the header line
+                
+                if bank_config['name'] == 'Inbursa' and inbursa_header_pattern:
+                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    if inbursa_header_pattern.search(all_row_text):
                         continue  # Skip the header line
                 
                 # For Scotiabank, skip the header line if it appears during coordinate-based extraction
