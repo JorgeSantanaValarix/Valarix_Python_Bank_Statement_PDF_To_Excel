@@ -2484,7 +2484,8 @@ def main():
             movement_end_pattern = re.compile(r'^Total\b', re.I)
         elif bank_config['name'] == 'Scotiabank':
             # Scotiabank: "LAS TASAS DE INTERES ESTAN EXPRESADAS EN TERMINOS ANUALES SIMPLES." - indicates end of movements table
-            movement_end_pattern = re.compile(r'LAS\s+TASAS\s+DE\s+INTERES\s+ESTAN\s+EXPRESADAS\s+EN\s+TERMINOS\s+ANUALES\s+SIMPLES\.', re.I)
+            # Use a more flexible pattern to handle variations in spacing and formatting
+            movement_end_pattern = re.compile(r'LAS\s+TASAS\s+DE\s+INTERES\s+ESTAN\s+EXPRESADAS\s+EN\s+TERMINOS\s+ANUALES\s+SIMPLES\.?', re.I)
         
         extraction_stopped = False
         # For Banregio, initialize flag to track when we're in the commission zone
@@ -2551,10 +2552,29 @@ def main():
                     if re.search(r'^del\s+01\s+al', all_row_text, re.I):
                         continue  # Skip irrelevant information rows
 
-                # Check for end pattern (for Banamex, Santander, Banregio, etc.)
+                # Check for end pattern (for Banamex, Santander, Banregio, Scotiabank, etc.)
                 if movement_end_pattern:
                     all_text = ' '.join([w.get('text', '') for w in row_words])
-                    if movement_end_pattern.search(all_text):
+                    match_found = False
+                    
+                    # For Scotiabank, try multiple flexible patterns to handle variations in spacing and formatting
+                    if bank_config['name'] == 'Scotiabank':
+                        # Try multiple flexible patterns
+                        scotiabank_end_patterns = [
+                            re.compile(r'LAS\s+TASAS\s+DE\s+INTERES\s+ESTAN\s+EXPRESADAS\s+EN\s+TERMINOS\s+ANUALES\s+SIMPLES\.?', re.I),
+                            re.compile(r'LAS\s+TASAS\s+DE\s+INTERES.*?ESTAN.*?EXPRESADAS.*?EN.*?TERMINOS.*?ANUALES.*?SIMPLES\.?', re.I),
+                            re.compile(r'LAS.*?TASAS.*?DE.*?INTERES.*?ESTAN.*?EXPRESADAS.*?EN.*?TERMINOS.*?ANUALES.*?SIMPLES', re.I),
+                        ]
+                        for pattern in scotiabank_end_patterns:
+                            if pattern.search(all_text):
+                                match_found = True
+                                break
+                    else:
+                        # For other banks (Banregio, Banamex, Santander, Banorte), use the standard pattern
+                        if movement_end_pattern.search(all_text):
+                            match_found = True
+                    
+                    if match_found:
                         #print(f"🛑 Fin de tabla de movimientos detectado en página {page_num}")
                         extraction_stopped = True
                         break
