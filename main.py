@@ -3384,6 +3384,22 @@ def main():
     if column_rename:
         df_mov = df_mov.rename(columns=column_rename)
 
+    # For Clara, clean "MXN" and other text from Abonos column
+    if bank_config['name'] == 'Clara' and 'Abonos' in df_mov.columns:
+        def clean_clara_abonos(value):
+            """Remove MXN and other non-numeric text from Abonos values for Clara."""
+            if pd.isna(value) or not value:
+                return ''
+            value_str = str(value).strip()
+            # Remove "MXN" (case insensitive) and any surrounding spaces
+            value_str = re.sub(r'\bMXN\b', '', value_str, flags=re.I)
+            # Remove any remaining non-numeric characters except digits, commas, dots, and minus sign
+            # Keep only: digits, commas, dots (for decimals), and minus sign (for negative values)
+            value_str = re.sub(r'[^\d,\.\-]', '', value_str)
+            return value_str.strip()
+        
+        df_mov['Abonos'] = df_mov['Abonos'].apply(clean_clara_abonos)
+
     # Rename "Fecha Liq" to "Fecha Liq." for BBVA if needed
     if bank_config['name'] == 'BBVA' and 'Fecha Liq' in df_mov.columns:
         df_mov = df_mov.rename(columns={'Fecha Liq': 'Fecha Liq.'})
@@ -3584,7 +3600,11 @@ def main():
                 # Try to convert to numeric and sum
                 numeric_values = df_mov[col].apply(lambda x: normalize_amount_str(x) if pd.notna(x) and str(x).strip() else 0.0)
                 total = numeric_values.sum()
-                if total > 0:
+                # For Clara, always show total for Abonos (even if negative, zero, or positive)
+                if bank_config['name'] == 'Clara' and col == 'Abonos':
+                    # Format as currency with 2 decimals (always show, even if negative or zero)
+                    total_row[col] = f"{total:,.2f}"
+                elif total > 0:
                     # Format as currency with 2 decimals
                     total_row[col] = f"{total:,.2f}"
                 else:
