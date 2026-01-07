@@ -68,7 +68,7 @@ BANK_CONFIGS = {
         "name": "Clara",
         "columns": {
             "fecha": (35, 60),             # Columna Fecha de Operación
-            "descripcion": (170, 270),     # Columna Descripción
+            "descripcion": (60, 450),       # Columna Descripción (ampliado para capturar todas las palabras de descripción)
             "cargos": (450, 480),          # Columna Cargos
             "abonos": (520, 576),          # Columna Abonos
         }
