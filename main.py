@@ -1767,14 +1767,52 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
             if fecha_x0 <= center <= fecha_x1:
                 fecha_words.append(word)
         
-        # If we have multiple words in fecha column, try to reconstruct the date
-        if len(fecha_words) > 1:
-            fecha_text = ' '.join([w.get('text', '') for w in fecha_words])
-            # For Clara, the date might be "01 E N E" (month split into letters)
-            # Try to reconstruct it as "01 ENE"
-            clara_date_match = re.search(r'(\d{1,2})\s+([A-Z])\s*([A-Z])\s*([A-Z])', fecha_text, re.I)
+        # If we have words in fecha column, try to reconstruct the date
+        if len(fecha_words) > 0:
+            # Get all text from fecha words, preserving order
+            fecha_texts = [w.get('text', '').strip() for w in fecha_words]
+            fecha_text = ' '.join(fecha_texts)
+            
+            # For Clara, dates can be split in multiple ways:
+            # 1. "0 2 E N E" -> "02 ENE" (digits and letters all separated)
+            # 2. "02 E N E" -> "02 ENE" (day together, month letters separated)
+            # 3. "02 ENE" -> "02 ENE" (standard format)
+            
+            # First, try to reconstruct: join consecutive digits and consecutive letters
+            reconstructed_parts = []
+            current_part = ''
+            for text in fecha_texts:
+                if text.isdigit():
+                    # Digit: append to current part if it's also digits, otherwise start new
+                    if current_part.isdigit() or not current_part:
+                        current_part += text
+                    else:
+                        reconstructed_parts.append(current_part)
+                        current_part = text
+                elif text.isalpha() and len(text) == 1:
+                    # Single letter: append to current part if it's also letters, otherwise start new
+                    if current_part.isalpha() or not current_part:
+                        current_part += text
+                    else:
+                        reconstructed_parts.append(current_part)
+                        current_part = text
+                else:
+                    # Other text: finish current part and add this
+                    if current_part:
+                        reconstructed_parts.append(current_part)
+                    current_part = text
+            
+            # Add the last part
+            if current_part:
+                reconstructed_parts.append(current_part)
+            
+            # Now try to match date patterns with reconstructed parts
+            reconstructed_text = ' '.join(reconstructed_parts)
+            
+            # Try pattern: day (1-2 digits) followed by month (3 letters, possibly separated)
+            # Pattern 1: "02 E N E" or "0 2 E N E" -> "02 ENE"
+            clara_date_match = re.search(r'(\d{1,2})\s+([A-Z])\s*([A-Z])\s*([A-Z])', reconstructed_text, re.I)
             if clara_date_match:
-                # Reconstruct as "01 ENE"
                 day = clara_date_match.group(1)
                 month_letters = clara_date_match.group(2) + clara_date_match.group(3) + clara_date_match.group(4)
                 date_text = f"{day} {month_letters.upper()}"
@@ -1782,13 +1820,24 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
                 # Remove these words from sorted_words so they're not processed again
                 sorted_words = [w for w in sorted_words if w not in fecha_words]
             else:
-                # Try standard pattern in case month is not split
-                clara_date_match = re.search(r'(\d{1,2}\s+[A-Z]{3})', fecha_text, re.I)
+                # Try pattern: "02 ENE" (standard format)
+                clara_date_match = re.search(r'(\d{1,2}\s+[A-Z]{3})', reconstructed_text, re.I)
                 if clara_date_match:
                     date_text = clara_date_match.group(1).strip()
                     row_data['fecha'] = date_text
                     # Remove these words from sorted_words so they're not processed again
                     sorted_words = [w for w in sorted_words if w not in fecha_words]
+                elif len(reconstructed_parts) >= 2:
+                    # Fallback: if we have at least 2 parts, try to construct date manually
+                    # First part should be digits (day), rest should be letters (month)
+                    day_part = reconstructed_parts[0]
+                    month_part = ''.join(reconstructed_parts[1:]) if len(reconstructed_parts) > 1 else ''
+                    
+                    if day_part.isdigit() and len(day_part) <= 2 and month_part.isalpha() and len(month_part) == 3:
+                        date_text = f"{day_part} {month_part.upper()}"
+                        row_data['fecha'] = date_text
+                        # Remove these words from sorted_words so they're not processed again
+                        sorted_words = [w for w in sorted_words if w not in fecha_words]
     
     for word in sorted_words:
         text = word.get('text', '')
