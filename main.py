@@ -1755,6 +1755,41 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
     # Sort words by X coordinate within the row
     sorted_words = sorted(words, key=lambda w: w.get('x0', 0))
     
+    # For Clara, first try to reconstruct dates that might be split across multiple words
+    if bank_name == 'Clara' and 'fecha' in columns:
+        fecha_x0, fecha_x1 = columns['fecha']
+        # Collect all words that are in the fecha column range
+        fecha_words = []
+        for word in sorted_words:
+            x0 = word.get('x0', 0)
+            x1 = word.get('x1', 0)
+            center = (x0 + x1) / 2
+            if fecha_x0 <= center <= fecha_x1:
+                fecha_words.append(word)
+        
+        # If we have multiple words in fecha column, try to reconstruct the date
+        if len(fecha_words) > 1:
+            fecha_text = ' '.join([w.get('text', '') for w in fecha_words])
+            # For Clara, the date might be "01 E N E" (month split into letters)
+            # Try to reconstruct it as "01 ENE"
+            clara_date_match = re.search(r'(\d{1,2})\s+([A-Z])\s*([A-Z])\s*([A-Z])', fecha_text, re.I)
+            if clara_date_match:
+                # Reconstruct as "01 ENE"
+                day = clara_date_match.group(1)
+                month_letters = clara_date_match.group(2) + clara_date_match.group(3) + clara_date_match.group(4)
+                date_text = f"{day} {month_letters.upper()}"
+                row_data['fecha'] = date_text
+                # Remove these words from sorted_words so they're not processed again
+                sorted_words = [w for w in sorted_words if w not in fecha_words]
+            else:
+                # Try standard pattern in case month is not split
+                clara_date_match = re.search(r'(\d{1,2}\s+[A-Z]{3})', fecha_text, re.I)
+                if clara_date_match:
+                    date_text = clara_date_match.group(1).strip()
+                    row_data['fecha'] = date_text
+                    # Remove these words from sorted_words so they're not processed again
+                    sorted_words = [w for w in sorted_words if w not in fecha_words]
+    
     for word in sorted_words:
         text = word.get('text', '')
         x0 = word.get('x0', 0)
@@ -2205,6 +2240,7 @@ def main():
     banregio_header_pattern = None
     scotiabank_header_pattern = None
     konfio_start_pattern = None
+    clara_start_pattern = None
     detalle_found = False
     header_line_skipped = False
     if bank_config['name'] == 'Inbursa':
@@ -2228,6 +2264,9 @@ def main():
     elif bank_config['name'] == 'Konfio':
         # Pattern to detect the start of movements section: "Historial de movimientos del titular"
         konfio_start_pattern = re.compile(r'Historial\s+de\s+movimientos\s+del\s+titular', re.I)
+    elif bank_config['name'] == 'Clara':
+        # Pattern to detect the start of movements section: "Movimientos"
+        clara_start_pattern = re.compile(r'\bMovimientos\b', re.I)
     
     for p in pages_lines:
         if not movement_start_found:
@@ -2235,6 +2274,12 @@ def main():
                 # For Konfio, find the start pattern "Historial de movimientos del titular"
                 if konfio_start_pattern and not detalle_found:
                     if konfio_start_pattern.search(ln):
+                        detalle_found = True
+                        continue  # Skip the start pattern line itself
+                
+                # For Clara, find the start pattern "Movimientos"
+                if clara_start_pattern and not detalle_found:
+                    if clara_start_pattern.search(ln):
                         detalle_found = True
                         continue  # Skip the start pattern line itself
                 
@@ -2272,8 +2317,8 @@ def main():
                         detalle_found = True
                         continue  # Skip the header line
                 
-                # After finding header for Inbursa, or for Banorte, or for Banbajío, or for Banregio, or for Scotiabank, or for Konfio, or for other banks, look for date/header
-                if (inbursa_header_pattern and detalle_found and header_line_skipped) or (banorte_detalle_pattern and detalle_found) or (banbajio_header_pattern and detalle_found and header_line_skipped) or (banregio_header_pattern and detalle_found and header_line_skipped) or (scotiabank_header_pattern and detalle_found and header_line_skipped) or (konfio_start_pattern and detalle_found) or (not inbursa_header_pattern and not banorte_detalle_pattern and not banbajio_header_pattern and not banregio_header_pattern and not scotiabank_header_pattern and not konfio_start_pattern):
+                # After finding header for Inbursa, or for Banorte, or for Banbajío, or for Banregio, or for Scotiabank, or for Konfio, or for Clara, or for other banks, look for date/header
+                if (inbursa_header_pattern and detalle_found and header_line_skipped) or (banorte_detalle_pattern and detalle_found) or (banbajio_header_pattern and detalle_found and header_line_skipped) or (banregio_header_pattern and detalle_found and header_line_skipped) or (scotiabank_header_pattern and detalle_found and header_line_skipped) or (konfio_start_pattern and detalle_found) or (clara_start_pattern and detalle_found) or (not inbursa_header_pattern and not banorte_detalle_pattern and not banbajio_header_pattern and not banregio_header_pattern and not scotiabank_header_pattern and not konfio_start_pattern and not clara_start_pattern):
                     # For Inbursa, only look for dates (not headers, as we already skipped the header line)
                     if inbursa_header_pattern:
                         # For Inbursa, only start when we find a date (actual movement row) after the header
@@ -2329,6 +2374,15 @@ def main():
                             # collect from this line onward in this page
                             movements_lines.extend(p['lines'][i:])
                             break
+                    elif clara_start_pattern:
+                        # For Clara, start when we find a date (actual movement row) after the start pattern
+                        if day_re.search(ln):
+                            movement_start_found = True
+                            movement_start_page = p['page']
+                            movement_start_index = i
+                            # collect from this line onward in this page
+                            movements_lines.extend(p['lines'][i:])
+                            break
                     else:
                         # For other banks, look for date or header
                         if day_re.search(ln) or header_keywords_re.search(ln):
@@ -2353,6 +2407,10 @@ def main():
                 movements_lines.extend(filtered_lines)
             elif bank_config['name'] == 'Scotiabank' and scotiabank_header_pattern:
                 filtered_lines = [ln for ln in p['lines'] if not scotiabank_header_pattern.search(ln)]
+                movements_lines.extend(filtered_lines)
+            elif bank_config['name'] == 'Clara' and clara_start_pattern:
+                # For Clara, filter out "Movimientos" header line if it appears again on subsequent pages
+                filtered_lines = [ln for ln in p['lines'] if not clara_start_pattern.search(ln)]
                 movements_lines.extend(filtered_lines)
             else:
                 movements_lines.extend(p['lines'])
@@ -2397,6 +2455,10 @@ def main():
     elif bank_config['name'] == 'Konfio':
         # Konfio: "Subtotal" - indicates end of movements table
         movement_end_pattern = re.compile(r'^Subtotal\b', re.I)
+    elif bank_config['name'] == 'Clara':
+        # Clara: "Total" followed by 2 amounts - indicates end of movements table
+        # Pattern: "Total" followed by space and two amounts (numbers with optional commas and decimals)
+        movement_end_pattern = re.compile(r'\bTotal\b\s+[\d,\.]+\s+[\d,\.]+', re.I)
     
     extraction_stopped = False
     # For Banregio, initialize flag to track when we're in the commission zone
@@ -2460,6 +2522,12 @@ def main():
                 all_row_text = ' '.join([w.get('text', '') for w in row_words])
                 if scotiabank_header_pattern.search(all_row_text):
                     continue  # Skip the header line
+            
+            # For Clara, skip the "Movimientos" header line if it appears during coordinate-based extraction
+            if bank_config['name'] == 'Clara' and clara_start_pattern:
+                all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                if clara_start_pattern.search(all_row_text):
+                    continue  # Skip the header line
                 
             # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
             if bank_config['name'] == 'Banregio':
@@ -2467,7 +2535,7 @@ def main():
                 if re.search(r'^del\s+01\s+al', all_row_text, re.I):
                     continue  # Skip irrelevant information rows
 
-            # Check for end pattern (for Banamex, Santander, Banregio, Scotiabank, Konfio, etc.)
+            # Check for end pattern (for Banamex, Santander, Banregio, Scotiabank, Konfio, Clara, etc.)
             if movement_end_pattern:
                 all_text = ' '.join([w.get('text', '') for w in row_words])
                 match_found = False
@@ -2481,6 +2549,18 @@ def main():
                         re.compile(r'LAS.*?TASAS.*?DE.*?INTERES.*?ESTAN.*?EXPRESADAS.*?EN.*?TERMINOS.*?ANUALES.*?SIMPLES', re.I),
                     ]
                     for pattern in scotiabank_end_patterns:
+                        if pattern.search(all_text):
+                            match_found = True
+                            break
+                elif bank_config['name'] == 'Clara':
+                    # For Clara, check for "Total" followed by 2 amounts
+                    # Try multiple flexible patterns
+                    clara_end_patterns = [
+                        re.compile(r'\bTotal\b\s+MXN\s+[\d,\.]+\s+MXN\s+[\d,\.]+', re.I),  # "Total MXN ... MXN ..."
+                        re.compile(r'\bTotal\b\s+[\d,\.]+\s+[\d,\.]+', re.I),  # "Total" followed by two amounts
+                        re.compile(r'^Total\b\s+[\d,\.]+\s+[\d,\.]+', re.I),  # "Total" at start of line
+                    ]
+                    for pattern in clara_end_patterns:
                         if pattern.search(all_text):
                             match_found = True
                             break
@@ -2513,6 +2593,10 @@ def main():
                 # For Banregio, use match() instead of search() since we want to verify the entire string is the date
                 if bank_config['name'] == 'Banregio':
                     has_date = bool(date_pattern.match(fecha_val))
+                elif bank_config['name'] == 'Clara':
+                    # For Clara, check if fecha contains a valid date pattern (e.g., "01 ENE" or "01 E N E")
+                    clara_date_pattern = re.compile(r'\d{1,2}\s+[A-Z]{3}|\d{1,2}\s+[A-Z]\s+[A-Z]\s+[A-Z]', re.I)
+                    has_date = bool(clara_date_pattern.search(fecha_val))
                 else:
                     has_date = bool(date_pattern.search(fecha_val))
                 
