@@ -60,9 +60,17 @@ BANK_CONFIGS = {
             "fecha": (48, 102),             # Columna Fecha de Operación
             "descripcion": (120, 240),     # Columna Descripción
             "cargos": (340, 388),          # Columna Cargos
-            #"cargos": (340, 388),          # Columna Cargos
-            #"cargos en otra divisa": (420, 451),          # Columna Cargos
             "abonos": (510, 565),          # Columna Abonos
+        }
+    },
+
+    "Clara": {
+        "name": "Clara",
+        "columns": {
+            "fecha": (35, 60),             # Columna Fecha de Operación
+            "descripcion": (170, 270),     # Columna Descripción
+            "cargos": (450, 480),          # Columna Cargos
+            "abonos": (520, 576),          # Columna Abonos
         }
     },
 
@@ -2946,20 +2954,20 @@ def main():
                         # Only skip if in description range AND NOT in any numeric column range
                         if not in_desc_range or in_num_range:
                             existing = r.get(nearest, '').strip()
-                if existing:
-                    # If existing is a valid amount, preserve it
-                    if DEC_AMOUNT_RE.search(existing):
-                        # Existing is a valid amount, preserve it
-                        assigned = True
-                        break
-                    elif amt_text not in existing:
-                        r[nearest] = (existing + ' ' + amt_text).strip()
-                        assigned = True
-                        break
-                else:
-                    r[nearest] = amt_text
-                    assigned = True
-                    break
+                            if existing:
+                                # If existing is a valid amount, preserve it
+                                if DEC_AMOUNT_RE.search(existing):
+                                    # Existing is a valid amount, preserve it
+                                    assigned = True
+                                    break
+                                elif amt_text not in existing:
+                                    r[nearest] = (existing + ' ' + amt_text).strip()
+                                    assigned = True
+                                    break
+                            else:
+                                r[nearest] = amt_text
+                                assigned = True
+                                break
                 
                 # Only skip if amount is in description range AND NOT assigned to any numeric column
                 # This prevents amounts in cargos/abonos/saldo from being skipped
