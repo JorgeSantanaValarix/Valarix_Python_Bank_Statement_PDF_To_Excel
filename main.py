@@ -796,6 +796,34 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                             if amount > 0:
                                 #print(f"✅ Clara: Encontrado saldo al corte: ${amount:,.2f} en línea {i+1}: {line[:80]}")
                                 summary_data['saldo_final'] = amount
+                    
+                    # Total MXN [cargos] MXN [abonos] - el segundo monto es el total de abonos
+                    # Ejemplo: "Total MXN 3,115.30 MXN -3,305.40"
+                    if not summary_data['total_abonos']:
+                        # Pattern: "Total MXN [amount1] MXN [amount2]"
+                        # Try multiple flexible patterns to handle variations
+                        total_patterns = [
+                            r'Total\s+MXN\s+([\d,\.\-]+)\s+MXN\s+([\d,\.\-]+)',  # "Total MXN 3,115.30 MXN -3,305.40"
+                            r'Total\s+([\d,\.\-]+)\s+([\d,\.\-]+)',  # "Total 3,115.30 -3,305.40" (fallback)
+                        ]
+                        for pattern in total_patterns:
+                            match = re.search(pattern, line, re.I)
+                            if match:
+                                # First amount is cargos, second amount is abonos
+                                cargos_amount = normalize_amount_str(match.group(1))
+                                abonos_amount = normalize_amount_str(match.group(2))
+                                
+                                # Set total_cargos if not already set
+                                if not summary_data['total_cargos'] and cargos_amount != 0:
+                                    summary_data['total_cargos'] = abs(cargos_amount)  # Use absolute value
+                                    summary_data['total_retiros'] = abs(cargos_amount)
+                                
+                                # Set total_abonos (can be negative)
+                                if abonos_amount != 0:
+                                    summary_data['total_abonos'] = abonos_amount
+                                    summary_data['total_depositos'] = abonos_amount
+                                    #print(f"✅ Clara: Encontrado total abonos: ${abonos_amount:,.2f} en línea {i+1}: {line[:80]}")
+                                    break
             
             elif bank_name == "Konfio":
                 # Konfio:
