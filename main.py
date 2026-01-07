@@ -1105,9 +1105,14 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
     return totals
 
 
-def create_validation_sheet(pdf_summary: dict, extracted_totals: dict) -> pd.DataFrame:
+def create_validation_sheet(pdf_summary: dict, extracted_totals: dict, has_saldo_column: bool = True) -> pd.DataFrame:
     """
     Create a validation DataFrame comparing PDF summary with extracted totals.
+    
+    Args:
+        pdf_summary: Dictionary with summary data extracted from PDF
+        extracted_totals: Dictionary with totals calculated from extracted movements
+        has_saldo_column: Whether the bank has a "Saldo" column in Movements (default: True)
     """
     validation_data = []
     
@@ -1138,17 +1143,19 @@ def create_validation_sheet(pdf_summary: dict, extracted_totals: dict) -> pd.Dat
         'Estado': '✓' if cargos_match else '✗'
     })
     
-    # Compare Saldo Final
-    pdf_saldo = pdf_summary.get('saldo_final')
-    ext_saldo = extracted_totals.get('saldo_final', 0.0)
-    saldo_match = pdf_saldo is None or abs(pdf_saldo - ext_saldo) < tolerance
-    validation_data.append({
-        'Concepto': 'Saldo Final',
-        'Valor en PDF': f"${pdf_saldo:,.2f}" if pdf_saldo else "No encontrado",
-        'Valor Extraído': f"${ext_saldo:,.2f}",
-        'Diferencia': f"${abs(pdf_saldo - ext_saldo):,.2f}" if pdf_saldo else "N/A",
-        'Estado': '✓' if saldo_match else '✗'
-    })
+    # Compare Saldo Final - only if bank has Saldo column in Movements
+    saldo_match = True  # Initialize to True (will be set to actual value if has_saldo_column)
+    if has_saldo_column:
+        pdf_saldo = pdf_summary.get('saldo_final')
+        ext_saldo = extracted_totals.get('saldo_final', 0.0)
+        saldo_match = pdf_saldo is None or abs(pdf_saldo - ext_saldo) < tolerance
+        validation_data.append({
+            'Concepto': 'Saldo Final',
+            'Valor en PDF': f"${pdf_saldo:,.2f}" if pdf_saldo else "No encontrado",
+            'Valor Extraído': f"${ext_saldo:,.2f}",
+            'Diferencia': f"${abs(pdf_saldo - ext_saldo):,.2f}" if pdf_saldo else "N/A",
+            'Estado': '✓' if saldo_match else '✗'
+        })
     
     # Compare Total Movimientos
     pdf_mov = pdf_summary.get('total_movimientos')
@@ -3700,7 +3707,9 @@ def main():
     
     # Create validation sheet
     #print("📋 Creando pestaña de validación...")
-    df_validation = create_validation_sheet(pdf_summary, extracted_totals)
+    # Check if bank has Saldo column in Movements
+    has_saldo_column = 'Saldo' in df_mov.columns or 'saldo' in df_mov.columns
+    df_validation = create_validation_sheet(pdf_summary, extracted_totals, has_saldo_column=has_saldo_column)
     #print(f"✅ DataFrame de validación creado con {len(df_validation)} filas")
     #print(f"   Columnas: {list(df_validation.columns)}")
     
