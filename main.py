@@ -892,6 +892,42 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                                 #print(f"✅ Konfio: Encontrado saldo total al corte: ${amount:,.2f} en línea {i+1}: {line[:80]}")
                                 summary_data['saldo_final'] = amount
             
+            elif bank_name == "Base":
+                # Base:
+                # "Saldo al Corte $ 733,809.84" -> Saldo Final
+                # "Depósitos/Abonos ( + ) $ 356,742.33" -> Total Abonos
+                # "Retiros/Cargos ( - ) $ 102,609.46" -> Total Cargos
+                #print(f"🔍 Buscando patrones Base en {len(all_lines)} líneas...")
+                for i, line in enumerate(all_lines):
+                    # Saldo al Corte -> Saldo Final
+                    if not summary_data['saldo_final']:
+                        match = re.search(r'Saldo\s+al\s+Corte\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                #print(f"✅ Base: Encontrado saldo al corte: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['saldo_final'] = amount
+                    
+                    # Depósitos/Abonos -> Total Abonos
+                    if not summary_data['total_abonos']:
+                        match = re.search(r'Dep[oó]sitos\s*/\s*Abonos\s*\(\s*\+\s*\)\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                #print(f"✅ Base: Encontrado depósitos/abonos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['total_abonos'] = amount
+                                summary_data['total_depositos'] = amount
+                    
+                    # Retiros/Cargos -> Total Cargos
+                    if not summary_data['total_cargos']:
+                        match = re.search(r'Retiros\s*/\s*Cargos\s*\(\s*-\s*\)\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount > 0:
+                                #print(f"✅ Base: Encontrado retiros/cargos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['total_cargos'] = amount
+                                summary_data['total_retiros'] = amount
+            
             elif bank_name == "Scotiabank":
                 # Scotiabank:
                 # "Saldo inicial $1,031,652.97"
