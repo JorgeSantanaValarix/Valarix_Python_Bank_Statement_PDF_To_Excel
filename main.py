@@ -1785,6 +1785,7 @@ def is_transaction_row(row_data, bank_name=None):
     
     # Must have a date matching DD/MMM pattern
     # For Banregio: date is only 2 digits (01-31)
+    # For Base: date format is DD/MM/YYYY (e.g., "30/04/2024")
     # For other banks: supports both "DIA MES" (01 ABR) and "MES DIA" (ABR 01) formats
     # Pattern for dates: supports multiple formats including "DIA MES AÑO" (06 mar 2023)
     has_date = False
@@ -1793,10 +1794,14 @@ def is_transaction_row(row_data, bank_name=None):
         banregio_date_re = re.compile(r'^(0[1-9]|[12][0-9]|3[01])$')
         has_date = bool(banregio_date_re.match(fecha))
         print("Debug: has_date", has_date, banregio_date_re)
+    elif bank_name == 'Base':
+        # For Base, date format is DD/MM/YYYY (e.g., "30/04/2024")
+        base_date_re = re.compile(r'^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})$')
+        has_date = bool(base_date_re.match(fecha))
     else:
         # For other banks, use the general date pattern
         day_re = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:[\/\-\s]\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
-    has_date = bool(day_re.search(fecha))
+        has_date = bool(day_re.search(fecha))
     
     # Must have at least one numeric amount
     has_amount = bool(cargos or abonos or saldo)
@@ -1815,6 +1820,9 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
             # For Banregio, date is only 2 digits (01-31) at the start of the text
             # Pattern should match "04" or "04 TRA ..." but not "004" or "40"
             date_pattern = re.compile(r"^(0[1-9]|[12][0-9]|3[01])(?=\s|$)")
+        elif bank_name == 'Base':
+            # For Base, date format is DD/MM/YYYY (e.g., "30/04/2024")
+            date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b')
         else:
             date_pattern = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:[\/\-\s]\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
     
@@ -2338,6 +2346,9 @@ def main():
     # For Banregio, date is only 2 digits (01-31) at the start
     if bank_config['name'] == 'Banregio':
         date_pattern = re.compile(r"^(0[1-9]|[12][0-9]|3[01])(?=\s|$)")
+    elif bank_config['name'] == 'Base':
+        # For Base, date format is DD/MM/YYYY (e.g., "30/04/2024")
+        date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b')
     else:
         date_pattern = day_re
     movement_start_found = False
@@ -2356,6 +2367,7 @@ def main():
     scotiabank_header_pattern = None
     konfio_start_pattern = None
     clara_start_pattern = None
+    base_start_pattern = None
     detalle_found = False
     header_line_skipped = False
     if bank_config['name'] == 'Inbursa':
@@ -2382,6 +2394,9 @@ def main():
     elif bank_config['name'] == 'Clara':
         # Pattern to detect the start of movements section: "Movimientos"
         clara_start_pattern = re.compile(r'\bMovimientos\b', re.I)
+    elif bank_config['name'] == 'Base':
+        # Pattern to detect the start of movements section: "DETALLE DE OPERACIONES"
+        base_start_pattern = re.compile(r'DETALLE\s+DE\s+OPERACIONES', re.I)
     
     for p in pages_lines:
         if not movement_start_found:
@@ -2395,6 +2410,12 @@ def main():
                 # For Clara, find the start pattern "Movimientos"
                 if clara_start_pattern and not detalle_found:
                     if clara_start_pattern.search(ln):
+                        detalle_found = True
+                        continue  # Skip the start pattern line itself
+                
+                # For Base, find the start pattern "DETALLE DE OPERACIONES"
+                if base_start_pattern and not detalle_found:
+                    if base_start_pattern.search(ln):
                         detalle_found = True
                         continue  # Skip the start pattern line itself
                 
@@ -2433,7 +2454,7 @@ def main():
                         continue  # Skip the header line
                 
                 # After finding header for Inbursa, or for Banorte, or for Banbajío, or for Banregio, or for Scotiabank, or for Konfio, or for Clara, or for other banks, look for date/header
-                if (inbursa_header_pattern and detalle_found and header_line_skipped) or (banorte_detalle_pattern and detalle_found) or (banbajio_header_pattern and detalle_found and header_line_skipped) or (banregio_header_pattern and detalle_found and header_line_skipped) or (scotiabank_header_pattern and detalle_found and header_line_skipped) or (konfio_start_pattern and detalle_found) or (clara_start_pattern and detalle_found) or (not inbursa_header_pattern and not banorte_detalle_pattern and not banbajio_header_pattern and not banregio_header_pattern and not scotiabank_header_pattern and not konfio_start_pattern and not clara_start_pattern):
+                if (inbursa_header_pattern and detalle_found and header_line_skipped) or (banorte_detalle_pattern and detalle_found) or (banbajio_header_pattern and detalle_found and header_line_skipped) or (banregio_header_pattern and detalle_found and header_line_skipped) or (scotiabank_header_pattern and detalle_found and header_line_skipped) or (konfio_start_pattern and detalle_found) or (clara_start_pattern and detalle_found) or (base_start_pattern and detalle_found) or (not inbursa_header_pattern and not banorte_detalle_pattern and not banbajio_header_pattern and not banregio_header_pattern and not scotiabank_header_pattern and not konfio_start_pattern and not clara_start_pattern and not base_start_pattern):
                     # For Inbursa, only look for dates (not headers, as we already skipped the header line)
                     if inbursa_header_pattern:
                         # For Inbursa, only start when we find a date (actual movement row) after the header
@@ -2523,6 +2544,10 @@ def main():
             elif bank_config['name'] == 'Scotiabank' and scotiabank_header_pattern:
                 filtered_lines = [ln for ln in p['lines'] if not scotiabank_header_pattern.search(ln)]
                 movements_lines.extend(filtered_lines)
+            elif bank_config['name'] == 'Base' and base_start_pattern:
+                # Filter out the start pattern line
+                filtered_lines = [ln for ln in p['lines'] if not base_start_pattern.search(ln)]
+                movements_lines.extend(filtered_lines)
             elif bank_config['name'] == 'Clara' and clara_start_pattern:
                 # For Clara, filter out "Movimientos" header line if it appears again on subsequent pages
                 filtered_lines = [ln for ln in p['lines'] if not clara_start_pattern.search(ln)]
@@ -2574,6 +2599,9 @@ def main():
         # Clara: "Total" followed by 2 amounts - indicates end of movements table
         # Pattern: "Total" followed by space and two amounts (numbers with optional commas and decimals)
         movement_end_pattern = re.compile(r'\bTotal\b\s+[\d,\.]+\s+[\d,\.]+', re.I)
+    elif bank_config['name'] == 'Base':
+        # Base: "[SALDO INICIAL DE" - indicates end of movements table
+        movement_end_pattern = re.compile(r'\[SALDO\s+INICIAL\s+DE', re.I)
     
     extraction_stopped = False
     # For Banregio, initialize flag to track when we're in the commission zone
@@ -2637,6 +2665,12 @@ def main():
                 all_row_text = ' '.join([w.get('text', '') for w in row_words])
                 if scotiabank_header_pattern.search(all_row_text):
                     continue  # Skip the header line
+            
+            # For Base, skip the start pattern line if it appears during coordinate-based extraction
+            if bank_config['name'] == 'Base' and base_start_pattern:
+                all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                if base_start_pattern.search(all_row_text):
+                    continue  # Skip the start pattern line
             
             # For Clara, skip the "Movimientos" header line if it appears during coordinate-based extraction
             if bank_config['name'] == 'Clara' and clara_start_pattern:
@@ -3326,8 +3360,15 @@ def main():
         # If more than two, take first two
         return (found[0], found[1])
 
+    # Initialize dates variable to avoid UnboundLocalError
+    dates = None
+    
     # For Banregio, preserve the 'fecha' column as-is (it's already 2 digits)
     if bank_config['name'] == 'Banregio' and 'fecha' in df_mov.columns:
+        df_mov['Fecha'] = df_mov['fecha'].astype(str)
+        df_mov = df_mov.drop(columns=['fecha'])
+    elif bank_config['name'] == 'Base' and 'fecha' in df_mov.columns:
+        # For Base, preserve the date format DD/MM/YYYY as-is
         df_mov['Fecha'] = df_mov['fecha'].astype(str)
         df_mov = df_mov.drop(columns=['fecha'])
     elif bank_config['name'] == 'BBVA':
@@ -3364,17 +3405,20 @@ def main():
         else:
             dates = pd.Series([(None, None)] * len(df_mov))
 
-        df_mov['Fecha Oper'] = dates.apply(lambda t: t[0])
-    df_mov['Fecha Liq'] = dates.apply(lambda t: t[1])
+        if dates is not None:
+            df_mov['Fecha Oper'] = dates.apply(lambda t: t[0])
+            df_mov['Fecha Liq'] = dates.apply(lambda t: t[1])
 
-    # Remove original 'fecha' if present
+    # Remove original 'fecha' if present (only if not already removed)
     if 'fecha' in df_mov.columns:
         df_mov = df_mov.drop(columns=['fecha'])
     
     # For non-BBVA banks, use only 'Fecha' column (based on Fecha Oper) and remove Fecha Liq
-    if bank_config['name'] != 'BBVA':
-        df_mov['Fecha'] = df_mov['Fecha Oper']
-        df_mov = df_mov.drop(columns=['Fecha Oper', 'Fecha Liq'])
+    # Skip this for Banregio and Base as they already have 'Fecha' column set
+    if bank_config['name'] != 'BBVA' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base':
+        if 'Fecha Oper' in df_mov.columns:
+            df_mov['Fecha'] = df_mov['Fecha Oper']
+            df_mov = df_mov.drop(columns=['Fecha Oper', 'Fecha Liq'])
 
     # For BBVA, split 'saldo' column into 'OPERACIÓN' and 'LIQUIDACIÓN'
     if bank_config['name'] == 'BBVA' and 'saldo' in df_mov.columns:
