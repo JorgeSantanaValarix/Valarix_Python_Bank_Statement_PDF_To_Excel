@@ -117,6 +117,28 @@ BANK_CONFIGS = {
             "saldo": (425, 472),           # Columna Saldo (ampliado ligeramente)
         }
     },
+
+    "HSBC": {
+        "name": "HSBC",
+        "columns": {
+            "fecha": (17, 45),             # Columna Fecha de Operación
+            "descripcion": (55, 260),      # Columna Descripción (ampliado para capturar mejor)
+            "cargos": (275, 316),          # Columna Cargos (ampliado ligeramente)
+            "abonos": (345, 395),          # Columna Abonos (ampliado ligeramente)
+            "saldo": (425, 472),           # Columna Saldo (ampliado ligeramente)
+        }
+    },
+    "Base": {
+        "name": "Base",
+        "columns": {
+            "fecha": (41, 78),             # Columna Fecha de Operación
+            "descripcion": (108, 342),      # Columna Descripción (ampliado para capturar mejor)
+            "cargos": (375, 415),          # Columna Cargos (ampliado ligeramente)
+            "abonos": (440, 485),          # Columna Abonos (ampliado ligeramente)
+            "saldo": (520, 560),           # Columna Saldo (ampliado ligeramente)
+        }
+    },
+
     # Add more banks here as needed
 }
 
@@ -176,6 +198,15 @@ BANK_KEYWORDS = {
         r"\bHEY\s+BANCO\b",
         r"\bHEY\b",
     ],
+    "HSBC": [
+        r"\bHSBC\s+BANCO\b",
+        r"\bHSBC\s+M[EE]XICO\b",
+    ],
+    "Base": [
+        r"\bBASE\b",
+        r"\bBANCO\s+BASE\b",
+    ],
+
 }
 
 # Decimal / thousands amount regex (module-level so helpers can use it)
