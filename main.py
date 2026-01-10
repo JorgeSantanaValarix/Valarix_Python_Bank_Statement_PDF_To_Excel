@@ -1138,13 +1138,22 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
         'total_movimientos': len(df_mov)
     }
     
+    # For Base, exclude "PAGO DE INTERES" from totals calculation
+    # because it's not included in the summary totals on the PDF cover page
+    df_for_totals = df_mov.copy()
+    if bank_name == 'Base' and 'Descripción' in df_for_totals.columns:
+        # Filter out rows where description contains "PAGO DE INTERES"
+        df_for_totals = df_for_totals[
+            ~df_for_totals['Descripción'].astype(str).str.contains('PAGO DE INTERES', case=False, na=False)
+        ]
+    
     # Calculate based on available columns
-    if 'Abonos' in df_mov.columns:
-        totals['total_abonos'] = df_mov['Abonos'].apply(normalize_amount_str).sum()
+    if 'Abonos' in df_for_totals.columns:
+        totals['total_abonos'] = df_for_totals['Abonos'].apply(normalize_amount_str).sum()
         totals['total_depositos'] = totals['total_abonos']
     
-    if 'Cargos' in df_mov.columns:
-        totals['total_cargos'] = df_mov['Cargos'].apply(normalize_amount_str).sum()
+    if 'Cargos' in df_for_totals.columns:
+        totals['total_cargos'] = df_for_totals['Cargos'].apply(normalize_amount_str).sum()
         totals['total_retiros'] = totals['total_cargos']
     
     # Get final balance (last row's saldo if available)
