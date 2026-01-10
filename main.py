@@ -237,11 +237,35 @@ def normalize_amount_str(amount_str):
         return 0.0
 
 
+def fix_duplicated_chars(text_str):
+    """Fix duplicated characters in text (e.g., 'PPaaggoo' -> 'Pagos').
+    This happens with some PDF encodings where each character is duplicated.
+    """
+    if not text_str:
+        return text_str
+    result = []
+    i = 0
+    while i < len(text_str):
+        # Check if current char and next char are the same (case-insensitive)
+        if i + 1 < len(text_str) and text_str[i].lower() == text_str[i + 1].lower():
+            # Add only one character
+            result.append(text_str[i])
+            i += 2  # Skip both characters
+        else:
+            result.append(text_str[i])
+            i += 1
+    return ''.join(result)
+
+
 def find_column_coordinates(pdf_path: str, page_number: int = 1):
     """Extract all words from a page and show their coordinates.
     Helps user find exact X ranges for columns.
     """
     try:
+        # Detect bank to apply Konfio-specific fixes
+        detected_bank = detect_bank_from_pdf(pdf_path)
+        is_konfio = (detected_bank == "Konfio")
+        
         with pdfplumber.open(pdf_path) as pdf:
             if page_number > len(pdf.pages):
                 # print(f"❌ El PDF solo tiene {len(pdf.pages)} páginas")
@@ -253,6 +277,12 @@ def find_column_coordinates(pdf_path: str, page_number: int = 1):
             if not words:
                 # print("❌ No se encontraron palabras en la página")
                 return
+            
+            # For Konfio, fix duplicated characters in word texts
+            if is_konfio:
+                for word in words:
+                    if 'text' in word and word['text']:
+                        word['text'] = fix_duplicated_chars(word['text'])
             
             # Group by approximate Y coordinate (rows)
             rows = {}
@@ -385,8 +415,21 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
             all_text = ""
             all_lines = []
             
+            # For Konfio, read only page 2 (index 1) for summary information
+            if bank_name == "Konfio":
+                if len(pdf.pages) >= 2:
+                    page = pdf.pages[1]  # Page 2 (0-indexed)
+                    text = page.extract_text()
+                    if text:
+                        # Fix duplicated characters issue (e.g., "PPaaggoo" -> "Pagos")
+                        # This happens with some PDF encodings where each character is duplicated
+                        text = fix_duplicated_chars(text)
+                        all_text = text + "\n"
+                        all_lines = text.split('\n')
+                else:
+                    all_lines = []  # Not enough pages
             # For Banregio, collect text from all pages to find "Total" line
-            if bank_name == "Banregio":
+            elif bank_name == "Banregio":
                 for page_num in range(len(pdf.pages)):
                     page = pdf.pages[page_num]
                     text = page.extract_text()
@@ -857,21 +900,34 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                                     break
             
             elif bank_name == "Konfio":
-                # Konfio:
-                # "Saldo anterior $ 317,215.14"
-                # "Pagos - $ 97,000.00"
-                # "Compras y cargos $ 56,176.79"
-                # "Saldo total al corte $ 312,227.05"
-                #print(f"🔍 Buscando patrones Konfio en {len(all_lines)} líneas...")
+                # Konfio: Extract from page 2
+                # "Pagos - $ 97,000.00" -> part of Total Abonos (positive)
+                # "Devoluciones y ajustes - $ -115.66" -> part of Total Abonos (convert to positive)
+                # "Compras y cargos $ 56,176.79" -> Total Cargos
+                # "Saldo total al corte $ 312,227.05" -> Saldo Final
+                print(f"🔍 Konfio: Buscando patrones en página 2, {len(all_lines)} líneas encontradas")
+                if len(all_lines) > 0:
+                    print(f"   Primera línea: {all_lines[0][:100]}")
+                    print(f"   Última línea: {all_lines[-1][:100]}")
+                pagos_amount = None
+                devoluciones_amount = None
+                
                 for i, line in enumerate(all_lines):
-                    # Saldo anterior
-                    if not summary_data['saldo_anterior']:
-                        match = re.search(r'Saldo\s+anterior\s+\$\s*([\d,\.]+)', line, re.I)
+                    # Pagos (positive value)
+                    if pagos_amount is None:
+                        match = re.search(r'Pagos\s*-\s*\$\s*([\d,\.]+)', line, re.I)
                         if match:
-                            amount = normalize_amount_str(match.group(1))
-                            if amount > 0:
-                                #print(f"✅ Konfio: Encontrado saldo anterior: ${amount:,.2f} en línea {i+1}: {line[:80]}")
-                                summary_data['saldo_anterior'] = amount
+                            pagos_amount = normalize_amount_str(match.group(1))
+                            print(f"✅ Konfio: Encontrado Pagos: ${pagos_amount:,.2f} en línea {i+1}: {line[:100]}")
+                    
+                    # Devoluciones y ajustes (negative value, convert to positive)
+                    if devoluciones_amount is None:
+                        match = re.search(r'Devoluciones\s+y\s+ajustes\s*-\s*\$\s*-?\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            devoluciones_amount = normalize_amount_str(match.group(1))
+                            # Convert to positive (take absolute value)
+                            devoluciones_amount = abs(devoluciones_amount)
+                            print(f"✅ Konfio: Encontrado Devoluciones y ajustes: ${devoluciones_amount:,.2f} en línea {i+1}: {line[:100]}")
                     
                     # Compras y cargos
                     if not summary_data['total_cargos']:
@@ -879,7 +935,7 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                         if match:
                             amount = normalize_amount_str(match.group(1))
                             if amount > 0:
-                                #print(f"✅ Konfio: Encontrado cargos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                print(f"✅ Konfio: Encontrado cargos: ${amount:,.2f} en línea {i+1}: {line[:100]}")
                                 summary_data['total_cargos'] = amount
                                 summary_data['total_retiros'] = amount
                     
@@ -889,8 +945,27 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                         if match:
                             amount = normalize_amount_str(match.group(1))
                             if amount > 0:
-                                #print(f"✅ Konfio: Encontrado saldo total al corte: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                print(f"✅ Konfio: Encontrado saldo total al corte: ${amount:,.2f} en línea {i+1}: {line[:100]}")
                                 summary_data['saldo_final'] = amount
+                
+                # Calculate Total Abonos = Pagos + Devoluciones (both as positive)
+                if pagos_amount is not None and devoluciones_amount is not None:
+                    total_abonos = pagos_amount + devoluciones_amount
+                    summary_data['total_abonos'] = total_abonos
+                    summary_data['total_depositos'] = total_abonos
+                    print(f"✅ Konfio: Total Abonos calculado: ${total_abonos:,.2f} (Pagos: ${pagos_amount:,.2f} + Devoluciones: ${devoluciones_amount:,.2f})")
+                elif pagos_amount is not None:
+                    # Only Pagos found
+                    summary_data['total_abonos'] = pagos_amount
+                    summary_data['total_depositos'] = pagos_amount
+                    print(f"✅ Konfio: Total Abonos (solo Pagos): ${pagos_amount:,.2f}")
+                elif devoluciones_amount is not None:
+                    # Only Devoluciones found
+                    summary_data['total_abonos'] = devoluciones_amount
+                    summary_data['total_depositos'] = devoluciones_amount
+                    print(f"✅ Konfio: Total Abonos (solo Devoluciones): ${devoluciones_amount:,.2f}")
+                else:
+                    print(f"⚠️ Konfio: No se encontraron Pagos ni Devoluciones")
             
             elif bank_name == "Base":
                 # Base:
@@ -1703,6 +1778,10 @@ def extract_text_from_pdf(pdf_path: str) -> list:
     Returns a list of dictionaries (page_number, text, words).
     """
     extracted_data = []
+    
+    # Detect bank to apply Konfio-specific fixes
+    detected_bank = detect_bank_from_pdf(pdf_path)
+    is_konfio = (detected_bank == "Konfio")
 
     with pdfplumber.open(pdf_path) as pdf:
         for page_number, page in enumerate(pdf.pages, start=1):
@@ -1712,6 +1791,16 @@ def extract_text_from_pdf(pdf_path: str) -> list:
                 words = page.extract_words(x_tolerance=3, y_tolerance=3)
             except Exception:
                 words = []
+            
+            # For Konfio, fix duplicated characters in text and words
+            if is_konfio:
+                if text:
+                    text = fix_duplicated_chars(text)
+                # Fix duplicated characters in word texts
+                for word in words:
+                    if 'text' in word and word['text']:
+                        word['text'] = fix_duplicated_chars(word['text'])
+            
             extracted_data.append({
                 "page": page_number,
                 "content": text if text else "",
