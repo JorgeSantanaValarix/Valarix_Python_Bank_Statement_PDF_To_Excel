@@ -3544,6 +3544,10 @@ def main():
         # For Base, preserve the date format DD/MM/YYYY as-is
         df_mov['Fecha'] = df_mov['fecha'].astype(str)
         df_mov = df_mov.drop(columns=['fecha'])
+    elif bank_config['name'] == 'Banbajío' and 'fecha' in df_mov.columns:
+        # For BanBajío, preserve the date format "DIA MES" (e.g., "3 ENE") as-is
+        df_mov['Fecha'] = df_mov['fecha'].astype(str)
+        df_mov = df_mov.drop(columns=['fecha'])
     elif bank_config['name'] == 'BBVA':
         # For BBVA, extract dates from separate 'fecha' and 'liq' columns
         fecha_oper_dates = None
@@ -3587,8 +3591,8 @@ def main():
         df_mov = df_mov.drop(columns=['fecha'])
     
     # For non-BBVA banks, use only 'Fecha' column (based on Fecha Oper) and remove Fecha Liq
-    # Skip this for Banregio and Base as they already have 'Fecha' column set
-    if bank_config['name'] != 'BBVA' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base':
+    # Skip this for Banregio, Base, and BanBajío as they already have 'Fecha' column set
+    if bank_config['name'] != 'BBVA' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base' and bank_config['name'] != 'Banbajío':
         if 'Fecha Oper' in df_mov.columns:
             df_mov['Fecha'] = df_mov['Fecha Oper']
             df_mov = df_mov.drop(columns=['Fecha Oper', 'Fecha Liq'])
