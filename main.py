@@ -2394,6 +2394,9 @@ def main():
     elif bank_config['name'] == 'Base':
         # For Base, date format is DD/MM/YYYY (e.g., "30/04/2024")
         date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b')
+    elif bank_config['name'] == 'Banbajío':
+        # For BanBajío, date format is "DIA MES" (e.g., "3 ENE") without year
+        date_pattern = re.compile(r'\b(0?[1-9]|[12][0-9]|3[01])\s+[A-Z]{3}\b', re.I)
     else:
         date_pattern = day_re
     movement_start_found = False
@@ -2407,6 +2410,7 @@ def main():
     # For Banregio, movements start after the header line "DIA CONCEPTO CARGOS ABONOS SALDO"
     inbursa_header_pattern = None
     banorte_detalle_pattern = None
+    banbajio_start_pattern = None
     banbajio_header_pattern = None
     banregio_header_pattern = None
     scotiabank_header_pattern = None
@@ -2422,6 +2426,8 @@ def main():
     elif bank_config['name'] == 'Banorte':
         banorte_detalle_pattern = re.compile(r'DETALLE\s+DE\s+MOVIMIENTOS\s*\(PESOS\)', re.I)
     elif bank_config['name'] == 'Banbajío':
+        # Pattern to detect the start of movements section: "DETALLE DE LA CUENTA: CUENTA"
+        banbajio_start_pattern = re.compile(r'DETALLE\s+DE\s+LA\s+CUENTA\s*:\s*CUENTA', re.I)
         # Pattern to detect the header line: "FECHA NO. REF. / DOCTO DESCRIPCION DE LA OPERACION DEPOSITOS RETIROS SALDO"
         # Make it flexible to handle variations in spacing and line breaks
         banbajio_header_pattern = re.compile(r'FECHA.*?NO\.?\s*REF\.?.*?DOCTO.*?DESCRIPCION.*?OPERACION.*?DEPOSITOS.*?RETIROS.*?SALDO', re.I)
@@ -2477,11 +2483,29 @@ def main():
                         detalle_found = True
                         continue  # Skip the "DETALLE DE MOVIMIENTOS (PESOS)" line itself
                 
+                # For Banbajío, find the start pattern "DETALLE DE LA CUENTA: CUENTA"
+                if banbajio_start_pattern and not detalle_found:
+                    if banbajio_start_pattern.search(ln):
+                        detalle_found = True
+                        print(f"✅ BanBajío: Encontrado 'DETALLE DE LA CUENTA: CUENTA' en página {p['page']}, línea {i+1}: {ln[:100]}")
+                        continue  # Continue to next iteration to find the first date or header
+                
                 # For Banbajío, find the header line "FECHA NO. REF. / DOCTO DESCRIPCION DE LA OPERACION DEPOSITOS RETIROS SALDO"
-                if banbajio_header_pattern and not header_line_skipped:
+                # This should come right after "DETALLE DE LA CUENTA: CUENTA"
+                if banbajio_header_pattern and detalle_found and not header_line_skipped:
                     if banbajio_header_pattern.search(ln):
                         header_line_skipped = True
-                        detalle_found = True
+                        print(f"✅ BanBajío: Header encontrado en página {p['page']}, línea {i+1}: {ln[:100]}")
+                        # After header, start extraction from next line (could be "SALDO INICIAL" or first movement)
+                        if i + 1 < len(p['lines']):
+                            movement_start_found = True
+                            movement_start_page = p['page']
+                            movement_start_index = i + 1  # Start from line after header
+                            next_line = p['lines'][i + 1] if i + 1 < len(p['lines']) else ""
+                            print(f"✅ BanBajío: Inicio de extracción detectado en página {p['page']}, línea {i+2}: {next_line[:100]}")
+                            # collect from line after header onward in this page
+                            movements_lines.extend(p['lines'][i+1:])
+                            break
                         continue  # Skip the header line
                 
                 # For Banregio, find the header line "DIA CONCEPTO CARGOS ABONOS SALDO"
@@ -2499,7 +2523,7 @@ def main():
                         continue  # Skip the header line
                 
                 # After finding header for Inbursa, or for Banorte, or for Banbajío, or for Banregio, or for Scotiabank, or for Konfio, or for Clara, or for other banks, look for date/header
-                if (inbursa_header_pattern and detalle_found and header_line_skipped) or (banorte_detalle_pattern and detalle_found) or (banbajio_header_pattern and detalle_found and header_line_skipped) or (banregio_header_pattern and detalle_found and header_line_skipped) or (scotiabank_header_pattern and detalle_found and header_line_skipped) or (konfio_start_pattern and detalle_found) or (clara_start_pattern and detalle_found) or (base_start_pattern and detalle_found) or (not inbursa_header_pattern and not banorte_detalle_pattern and not banbajio_header_pattern and not banregio_header_pattern and not scotiabank_header_pattern and not konfio_start_pattern and not clara_start_pattern and not base_start_pattern):
+                if (inbursa_header_pattern and detalle_found and header_line_skipped) or (banorte_detalle_pattern and detalle_found) or (banbajio_start_pattern and detalle_found) or (banbajio_header_pattern and detalle_found and header_line_skipped) or (banregio_header_pattern and detalle_found and header_line_skipped) or (scotiabank_header_pattern and detalle_found and header_line_skipped) or (konfio_start_pattern and detalle_found) or (clara_start_pattern and detalle_found) or (base_start_pattern and detalle_found) or (not inbursa_header_pattern and not banorte_detalle_pattern and not banbajio_start_pattern and not banbajio_header_pattern and not banregio_header_pattern and not scotiabank_header_pattern and not konfio_start_pattern and not clara_start_pattern and not base_start_pattern):
                     # For Inbursa, only look for dates (not headers, as we already skipped the header line)
                     if inbursa_header_pattern:
                         # For Inbursa, only start when we find a date (actual movement row) after the header
@@ -2519,12 +2543,26 @@ def main():
                             # collect from this line onward in this page
                             movements_lines.extend(p['lines'][i:])
                             break
-                    elif banbajio_header_pattern:
-                        # For Banbajío, start when we find a date (actual movement row) after the header
-                        if day_re.search(ln):
+                    elif banbajio_start_pattern:
+                        # For Banbajío, after finding "DETALLE DE LA CUENTA: CUENTA", we should have already found the header
+                        # If we reach here, it means we're looking for the first movement row
+                        # Accept either a date or "SALDO INICIAL" as valid start
+                        if day_re.search(ln) or re.search(r'SALDO\s+INICIAL', ln, re.I):
                             movement_start_found = True
                             movement_start_page = p['page']
                             movement_start_index = i
+                            print(f"✅ BanBajío: Inicio de extracción detectado en página {p['page']}, línea {i+1}: {ln[:100]}")
+                            # collect from this line onward in this page
+                            movements_lines.extend(p['lines'][i:])
+                            break
+                    elif banbajio_header_pattern:
+                        # This should not happen if logic is correct, but keep as fallback
+                        # For Banbajío, start when we find a date or "SALDO INICIAL" (actual movement row) after the header
+                        if day_re.search(ln) or re.search(r'SALDO\s+INICIAL', ln, re.I):
+                            movement_start_found = True
+                            movement_start_page = p['page']
+                            movement_start_index = i
+                            print(f"✅ BanBajío: Inicio de extracción detectado en página {p['page']}, línea {i+1}: {ln[:100]}")
                             # collect from this line onward in this page
                             movements_lines.extend(p['lines'][i:])
                             break
@@ -2647,10 +2685,15 @@ def main():
     elif bank_config['name'] == 'Base':
         # Base: "[SALDO INICIAL DE" - indicates end of movements table
         movement_end_pattern = re.compile(r'\[SALDO\s+INICIAL\s+DE', re.I)
+    elif bank_config['name'] == 'Banbajío':
+        # Banbajío: "SALDO TOTAL*" - indicates end of movements table
+        movement_end_pattern = re.compile(r'SALDO\s+TOTAL\*?', re.I)
     
     extraction_stopped = False
     # For Banregio, initialize flag to track when we're in the commission zone
     in_comision_zone = False
+    # For BanBajío, track detected rows for debugging
+    banbajio_detected_rows = 0
     for page_data in extracted_data:
         if extraction_stopped:
             break
@@ -2685,7 +2728,7 @@ def main():
             
             word_rows = split_rows
         
-        for row_words in word_rows:
+        for row_idx, row_words in enumerate(word_rows):
             if not row_words or extraction_stopped:
                 continue
 
@@ -2759,9 +2802,11 @@ def main():
                             match_found = True
                             break
                 else:
-                    # For other banks (Banregio, Banamex, Santander, Banorte, Konfio), use the standard pattern
+                    # For other banks (Banregio, Banamex, Santander, Banorte, Konfio, Banbajío), use the standard pattern
                     if movement_end_pattern.search(all_text):
                         match_found = True
+                        if bank_config['name'] == 'Banbajío':
+                            print(f"🛑 BanBajío: Fin de extracción detectado en página {page_num}, fila {row_idx+1}: {all_row_text[:100]}")
                 
                 if match_found:
                     #print(f"🛑 Fin de tabla de movimientos detectado en página {page_num}")
@@ -2771,6 +2816,17 @@ def main():
             # Extract structured row using coordinates
             # Pass bank_name and date_pattern to enable date/description separation
             row_data = extract_movement_row(row_words, columns_config, bank_config['name'], date_pattern)
+
+            # For BanBajío, debug: print all processed rows to see what's being filtered (only first 5 pages)
+            if bank_config['name'] == 'Banbajío' and movement_start_found and page_num <= 4:
+                all_row_text_debug = ' '.join([w.get('text', '') for w in row_words])
+                fecha_val_debug = str(row_data.get('fecha') or '').strip()
+                desc_val_debug = str(row_data.get('descripcion') or '').strip()
+                cargos_val_debug = str(row_data.get('cargos') or '').strip()
+                abonos_val_debug = str(row_data.get('abonos') or '').strip()
+                saldo_val_debug = str(row_data.get('saldo') or '').strip()
+                print(f"🔍 BanBajío: Procesando fila en página {page_num}, fila {row_idx+1} - Fecha: '{fecha_val_debug}', Desc: '{desc_val_debug[:60]}', Cargos: '{cargos_val_debug}', Abonos: '{abonos_val_debug}', Saldo: '{saldo_val_debug}'")
+                print(f"   📝 Texto completo de la fila: {all_row_text_debug[:150]}")
 
             # Determine if this row starts a new movement (contains a date)
             # If columns_config is empty, check all words for dates
@@ -2793,6 +2849,11 @@ def main():
                     has_date = bool(clara_date_pattern.search(fecha_val))
                 else:
                     has_date = bool(date_pattern.search(fecha_val))
+                    # For BanBajío, debug: print date detection results (only first 5 pages)
+                    if bank_config['name'] == 'Banbajío' and page_num <= 4:
+                        date_match_result = date_pattern.search(fecha_val)
+                        match_text = date_match_result.group() if date_match_result else 'None'
+                        print(f"   🔍 Detección de fecha - Valor en columna fecha: '{fecha_val}', has_date: {has_date}, match: '{match_text}'")
                 
                 # Check if row has valid data (date, description, or amounts)
                 has_valid_data = has_date
@@ -2802,6 +2863,13 @@ def main():
                     has_amounts = len(row_data.get('_amounts', [])) > 0
                     has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
                     has_valid_data = bool(desc_val or has_amounts or has_cargos_abonos)
+                
+                # For BanBajío, also accept rows with "SALDO INICIAL" even if they don't have a date
+                if bank_config['name'] == 'Banbajío' and not has_date:
+                    desc_val = str(row_data.get('descripcion') or '').strip()
+                    if re.search(r'SALDO\s+INICIAL', desc_val, re.I):
+                        has_date = True  # Treat "SALDO INICIAL" as a valid row even without date
+                        has_valid_data = True
 
             if has_date:
                 # Only add rows that have date AND (description OR amounts)
@@ -2810,6 +2878,11 @@ def main():
                 has_amounts = len(row_data.get('_amounts', [])) > 0
                 has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
                 has_description_or_amounts = bool(desc_val or has_amounts or has_cargos_abonos)
+                
+                # For BanBajío, debug: print why rows are being skipped (only first 5 pages)
+                if bank_config['name'] == 'Banbajío' and not has_description_or_amounts and page_num <= 4:
+                    fecha_val = str(row_data.get('fecha') or '').strip()
+                    print(f"⚠️ BanBajío: Fila rechazada (sin descripción ni montos) en página {page_num}, fila {row_idx+1} - Fecha: '{fecha_val}', Desc: '{desc_val[:60]}', Montos: {has_amounts}, Cargos/Abonos: {has_cargos_abonos}")
                 
                 if has_description_or_amounts:
                     # For Banregio, only include rows where description starts with "TRA" or "DOC"
@@ -2820,6 +2893,48 @@ def main():
                             continue
                     #row_data['page'] = page_num
                     movement_rows.append(row_data)
+                    # For BanBajío, track detected rows and print first and second rows that will be exported to Excel
+                    if bank_config['name'] == 'Banbajío':
+                        banbajio_detected_rows += 1
+                        if banbajio_detected_rows == 2:
+                            all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                            print(f"✅ BanBajío: Segunda fila detectada (válida) en página {page_num}, fila {row_idx+1}: {all_row_text[:150]}")
+                        if len(movement_rows) == 1:
+                            fecha_val = str(row_data.get('fecha') or '').strip()
+                            desc_val = str(row_data.get('descripcion') or '').strip()
+                            cargos_val = str(row_data.get('cargos') or '').strip()
+                            abonos_val = str(row_data.get('abonos') or '').strip()
+                            saldo_val = str(row_data.get('saldo') or '').strip()
+                            print(f"📊 BanBajío: Primera fila que se exportará al Excel - Fecha: '{fecha_val}', Desc: '{desc_val[:80]}', Cargos: '{cargos_val}', Abonos: '{abonos_val}', Saldo: '{saldo_val}'")
+                        elif len(movement_rows) == 2:
+                            fecha_val = str(row_data.get('fecha') or '').strip()
+                            desc_val = str(row_data.get('descripcion') or '').strip()
+                            cargos_val = str(row_data.get('cargos') or '').strip()
+                            abonos_val = str(row_data.get('abonos') or '').strip()
+                            saldo_val = str(row_data.get('saldo') or '').strip()
+                            print(f"📊 BanBajío: Segunda fila que se exportará al Excel - Fecha: '{fecha_val}', Desc: '{desc_val[:80]}', Cargos: '{cargos_val}', Abonos: '{abonos_val}', Saldo: '{saldo_val}'")
+            elif has_valid_data and bank_config['name'] == 'Banbajío':
+                # For BanBajío, also add rows without date if they contain "SALDO INICIAL"
+                desc_val = str(row_data.get('descripcion') or '').strip()
+                if re.search(r'SALDO\s+INICIAL', desc_val, re.I):
+                    has_amounts = len(row_data.get('_amounts', [])) > 0
+                    has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
+                    if has_amounts or has_cargos_abonos:
+                        #row_data['page'] = page_num
+                        movement_rows.append(row_data)
+                        # For BanBajío, track detected rows and print first row that will be exported to Excel (SALDO INICIAL)
+                        if bank_config['name'] == 'Banbajío':
+                            banbajio_detected_rows += 1
+                            if banbajio_detected_rows == 2:
+                                all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                                print(f"✅ BanBajío: Segunda fila detectada (válida) en página {page_num}, fila {row_idx+1}: {all_row_text[:150]}")
+                        if len(movement_rows) == 1:
+                            fecha_val = str(row_data.get('fecha') or '').strip()
+                            desc_val = str(row_data.get('descripcion') or '').strip()
+                            cargos_val = str(row_data.get('cargos') or '').strip()
+                            abonos_val = str(row_data.get('abonos') or '').strip()
+                            saldo_val = str(row_data.get('saldo') or '').strip()
+                            print(f"📊 BanBajío: Primera fila que se exportará al Excel - Fecha: '{fecha_val}', Desc: '{desc_val[:80]}', Cargos: '{cargos_val}', Abonos: '{abonos_val}', Saldo: '{saldo_val}'")
                     
                     # For Banregio, check if this is a monthly commission (last movement) - stop extraction
                     if bank_config['name'] == 'Banregio':
@@ -2840,6 +2955,19 @@ def main():
                 # If row has date but no description/amounts, skip it (incomplete row)
                 elif has_valid_data:
                     # Row has valid data but no date - treat as continuation or standalone row
+                    # For BanBajío, filter out informational rows like "1 DE ENERO AL 31 DE ENERO DE 2024 PERIODO:"
+                    if bank_config['name'] == 'Banbajío':
+                        all_row_text_check = ' '.join([w.get('text', '') for w in row_words])
+                        all_row_text_check = all_row_text_check.strip()
+                        # Check if row contains period information (e.g., "1 DE ENERO AL 31 DE ENERO DE 2024 PERIODO:")
+                        if re.search(r'\bPERIODO\s*:?\s*$', all_row_text_check, re.I) or re.search(r'\d+\s+DE\s+[A-Z]+\s+AL\s+\d+\s+DE\s+[A-Z]+', all_row_text_check, re.I):
+                            # Skip this row - it's period information, not a movement
+                            if page_num <= 4:
+                                print(f"⏭️ BanBajío: Fila filtrada (información de período) en página {page_num}, fila {row_idx+1}: {all_row_text_check[:100]}")
+                            continue
+                        # For BanBajío, debug: print rows without date that are being processed as continuation (only first 5 pages)
+                        if not movement_rows and page_num <= 4:
+                            print(f"⚠️ BanBajío: Fila sin fecha y sin movimiento previo en página {page_num}, fila {row_idx+1}: {all_row_text_check[:100]}")
                     # For Banregio, if we're in commission zone, check for irrelevant rows and stop extraction
                     if bank_config['name'] == 'Banregio' and in_comision_zone:
                             # Collect all text from the row to check for irrelevant content
@@ -2936,34 +3064,34 @@ def main():
                                                 else:
                                                     prev[nearest] = amt_text
                         
-                    # Also merge amounts list for later processing
-                    prev_amounts = prev.get('_amounts', [])
-                    prev['_amounts'] = prev_amounts + cont_amounts
-                    
-                    # Collect possible text pieces from this row (prefer descripcion, then liq, then any other text)
-                    cont_parts = []
-                    for k in ('descripcion', 'fecha'):
-                        v = row_data.get(k)
-                        if v:
-                            cont_parts.append(str(v))
-                    # Also capture any stray text in other columns
-                    for k, v in row_data.items():
-                        if k in ('descripcion', 'fecha', 'cargos', 'abonos', 'saldo', 'page', '_amounts'):
-                            continue
-                        if v:
-                            cont_parts.append(str(v))
+                        # Also merge amounts list for later processing
+                        prev_amounts = prev.get('_amounts', [])
+                        prev['_amounts'] = prev_amounts + cont_amounts
+                        
+                        # Collect possible text pieces from this row (prefer descripcion, then liq, then any other text)
+                        cont_parts = []
+                        for k in ('descripcion', 'fecha'):
+                            v = row_data.get(k)
+                            if v:
+                                cont_parts.append(str(v))
+                        # Also capture any stray text in other columns
+                        for k, v in row_data.items():
+                            if k in ('descripcion', 'fecha', 'cargos', 'abonos', 'saldo', 'page', '_amounts'):
+                                continue
+                            if v:
+                                cont_parts.append(str(v))
 
-                    cont_text = ' '.join(cont_parts)
-                    # Remove decimal amounts (they belong to cargos/abonos/saldo)
-                    cont_text = dec_amount_re.sub('', cont_text)
-                    cont_text = ' '.join(cont_text.split()).strip()
+                        cont_text = ' '.join(cont_parts)
+                        # Remove decimal amounts (they belong to cargos/abonos/saldo)
+                        cont_text = dec_amount_re.sub('', cont_text)
+                        cont_text = ' '.join(cont_text.split()).strip()
 
-                    if cont_text:
-                        # append to previous 'descripcion' field
-                        if prev.get('descripcion'):
-                            prev['descripcion'] = (prev.get('descripcion') or '') + ' ' + cont_text
-                        else:
-                            prev['descripcion'] = cont_text
+                        if cont_text:
+                            # append to previous 'descripcion' field
+                            if prev.get('descripcion'):
+                                prev['descripcion'] = (prev.get('descripcion') or '') + ' ' + cont_text
+                            else:
+                                prev['descripcion'] = cont_text
                 else:
                     # No previous movement and no date - skip this row
                     # Only rows with dates should be added to movements
