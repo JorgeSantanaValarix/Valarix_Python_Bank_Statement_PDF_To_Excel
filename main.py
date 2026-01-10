@@ -240,9 +240,28 @@ def normalize_amount_str(amount_str):
 def fix_duplicated_chars(text_str):
     """Fix duplicated characters in text (e.g., 'PPaaggoo' -> 'Pagos').
     This happens with some PDF encodings where each character is duplicated.
+    IMPORTANT: Do NOT apply to amounts/money values unless they have the specific
+    duplication pattern with two dots (###..###).
     """
     if not text_str:
         return text_str
+    
+    # Check for the specific duplication pattern: ###..### (number with duplications + two dots)
+    # This pattern indicates duplicated characters in amounts (e.g., "9977,,000000..0000")
+    duplication_pattern = re.compile(r'\d+[,\d]*\.\.\d+')
+    has_duplication_pattern = duplication_pattern.search(text_str)
+    
+    # Check if this looks like a money/amount value
+    # Pattern: contains $, numbers, commas, dots (e.g., "$50,000.00", "50,000.00", "50.00")
+    amount_pattern = re.compile(r'[\$]?\s*\d+[,\d]*\.?\d*')
+    is_amount = amount_pattern.fullmatch(text_str.strip())
+    
+    # If it's an amount but doesn't have the duplication pattern, don't fix it
+    if is_amount and not has_duplication_pattern:
+        # This is a normal amount (e.g., "$50,000.00"), don't fix duplicated chars
+        return text_str
+    
+    # Apply normal duplication fix for text (or amounts with duplication pattern)
     result = []
     i = 0
     while i < len(text_str):
@@ -1963,6 +1982,52 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
     # Sort words by X coordinate within the row
     sorted_words = sorted(words, key=lambda w: w.get('x0', 0))
     
+    # For Konfio, first try to reconstruct dates that might be split across multiple words
+    # Konfio dates can be split like "31" and "mar 2023" in separate words
+    if bank_name == 'Konfio' and 'fecha' in columns:
+        fecha_x0, fecha_x1 = columns['fecha']
+        # Collect all words that are in the fecha column range
+        fecha_words = []
+        for word in sorted_words:
+            x0 = word.get('x0', 0)
+            x1 = word.get('x1', 0)
+            center = (x0 + x1) / 2
+            if fecha_x0 <= center <= fecha_x1:
+                fecha_words.append(word)
+        
+        # If we have words in fecha column, try to reconstruct the date
+        if len(fecha_words) > 0:
+            # Get all text from fecha words, preserving order
+            fecha_texts = [w.get('text', '').strip() for w in fecha_words]
+            fecha_text = ' '.join(fecha_texts)
+            
+            # For Konfio, dates can be split like:
+            # 1. "31" and "mar 2023" in separate words -> "31 mar 2023"
+            # 2. "31 mar 2023" in one word -> "31 mar 2023"
+            # 3. "31 mar" and "2023" in separate words -> "31 mar 2023"
+            
+            # Try to match full date pattern first
+            konfio_date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4}\b', re.I)
+            full_match = konfio_date_pattern.search(fecha_text)
+            if full_match:
+                date_text = full_match.group()
+                row_data['fecha'] = date_text
+                # Remove these words from sorted_words so they're not processed again
+                sorted_words = [w for w in sorted_words if w not in fecha_words]
+            else:
+                # Try to reconstruct: look for day (1-2 digits) + month (3 letters) + year (2-4 digits)
+                # Pattern: day might be separate, month and year might be together or separate
+                day_match = re.search(r'\b(0[1-9]|[12][0-9]|3[01])\b', fecha_text)
+                month_year_match = re.search(r'\b([A-Za-z]{3})\s+(\d{2,4})\b', fecha_text, re.I)
+                if day_match and month_year_match:
+                    day = day_match.group(1)
+                    month = month_year_match.group(1)
+                    year = month_year_match.group(2)
+                    date_text = f"{day} {month} {year}"
+                    row_data['fecha'] = date_text
+                    # Remove these words from sorted_words so they're not processed again
+                    sorted_words = [w for w in sorted_words if w not in fecha_words]
+    
     # For Clara, first try to reconstruct dates that might be split across multiple words
     if bank_name == 'Clara' and 'fecha' in columns:
         fecha_x0, fecha_x1 = columns['fecha']
@@ -2927,6 +2992,9 @@ def main():
                     has_date = bool(clara_date_pattern.search(fecha_val))
                 else:
                     has_date = bool(date_pattern.search(fecha_val))
+                    # Debug for Konfio
+                    if bank_config['name'] == 'Konfio' and not has_date and fecha_val:
+                        print(f"⚠️ Konfio: Fecha no detectada - Valor en columna fecha: '{fecha_val}', Patrón usado: {date_pattern.pattern}")
                 
                 # Check if row has valid data (date, description, or amounts)
                 has_valid_data = has_date
@@ -2936,6 +3004,12 @@ def main():
                     has_amounts = len(row_data.get('_amounts', [])) > 0
                     has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
                     has_valid_data = bool(desc_val or has_amounts or has_cargos_abonos)
+                    
+                    # Debug for Konfio
+                    if bank_config['name'] == 'Konfio' and not has_valid_data:
+                        all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                        print(f"⚠️ Konfio: Fila rechazada (sin fecha ni datos válidos) - Fecha: '{fecha_val}', Desc: '{desc_val[:60]}', Montos: {has_amounts}, Cargos/Abonos: {has_cargos_abonos}")
+                        print(f"   Texto completo: {all_row_text[:150]}")
                 
                 # For BanBajío, also accept rows with "SALDO INICIAL" even if they don't have a date
                 if bank_config['name'] == 'Banbajío' and not has_date:
@@ -2951,6 +3025,12 @@ def main():
                 has_amounts = len(row_data.get('_amounts', [])) > 0
                 has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
                 has_description_or_amounts = bool(desc_val or has_amounts or has_cargos_abonos)
+                
+                # Debug for Konfio
+                if bank_config['name'] == 'Konfio' and not has_description_or_amounts:
+                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    print(f"⚠️ Konfio: Fila con fecha pero sin descripción ni montos - Fecha: '{fecha_val}', Desc: '{desc_val[:60]}', Montos: {has_amounts}, Cargos/Abonos: {has_cargos_abonos}")
+                    print(f"   Texto completo: {all_row_text[:150]}")
                 
                 if has_description_or_amounts:
                     # For Banregio, only include rows where description starts with "TRA" or "DOC"
@@ -3126,6 +3206,46 @@ def main():
                     # No previous movement and no date - skip this row
                     # Only rows with dates should be added to movements
                     # Rows without dates are only used as continuation of previous rows
+                    # For Konfio, also try to append rows with text to previous movement if exists
+                    if bank_config['name'] == 'Konfio' and movement_rows:
+                        all_row_text = ' '.join([w.get('text', '') for w in row_words]).strip()
+                        # If row has any text, treat it as continuation
+                        if all_row_text:
+                            prev = movement_rows[-1]
+                            # Append text to description
+                            if prev.get('descripcion'):
+                                prev['descripcion'] = (prev.get('descripcion') or '') + ' ' + all_row_text
+                            else:
+                                prev['descripcion'] = all_row_text
+                            # Also check for amounts in the row
+                            cont_amounts = row_data.get('_amounts', [])
+                            if cont_amounts and columns_config:
+                                # Get column ranges for numeric columns
+                                col_ranges = {}
+                                for col in ('cargos', 'abonos', 'saldo'):
+                                    if col in columns_config:
+                                        x0, x1 = columns_config[col]
+                                        col_ranges[col] = (x0, x1)
+                                
+                                # Assign amounts from continuation row
+                                tolerance = 10
+                                for amt_text, center in cont_amounts:
+                                    assigned = False
+                                    for col in ('cargos', 'abonos', 'saldo'):
+                                        if col in col_ranges:
+                                            x0, x1 = col_ranges[col]
+                                            if (x0 - tolerance) <= center <= (x1 + tolerance):
+                                                existing = prev.get(col) or ''
+                                                if not existing or amt_text not in existing:
+                                                    if existing:
+                                                        prev[col] = (existing + ' ' + amt_text).strip()
+                                                    else:
+                                                        prev[col] = amt_text
+                                                assigned = True
+                                                break
+                            # Merge amounts list
+                            prev_amounts = prev.get('_amounts', [])
+                            prev['_amounts'] = prev_amounts + row_data.get('_amounts', [])
                     pass
 
     # Process summary lines to format them properly
@@ -3765,6 +3885,29 @@ def main():
             return value_str.strip()
         
         df_mov['Abonos'] = df_mov['Abonos'].apply(clean_clara_abonos)
+    
+    # For Konfio, clean "$" and other text from Cargos and Abonos columns
+    if bank_config['name'] == 'Konfio':
+        def clean_konfio_amounts(value):
+            """Remove $ and other non-numeric text from amount values for Konfio."""
+            if pd.isna(value):
+                return ''
+            value_str = str(value).strip()
+            if not value_str or value_str == '':
+                return ''
+            # Remove "$" and any surrounding spaces
+            value_str = re.sub(r'\$\s*', '', value_str)
+            # Remove any remaining non-numeric characters except digits, commas, dots, and minus sign
+            # Keep only: digits, commas, dots (for decimals), and minus sign (for negative values)
+            value_str = re.sub(r'[^\d,\.\-]', '', value_str)
+            cleaned = value_str.strip()
+            # Return empty string if nothing remains after cleaning
+            return cleaned if cleaned else ''
+        
+        if 'Cargos' in df_mov.columns:
+            df_mov['Cargos'] = df_mov['Cargos'].apply(clean_konfio_amounts)
+        if 'Abonos' in df_mov.columns:
+            df_mov['Abonos'] = df_mov['Abonos'].apply(clean_konfio_amounts)
 
     # Rename "Fecha Liq" to "Fecha Liq." for BBVA if needed
     if bank_config['name'] == 'BBVA' and 'Fecha Liq' in df_mov.columns:
@@ -3964,8 +4107,25 @@ def main():
             # Only sum Abonos and Cargos columns
             try:
                 # Try to convert to numeric and sum
-                numeric_values = df_mov[col].apply(lambda x: normalize_amount_str(x) if pd.notna(x) and str(x).strip() else 0.0)
+                # For Konfio, ensure we handle cleaned values properly
+                def safe_normalize(val):
+                    """Safely normalize amount value, handling empty strings and None."""
+                    if pd.isna(val):
+                        return 0.0
+                    val_str = str(val).strip()
+                    if not val_str or val_str == '':
+                        return 0.0
+                    normalized = normalize_amount_str(val_str)
+                    return normalized if normalized is not None else 0.0
+                
+                numeric_values = df_mov[col].apply(safe_normalize)
                 total = numeric_values.sum()
+                
+                # Debug for Konfio
+                if bank_config['name'] == 'Konfio':
+                    non_zero_count = (numeric_values > 0).sum()
+                    print(f"🔍 Konfio: Columna {col} - Total: {total:,.2f}, Filas con valores > 0: {non_zero_count} de {len(numeric_values)}")
+                
                 # For Clara, always show total for Abonos (even if negative, zero, or positive)
                 if bank_config['name'] == 'Clara' and col == 'Abonos':
                     # Format as currency with 2 decimals (always show, even if negative or zero)
@@ -3975,8 +4135,10 @@ def main():
                     total_row[col] = f"{total:,.2f}"
                 else:
                     total_row[col] = ''
-            except:
+            except Exception as e:
                 # If conversion fails, leave empty
+                if bank_config['name'] == 'Konfio':
+                    print(f"❌ Error calculating total for {col}: {e}")
                 total_row[col] = ''
         else:
             # All other columns (Saldo, Operación, Liquidación, etc.) - leave empty
