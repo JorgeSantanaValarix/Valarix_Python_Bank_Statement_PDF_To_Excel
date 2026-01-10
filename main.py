@@ -2487,7 +2487,7 @@ def main():
                 if banbajio_start_pattern and not detalle_found:
                     if banbajio_start_pattern.search(ln):
                         detalle_found = True
-                        print(f"✅ BanBajío: Encontrado 'DETALLE DE LA CUENTA: CUENTA' en página {p['page']}, línea {i+1}: {ln[:100]}")
+                        #print(f"✅ BanBajío: Encontrado 'DETALLE DE LA CUENTA: CUENTA' en página {p['page']}, línea {i+1}: {ln[:100]}")
                         continue  # Continue to next iteration to find the first date or header
                 
                 # For Banbajío, find the header line "FECHA NO. REF. / DOCTO DESCRIPCION DE LA OPERACION DEPOSITOS RETIROS SALDO"
@@ -2502,7 +2502,7 @@ def main():
                             movement_start_page = p['page']
                             movement_start_index = i + 1  # Start from line after header
                             next_line = p['lines'][i + 1] if i + 1 < len(p['lines']) else ""
-                            print(f"✅ BanBajío: Inicio de extracción detectado en página {p['page']}, línea {i+2}: {next_line[:100]}")
+                            #print(f"✅ BanBajío: Inicio de extracción detectado en página {p['page']}, línea {i+2}: {next_line[:100]}")
                             # collect from line after header onward in this page
                             movements_lines.extend(p['lines'][i+1:])
                             break
@@ -2805,8 +2805,8 @@ def main():
                     # For other banks (Banregio, Banamex, Santander, Banorte, Konfio, Banbajío), use the standard pattern
                     if movement_end_pattern.search(all_text):
                         match_found = True
-                        if bank_config['name'] == 'Banbajío':
-                            print(f"🛑 BanBajío: Fin de extracción detectado en página {page_num}, fila {row_idx+1}: {all_row_text[:100]}")
+                        #if bank_config['name'] == 'Banbajío':
+                            #print(f"🛑 BanBajío: Fin de extracción detectado en página {page_num}, fila {row_idx+1}: {all_row_text[:100]}")
                 
                 if match_found:
                     #print(f"🛑 Fin de tabla de movimientos detectado en página {page_num}")
@@ -2816,17 +2816,6 @@ def main():
             # Extract structured row using coordinates
             # Pass bank_name and date_pattern to enable date/description separation
             row_data = extract_movement_row(row_words, columns_config, bank_config['name'], date_pattern)
-
-            # For BanBajío, debug: print all processed rows to see what's being filtered (only first 5 pages)
-            if bank_config['name'] == 'Banbajío' and movement_start_found and page_num <= 4:
-                all_row_text_debug = ' '.join([w.get('text', '') for w in row_words])
-                fecha_val_debug = str(row_data.get('fecha') or '').strip()
-                desc_val_debug = str(row_data.get('descripcion') or '').strip()
-                cargos_val_debug = str(row_data.get('cargos') or '').strip()
-                abonos_val_debug = str(row_data.get('abonos') or '').strip()
-                saldo_val_debug = str(row_data.get('saldo') or '').strip()
-                print(f"🔍 BanBajío: Procesando fila en página {page_num}, fila {row_idx+1} - Fecha: '{fecha_val_debug}', Desc: '{desc_val_debug[:60]}', Cargos: '{cargos_val_debug}', Abonos: '{abonos_val_debug}', Saldo: '{saldo_val_debug}'")
-                print(f"   📝 Texto completo de la fila: {all_row_text_debug[:150]}")
 
             # Determine if this row starts a new movement (contains a date)
             # If columns_config is empty, check all words for dates
@@ -2849,11 +2838,6 @@ def main():
                     has_date = bool(clara_date_pattern.search(fecha_val))
                 else:
                     has_date = bool(date_pattern.search(fecha_val))
-                    # For BanBajío, debug: print date detection results (only first 5 pages)
-                    if bank_config['name'] == 'Banbajío' and page_num <= 4:
-                        date_match_result = date_pattern.search(fecha_val)
-                        match_text = date_match_result.group() if date_match_result else 'None'
-                        print(f"   🔍 Detección de fecha - Valor en columna fecha: '{fecha_val}', has_date: {has_date}, match: '{match_text}'")
                 
                 # Check if row has valid data (date, description, or amounts)
                 has_valid_data = has_date
@@ -2879,11 +2863,6 @@ def main():
                 has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
                 has_description_or_amounts = bool(desc_val or has_amounts or has_cargos_abonos)
                 
-                # For BanBajío, debug: print why rows are being skipped (only first 5 pages)
-                if bank_config['name'] == 'Banbajío' and not has_description_or_amounts and page_num <= 4:
-                    fecha_val = str(row_data.get('fecha') or '').strip()
-                    print(f"⚠️ BanBajío: Fila rechazada (sin descripción ni montos) en página {page_num}, fila {row_idx+1} - Fecha: '{fecha_val}', Desc: '{desc_val[:60]}', Montos: {has_amounts}, Cargos/Abonos: {has_cargos_abonos}")
-                
                 if has_description_or_amounts:
                     # For Banregio, only include rows where description starts with "TRA" or "DOC"
                     if bank_config['name'] == 'Banregio':
@@ -2893,26 +2872,6 @@ def main():
                             continue
                     #row_data['page'] = page_num
                     movement_rows.append(row_data)
-                    # For BanBajío, track detected rows and print first and second rows that will be exported to Excel
-                    if bank_config['name'] == 'Banbajío':
-                        banbajio_detected_rows += 1
-                        if banbajio_detected_rows == 2:
-                            all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                            print(f"✅ BanBajío: Segunda fila detectada (válida) en página {page_num}, fila {row_idx+1}: {all_row_text[:150]}")
-                        if len(movement_rows) == 1:
-                            fecha_val = str(row_data.get('fecha') or '').strip()
-                            desc_val = str(row_data.get('descripcion') or '').strip()
-                            cargos_val = str(row_data.get('cargos') or '').strip()
-                            abonos_val = str(row_data.get('abonos') or '').strip()
-                            saldo_val = str(row_data.get('saldo') or '').strip()
-                            print(f"📊 BanBajío: Primera fila que se exportará al Excel - Fecha: '{fecha_val}', Desc: '{desc_val[:80]}', Cargos: '{cargos_val}', Abonos: '{abonos_val}', Saldo: '{saldo_val}'")
-                        elif len(movement_rows) == 2:
-                            fecha_val = str(row_data.get('fecha') or '').strip()
-                            desc_val = str(row_data.get('descripcion') or '').strip()
-                            cargos_val = str(row_data.get('cargos') or '').strip()
-                            abonos_val = str(row_data.get('abonos') or '').strip()
-                            saldo_val = str(row_data.get('saldo') or '').strip()
-                            print(f"📊 BanBajío: Segunda fila que se exportará al Excel - Fecha: '{fecha_val}', Desc: '{desc_val[:80]}', Cargos: '{cargos_val}', Abonos: '{abonos_val}', Saldo: '{saldo_val}'")
             elif has_valid_data and bank_config['name'] == 'Banbajío':
                 # For BanBajío, also add rows without date if they contain "SALDO INICIAL"
                 desc_val = str(row_data.get('descripcion') or '').strip()
@@ -2922,19 +2881,6 @@ def main():
                     if has_amounts or has_cargos_abonos:
                         #row_data['page'] = page_num
                         movement_rows.append(row_data)
-                        # For BanBajío, track detected rows and print first row that will be exported to Excel (SALDO INICIAL)
-                        if bank_config['name'] == 'Banbajío':
-                            banbajio_detected_rows += 1
-                            if banbajio_detected_rows == 2:
-                                all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                                print(f"✅ BanBajío: Segunda fila detectada (válida) en página {page_num}, fila {row_idx+1}: {all_row_text[:150]}")
-                        if len(movement_rows) == 1:
-                            fecha_val = str(row_data.get('fecha') or '').strip()
-                            desc_val = str(row_data.get('descripcion') or '').strip()
-                            cargos_val = str(row_data.get('cargos') or '').strip()
-                            abonos_val = str(row_data.get('abonos') or '').strip()
-                            saldo_val = str(row_data.get('saldo') or '').strip()
-                            print(f"📊 BanBajío: Primera fila que se exportará al Excel - Fecha: '{fecha_val}', Desc: '{desc_val[:80]}', Cargos: '{cargos_val}', Abonos: '{abonos_val}', Saldo: '{saldo_val}'")
                     
                     # For Banregio, check if this is a monthly commission (last movement) - stop extraction
                     if bank_config['name'] == 'Banregio':
@@ -2962,12 +2908,7 @@ def main():
                         # Check if row contains period information (e.g., "1 DE ENERO AL 31 DE ENERO DE 2024 PERIODO:")
                         if re.search(r'\bPERIODO\s*:?\s*$', all_row_text_check, re.I) or re.search(r'\d+\s+DE\s+[A-Z]+\s+AL\s+\d+\s+DE\s+[A-Z]+', all_row_text_check, re.I):
                             # Skip this row - it's period information, not a movement
-                            if page_num <= 4:
-                                print(f"⏭️ BanBajío: Fila filtrada (información de período) en página {page_num}, fila {row_idx+1}: {all_row_text_check[:100]}")
                             continue
-                        # For BanBajío, debug: print rows without date that are being processed as continuation (only first 5 pages)
-                        if not movement_rows and page_num <= 4:
-                            print(f"⚠️ BanBajío: Fila sin fecha y sin movimiento previo en página {page_num}, fila {row_idx+1}: {all_row_text_check[:100]}")
                     # For Banregio, if we're in commission zone, check for irrelevant rows and stop extraction
                     if bank_config['name'] == 'Banregio' and in_comision_zone:
                             # Collect all text from the row to check for irrelevant content
