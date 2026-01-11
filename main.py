@@ -434,8 +434,9 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
             all_text = ""
             all_lines = []
             
-            # For Konfio, read only page 2 (index 1) for summary information
+            # For Konfio, read page 2 for summary information and all pages for "Subtotal" line
             if bank_name == "Konfio":
+                # Read page 2 for summary information (Pagos, Devoluciones, Compras y cargos, Saldo total al corte)
                 if len(pdf.pages) >= 2:
                     page = pdf.pages[1]  # Page 2 (0-indexed)
                     text = page.extract_text()
@@ -447,6 +448,15 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                         all_lines = text.split('\n')
                 else:
                     all_lines = []  # Not enough pages
+                
+                # Also read all pages to find "Subtotal" line (usually at the end of movements)
+                # This line contains: "Subtotal $ X,XXX.XX $ Y,YYY.YY" where first is cargos, second is abonos
+                for page_num in range(len(pdf.pages)):
+                    page = pdf.pages[page_num]
+                    text = page.extract_text()
+                    if text:
+                        text = fix_duplicated_chars(text)
+                        all_lines.extend(text.split('\n'))
             # For Banregio, collect text from all pages to find "Total" line
             elif bank_name == "Banregio":
                 for page_num in range(len(pdf.pages)):
@@ -930,17 +940,36 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                     print(f"   Última línea: {all_lines[-1][:100]}")
                 pagos_amount = None
                 devoluciones_amount = None
+                subtotal_found = False  # Flag to track if Subtotal line was found
                 
                 for i, line in enumerate(all_lines):
-                    # Pagos (positive value)
-                    if pagos_amount is None:
+                    # Subtotal line: "Subtotal $ X,XXX.XX $ Y,YYY.YY" (first is cargos, second is abonos)
+                    # This takes priority over "Compras y cargos" and "Pagos + Devoluciones"
+                    # Always check for Subtotal first, as it has the highest priority
+                    if not subtotal_found:
+                        match = re.search(r'Subtotal\s+\$\s*([\d,\.]+)\s+\$\s*([\d,\.]+)', line, re.I)
+                        if match:
+                            cargos_amount = normalize_amount_str(match.group(1))
+                            abonos_amount = normalize_amount_str(match.group(2))
+                            if cargos_amount > 0:
+                                print(f"✅ Konfio: Encontrado Subtotal - Cargos: ${cargos_amount:,.2f}, Abonos: ${abonos_amount:,.2f} en línea {i+1}: {line[:100]}")
+                                summary_data['total_cargos'] = cargos_amount
+                                summary_data['total_retiros'] = cargos_amount
+                            if abonos_amount > 0:
+                                summary_data['total_abonos'] = abonos_amount
+                                summary_data['total_depositos'] = abonos_amount
+                            subtotal_found = True
+                            continue  # Skip other patterns if Subtotal was found
+                    
+                    # Pagos (positive value) - only if Subtotal not found
+                    if not subtotal_found and pagos_amount is None:
                         match = re.search(r'Pagos\s*-\s*\$\s*([\d,\.]+)', line, re.I)
                         if match:
                             pagos_amount = normalize_amount_str(match.group(1))
                             print(f"✅ Konfio: Encontrado Pagos: ${pagos_amount:,.2f} en línea {i+1}: {line[:100]}")
                     
-                    # Devoluciones y ajustes (negative value, convert to positive)
-                    if devoluciones_amount is None:
+                    # Devoluciones y ajustes (negative value, convert to positive) - only if Subtotal not found
+                    if not subtotal_found and devoluciones_amount is None:
                         match = re.search(r'Devoluciones\s+y\s+ajustes\s*-\s*\$\s*-?\s*([\d,\.]+)', line, re.I)
                         if match:
                             devoluciones_amount = normalize_amount_str(match.group(1))
@@ -948,8 +977,8 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                             devoluciones_amount = abs(devoluciones_amount)
                             print(f"✅ Konfio: Encontrado Devoluciones y ajustes: ${devoluciones_amount:,.2f} en línea {i+1}: {line[:100]}")
                     
-                    # Compras y cargos
-                    if not summary_data['total_cargos']:
+                    # Compras y cargos (only if Subtotal not found)
+                    if not subtotal_found and not summary_data['total_cargos']:
                         match = re.search(r'Compras\s+y\s+cargos\s+\$\s*([\d,\.]+)', line, re.I)
                         if match:
                             amount = normalize_amount_str(match.group(1))
@@ -968,16 +997,20 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                                 summary_data['saldo_final'] = amount
                 
                 # Calculate Total Abonos = Pagos + Devoluciones (both as positive)
-                if pagos_amount is not None and devoluciones_amount is not None:
-                    total_abonos = pagos_amount + devoluciones_amount
-                    summary_data['total_abonos'] = total_abonos
-                    summary_data['total_depositos'] = total_abonos
-                    print(f"✅ Konfio: Total Abonos calculado: ${total_abonos:,.2f} (Pagos: ${pagos_amount:,.2f} + Devoluciones: ${devoluciones_amount:,.2f})")
-                elif pagos_amount is not None:
-                    # Only Pagos found
-                    summary_data['total_abonos'] = pagos_amount
-                    summary_data['total_depositos'] = pagos_amount
-                    print(f"✅ Konfio: Total Abonos (solo Pagos): ${pagos_amount:,.2f}")
+                # Only if Subtotal was NOT found (Subtotal takes priority)
+                if not subtotal_found and not summary_data['total_abonos']:
+                    if pagos_amount is not None and devoluciones_amount is not None:
+                        total_abonos = pagos_amount + devoluciones_amount
+                        summary_data['total_abonos'] = total_abonos
+                        summary_data['total_depositos'] = total_abonos
+                        print(f"✅ Konfio: Total Abonos calculado: ${total_abonos:,.2f} (Pagos: ${pagos_amount:,.2f} + Devoluciones: ${devoluciones_amount:,.2f})")
+                    elif pagos_amount is not None:
+                        # Only Pagos found
+                        summary_data['total_abonos'] = pagos_amount
+                        summary_data['total_depositos'] = pagos_amount
+                        print(f"✅ Konfio: Total Abonos (solo Pagos): ${pagos_amount:,.2f}")
+                elif subtotal_found:
+                    print(f"✅ Konfio: Total Abonos tomado de Subtotal: ${summary_data['total_abonos']:,.2f}")
                 elif devoluciones_amount is not None:
                     # Only Devoluciones found
                     summary_data['total_abonos'] = devoluciones_amount
