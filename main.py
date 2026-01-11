@@ -934,10 +934,6 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                 # "Devoluciones y ajustes - $ -115.66" -> part of Total Abonos (convert to positive)
                 # "Compras y cargos $ 56,176.79" -> Total Cargos
                 # "Saldo total al corte $ 312,227.05" -> Saldo Final
-                print(f"🔍 Konfio: Buscando patrones en página 2, {len(all_lines)} líneas encontradas")
-                if len(all_lines) > 0:
-                    print(f"   Primera línea: {all_lines[0][:100]}")
-                    print(f"   Última línea: {all_lines[-1][:100]}")
                 pagos_amount = None
                 devoluciones_amount = None
                 subtotal_found = False  # Flag to track if Subtotal line was found
@@ -952,7 +948,6 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                             cargos_amount = normalize_amount_str(match.group(1))
                             abonos_amount = normalize_amount_str(match.group(2))
                             if cargos_amount > 0:
-                                print(f"✅ Konfio: Encontrado Subtotal - Cargos: ${cargos_amount:,.2f}, Abonos: ${abonos_amount:,.2f} en línea {i+1}: {line[:100]}")
                                 summary_data['total_cargos'] = cargos_amount
                                 summary_data['total_retiros'] = cargos_amount
                             if abonos_amount > 0:
@@ -966,7 +961,6 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                         match = re.search(r'Pagos\s*-\s*\$\s*([\d,\.]+)', line, re.I)
                         if match:
                             pagos_amount = normalize_amount_str(match.group(1))
-                            print(f"✅ Konfio: Encontrado Pagos: ${pagos_amount:,.2f} en línea {i+1}: {line[:100]}")
                     
                     # Devoluciones y ajustes (negative value, convert to positive) - only if Subtotal not found
                     if not subtotal_found and devoluciones_amount is None:
@@ -975,7 +969,6 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                             devoluciones_amount = normalize_amount_str(match.group(1))
                             # Convert to positive (take absolute value)
                             devoluciones_amount = abs(devoluciones_amount)
-                            print(f"✅ Konfio: Encontrado Devoluciones y ajustes: ${devoluciones_amount:,.2f} en línea {i+1}: {line[:100]}")
                     
                     # Compras y cargos (only if Subtotal not found)
                     if not subtotal_found and not summary_data['total_cargos']:
@@ -983,7 +976,6 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                         if match:
                             amount = normalize_amount_str(match.group(1))
                             if amount > 0:
-                                print(f"✅ Konfio: Encontrado cargos: ${amount:,.2f} en línea {i+1}: {line[:100]}")
                                 summary_data['total_cargos'] = amount
                                 summary_data['total_retiros'] = amount
                     
@@ -993,7 +985,6 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                         if match:
                             amount = normalize_amount_str(match.group(1))
                             if amount > 0:
-                                print(f"✅ Konfio: Encontrado saldo total al corte: ${amount:,.2f} en línea {i+1}: {line[:100]}")
                                 summary_data['saldo_final'] = amount
                 
                 # Calculate Total Abonos = Pagos + Devoluciones (both as positive)
@@ -1003,14 +994,12 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                         total_abonos = pagos_amount + devoluciones_amount
                         summary_data['total_abonos'] = total_abonos
                         summary_data['total_depositos'] = total_abonos
-                        print(f"✅ Konfio: Total Abonos calculado: ${total_abonos:,.2f} (Pagos: ${pagos_amount:,.2f} + Devoluciones: ${devoluciones_amount:,.2f})")
                     elif pagos_amount is not None:
                         # Only Pagos found
                         summary_data['total_abonos'] = pagos_amount
                         summary_data['total_depositos'] = pagos_amount
-                        print(f"✅ Konfio: Total Abonos (solo Pagos): ${pagos_amount:,.2f}")
                 elif subtotal_found:
-                    print(f"✅ Konfio: Total Abonos tomado de Subtotal: ${summary_data['total_abonos']:,.2f}")
+                    pass  # Total Abonos already set from Subtotal
                 elif devoluciones_amount is not None:
                     # Only Devoluciones found
                     summary_data['total_abonos'] = devoluciones_amount
@@ -3073,17 +3062,6 @@ def main():
                 all_row_text_check = ' '.join([w.get('text', '') for w in row_words])
                 if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper() or 'IVA SOBRE COMISIONES E INTERESES' in all_row_text_check.upper():
                     fecha_val = str(row_data.get('fecha') or '').strip()
-                    cargos_val = str(row_data.get('cargos') or '').strip()
-                    abonos_val = str(row_data.get('abonos') or '').strip()
-                    amounts_list = row_data.get('_amounts', [])
-                    print(f"🔍🔍 KONFIO DEBUG - IVA SOBRE COMISIONES detectada:")
-                    print(f"   Fecha: '{fecha_val}'")
-                    print(f"   Descripción: '{desc_val_check}'")
-                    print(f"   Cargos: '{cargos_val}'")
-                    print(f"   Abonos: '{abonos_val}'")
-                    print(f"   _amounts: {amounts_list}")
-                    print(f"   Texto completo de la fila: {all_row_text_check}")
-                    print(f"   Página: {page_num}, Fila índice: {row_idx+1}")
 
             # Determine if this row starts a new movement (contains a date)
             # If columns_config is empty, check all words for dates
@@ -3171,16 +3149,6 @@ def main():
                         # This is a sub-row, skip it (it will be handled as continuation if needed)
                         continue
                     # Add row if it has date, even if description/amounts are empty (they'll be added in continuation rows)
-                    # Special debug for "IVA SOBRE COMISIONES E INTERESES" row before adding
-                    desc_val_check = str(row_data.get('descripcion') or '').strip()
-                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
-                        print(f"🔍🔍 KONFIO DEBUG - Agregando IVA SOBRE COMISIONES a movement_rows:")
-                        print(f"   Fecha: '{row_data.get('fecha', '')}'")
-                        print(f"   Descripción: '{desc_val_check}'")
-                        print(f"   Cargos: '{row_data.get('cargos', '')}'")
-                        print(f"   Abonos: '{row_data.get('abonos', '')}'")
-                        print(f"   _amounts: {row_data.get('_amounts', [])}")
-                        print(f"   Total movement_rows antes de agregar: {len(movement_rows)}")
                     movement_rows.append(row_data)
                 elif has_description_or_amounts:
                     # For Banregio, only include rows where description starts with "TRA" or "DOC"
@@ -3692,13 +3660,6 @@ def main():
             # We'll assign each detected amount to the appropriate numeric column
             # ONLY if it's within the column's coordinate range
             for amt_text, center in amounts:
-                # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
-                if bank_config['name'] == 'Konfio':
-                    desc_val_check = str(r.get('descripcion') or '').strip()
-                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
-                        print(f"🔍🔍 KONFIO DEBUG - Reasignando montos, monto: '{amt_text}', coordenada X: {center}")
-                        print(f"   Rangos de columnas: cargos={col_ranges.get('cargos')}, abonos={col_ranges.get('abonos')}")
-                
                 # Find which numeric column this amount belongs to based on coordinate range
                 # Use a small tolerance for edge cases (amounts near column boundaries)
                 # For Konfio, use larger tolerance to capture amounts that might be slightly misaligned
@@ -3706,13 +3667,6 @@ def main():
                 # So we need a tolerance of at least 22 to capture it (410.22 - 388 = 22.22)
                 tolerance = 30 if bank_config['name'] == 'Konfio' else 10
                 assigned = False
-                
-                # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
-                if bank_config['name'] == 'Konfio':
-                    desc_val_check = str(r.get('descripcion') or '').strip()
-                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
-                        print(f"🔍🔍 KONFIO DEBUG - Reasignando montos, monto: '{amt_text}', coordenada X: {center}, tolerancia: {tolerance}")
-                        print(f"   Rangos de columnas: cargos={col_ranges.get('cargos')}, abonos={col_ranges.get('abonos')}")
                 
                 # First, check if amount is within any numeric column range
                 # This takes priority over description range check
@@ -3725,7 +3679,7 @@ def main():
                             desc_val_check = str(r.get('descripcion') or '').strip()
                             if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
                                 in_range = (x0 - tolerance) <= center <= (x1 + tolerance)
-                                print(f"   Verificando columna {col}: rango ({x0}, {x1}), centro={center:.2f}, dentro del rango? {in_range} (rango efectivo: {x0 - tolerance:.2f} a {x1 + tolerance:.2f})")
+                                #print(f"   Verificando columna {col}: rango ({x0}, {x1}), centro={center:.2f}, dentro del rango? {in_range} (rango efectivo: {x0 - tolerance:.2f} a {x1 + tolerance:.2f})")
                         
                         if (x0 - tolerance) <= center <= (x1 + tolerance):
                             # Amount is within a numeric column range - assign it regardless of description range
@@ -3774,22 +3728,10 @@ def main():
                             # Only consider if center is reasonably close to the column
                             if center >= (x0 - proximity_check_tolerance) and center <= (x1 + proximity_check_tolerance):
                                 valid_cols[col] = abs(center - col_centers[col])
-                                
-                                # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
-                                if bank_config['name'] == 'Konfio':
-                                    desc_val_check = str(r.get('descripcion') or '').strip()
-                                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
-                                        print(f"   Columna {col} considerada para proximidad: distancia={abs(center - col_centers[col]):.2f}")
                     
                     if valid_cols:
                         nearest = min(valid_cols.keys(), key=lambda c: valid_cols[c])
                         nearest_distance = valid_cols[nearest]
-                        
-                        # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
-                        if bank_config['name'] == 'Konfio':
-                            desc_val_check = str(r.get('descripcion') or '').strip()
-                            if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
-                                print(f"   Columna más cercana: {nearest}, distancia: {nearest_distance:.2f}")
                         
                         # Check if amount is in description range AND not in any numeric column
                         # If it's close to a numeric column, assign it even if it's also in description range
@@ -3813,11 +3755,6 @@ def main():
                                     r[nearest] = (existing + ' ' + amt_text).strip()
                                 else:
                                     r[nearest] = amt_text
-                                
-                                # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
-                                desc_val_check = str(r.get('descripcion') or '').strip()
-                                if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
-                                    print(f"   ✅ Monto '{amt_text}' asignado a {nearest} por proximidad (distancia: {nearest_distance:.2f})")
                                 assigned = True
                         elif not in_desc_range or in_num_range:
                             existing = r.get(nearest, '').strip()
@@ -3845,11 +3782,6 @@ def main():
                                         r[nearest] = (existing + ' ' + amt_text).strip()
                                     else:
                                         r[nearest] = amt_text
-                                    
-                                    # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
-                                    desc_val_check = str(r.get('descripcion') or '').strip()
-                                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
-                                        print(f"   ✅ Monto '{amt_text}' asignado a {nearest} por fallback (distancia: {nearest_distance:.2f})")
                                     assigned = True
                 
                 # Only skip if amount is in description range AND NOT assigned to any numeric column
@@ -3944,30 +3876,7 @@ def main():
 
         # Create df_mov from movement_rows if not already created
         if df_mov is None:
-            # Special debug for "IVA SOBRE COMISIONES E INTERESES" row before creating DataFrame
-            if bank_config['name'] == 'Konfio':
-                for idx, r in enumerate(movement_rows):
-                    desc_val_check = str(r.get('descripcion') or '').strip()
-                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
-                        print(f"🔍🔍 KONFIO DEBUG - Antes de crear DataFrame, fila {idx}:")
-                        print(f"   Fecha: '{r.get('fecha', '')}'")
-                        print(f"   Descripción: '{desc_val_check}'")
-                        print(f"   Cargos: '{r.get('cargos', '')}'")
-                        print(f"   Abonos: '{r.get('abonos', '')}'")
-                        print(f"   _amounts: {r.get('_amounts', [])}")
             df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
-            
-            # Special debug for "IVA SOBRE COMISIONES E INTERESES" row after creating DataFrame
-            if bank_config['name'] == 'Konfio' and df_mov is not None and len(df_mov) > 0:
-                for idx, row in df_mov.iterrows():
-                    desc_val_check = str(row.get('descripcion', '') or '').strip()
-                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
-                        print(f"🔍🔍 KONFIO DEBUG - Después de crear DataFrame, fila {idx}:")
-                        print(f"   Fecha: '{row.get('fecha', '')}'")
-                        print(f"   Descripción: '{desc_val_check}'")
-                        print(f"   Cargos: '{row.get('cargos', '')}'")
-                        print(f"   Abonos: '{row.get('abonos', '')}'")
-                        print(f"   Columnas disponibles: {list(df_mov.columns)}")
     else:
         # No coordinate-based extraction available, use raw text extraction
         movement_entries = group_entries_from_lines(movements_lines)
@@ -4225,23 +4134,6 @@ def main():
     # Apply description building
     df_mov['Descripcion'] = df_mov.apply(_build_description, axis=1)
     
-    # Special debug for "IVA SOBRE COMISIONES E INTERESES" row after building description
-    if bank_config['name'] == 'Konfio' and df_mov is not None and len(df_mov) > 0:
-        for idx, row in df_mov.iterrows():
-            desc_val_check = str(row.get('Descripcion', '') or '').strip()
-            if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
-                print(f"🔍🔍 KONFIO DEBUG - Después de construir Descripcion, fila {idx}:")
-                print(f"   Fecha: '{row.get('Fecha', row.get('fecha', ''))}'")
-                print(f"   Descripción: '{desc_val_check}'")
-                # Check both lowercase and uppercase column names (before and after rename)
-                cargos_val = row.get('Cargos', row.get('cargos', ''))
-                abonos_val = row.get('Abonos', row.get('abonos', ''))
-                print(f"   Cargos: '{cargos_val}'")
-                print(f"   Abonos: '{abonos_val}'")
-                print(f"   Columnas disponibles: {list(df_mov.columns)}")
-                # Also check _amounts if it exists
-                if '_amounts' in row:
-                    print(f"   _amounts: {row.get('_amounts', [])}")
 
     # Drop old columns used to build description
     drop_cols = []
@@ -4251,16 +4143,6 @@ def main():
     if drop_cols:
         df_mov = df_mov.drop(columns=drop_cols)
 
-    # Special debug for "IVA SOBRE COMISIONES E INTERESES" row before rename
-    if bank_config['name'] == 'Konfio' and df_mov is not None and len(df_mov) > 0:
-        for idx, row in df_mov.iterrows():
-            desc_val_check = str(row.get('Descripcion', '') or '').strip()
-            if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
-                print(f"🔍🔍 KONFIO DEBUG - Antes de renombrar columnas, fila {idx}:")
-                print(f"   Columnas disponibles: {list(df_mov.columns)}")
-                print(f"   cargos: '{row.get('cargos', '')}'")
-                print(f"   abonos: '{row.get('abonos', '')}'")
-                print(f"   _amounts: {row.get('_amounts', [])}")
 
     # Rename columns to match desired format
     column_rename = {}
@@ -4323,23 +4205,7 @@ def main():
             return cleaned if cleaned else ''
         
         if 'Cargos' in df_mov.columns:
-            # Special debug for "IVA SOBRE COMISIONES E INTERESES" row before cleaning
-            for idx, row in df_mov.iterrows():
-                desc_val_check = str(row.get('Descripción', '') or '').strip()
-                if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
-                    print(f"🔍🔍 KONFIO DEBUG - Antes de limpiar montos, fila {idx}:")
-                    print(f"   Cargos (antes): '{row.get('Cargos', '')}'")
-                    print(f"   Abonos (antes): '{row.get('Abonos', '')}'")
-            
             df_mov['Cargos'] = df_mov['Cargos'].apply(clean_konfio_amounts)
-            
-            # Special debug for "IVA SOBRE COMISIONES E INTERESES" row after cleaning
-            for idx, row in df_mov.iterrows():
-                desc_val_check = str(row.get('Descripción', '') or '').strip()
-                if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
-                    print(f"🔍🔍 KONFIO DEBUG - Después de limpiar montos, fila {idx}:")
-                    print(f"   Cargos (después): '{row.get('Cargos', '')}'")
-                    print(f"   Abonos (después): '{row.get('Abonos', '')}'")
         
         if 'Abonos' in df_mov.columns:
             df_mov['Abonos'] = df_mov['Abonos'].apply(clean_konfio_amounts)
@@ -4559,7 +4425,7 @@ def main():
                 # Debug for Konfio
                 if bank_config['name'] == 'Konfio':
                     non_zero_count = (numeric_values > 0).sum()
-                    print(f"🔍 Konfio: Columna {col} - Total: {total:,.2f}, Filas con valores > 0: {non_zero_count} de {len(numeric_values)}")
+                    #print(f"🔍 Konfio: Columna {col} - Total: {total:,.2f}, Filas con valores > 0: {non_zero_count} de {len(numeric_values)}")
                 
                 # For Clara, always show total for Abonos (even if negative, zero, or positive)
                 if bank_config['name'] == 'Clara' and col == 'Abonos':
@@ -4615,16 +4481,6 @@ def main():
             df_summary.to_excel(writer, sheet_name='Summary', index=False)
             
             # Special debug for "IVA SOBRE COMISIONES E INTERESES" row before exporting to Excel
-            if bank_config['name'] == 'Konfio' and df_mov is not None and len(df_mov) > 0:
-                for idx, row in df_mov.iterrows():
-                    desc_val_check = str(row.get('Descripcion', '') or '').strip()
-                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
-                        print(f"🔍🔍 KONFIO DEBUG - Antes de exportar a Excel, fila {idx}:")
-                        print(f"   Fecha: '{row.get('Fecha', '')}'")
-                        print(f"   Descripción: '{desc_val_check}'")
-                        print(f"   Cargos: '{row.get('Cargos', '')}'")
-                        print(f"   Abonos: '{row.get('Abonos', '')}'")
-                        print(f"   Columnas disponibles: {list(df_mov.columns)}")
             #print("   - Escribiendo pestaña 'Movements'...")
             df_mov.to_excel(writer, sheet_name='Movements', index=False)
             
