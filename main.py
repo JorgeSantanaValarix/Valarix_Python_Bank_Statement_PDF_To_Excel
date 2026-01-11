@@ -59,7 +59,7 @@ BANK_CONFIGS = {
         "columns": {
             "fecha": (48, 102),             # Columna Fecha de Operación
             "descripcion": (120, 240),     # Columna Descripción
-            "cargos": (340, 388),          # Columna Cargos
+            "cargos": (340, 435),          # Columna Cargos
             "abonos": (510, 565),          # Columna Abonos
         }
     },
@@ -3031,8 +3031,26 @@ def main():
                 desc_val = str(row_data.get('descripcion') or '').strip()
                 cargos_val = str(row_data.get('cargos') or '').strip()
                 abonos_val = str(row_data.get('abonos') or '').strip()
-                print(f"🔍 Konfio: Fila extraída (página {page_num}, fila {row_idx+1}) - Fecha: '{fecha_val}', Desc: '{desc_val[:60]}', Cargos: '{cargos_val}', Abonos: '{abonos_val}'")
-                print(f"   Texto completo: {all_row_text[:150]}")
+                #print(f"🔍 Konfio: Fila extraída (página {page_num}, fila {row_idx+1}) - Fecha: '{fecha_val}', Desc: '{desc_val[:60]}', Cargos: '{cargos_val}', Abonos: '{abonos_val}'")
+                #print(f"   Texto completo: {all_row_text[:150]}")
+            
+            # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
+            if bank_config['name'] == 'Konfio':
+                desc_val_check = str(row_data.get('descripcion') or '').strip()
+                all_row_text_check = ' '.join([w.get('text', '') for w in row_words])
+                if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper() or 'IVA SOBRE COMISIONES E INTERESES' in all_row_text_check.upper():
+                    fecha_val = str(row_data.get('fecha') or '').strip()
+                    cargos_val = str(row_data.get('cargos') or '').strip()
+                    abonos_val = str(row_data.get('abonos') or '').strip()
+                    amounts_list = row_data.get('_amounts', [])
+                    print(f"🔍🔍 KONFIO DEBUG - IVA SOBRE COMISIONES detectada:")
+                    print(f"   Fecha: '{fecha_val}'")
+                    print(f"   Descripción: '{desc_val_check}'")
+                    print(f"   Cargos: '{cargos_val}'")
+                    print(f"   Abonos: '{abonos_val}'")
+                    print(f"   _amounts: {amounts_list}")
+                    print(f"   Texto completo de la fila: {all_row_text_check}")
+                    print(f"   Página: {page_num}, Fila índice: {row_idx+1}")
 
             # Determine if this row starts a new movement (contains a date)
             # If columns_config is empty, check all words for dates
@@ -3068,9 +3086,9 @@ def main():
                             if date_match:
                                 row_data['fecha'] = date_match.group()
                     # Debug for Konfio
-                    if bank_config['name'] == 'Konfio' and not has_date and fecha_val:
-                        all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                        print(f"⚠️ Konfio: Fecha no detectada - Valor en columna fecha: '{fecha_val}', Texto completo: '{all_row_text[:100]}', Patrón usado: {date_pattern.pattern}")
+                    #if bank_config['name'] == 'Konfio' and not has_date and fecha_val:
+                        #all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                        #print(f"⚠️ Konfio: Fecha no detectada - Valor en columna fecha: '{fecha_val}', Texto completo: '{all_row_text[:100]}', Patrón usado: {date_pattern.pattern}")
                 
                 # Check if row has valid data (date, description, or amounts)
                 has_valid_data = has_date
@@ -3082,10 +3100,10 @@ def main():
                     has_valid_data = bool(desc_val or has_amounts or has_cargos_abonos)
                     
                     # Debug for Konfio
-                    if bank_config['name'] == 'Konfio' and not has_valid_data:
-                        all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                        print(f"⚠️ Konfio: Fila rechazada (sin fecha ni datos válidos) - Fecha: '{fecha_val}', Desc: '{desc_val[:60]}', Montos: {has_amounts}, Cargos/Abonos: {has_cargos_abonos}")
-                        print(f"   Texto completo: {all_row_text[:150]}")
+                    #if bank_config['name'] == 'Konfio' and not has_valid_data:
+                        #all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                        #print(f"⚠️ Konfio: Fila rechazada (sin fecha ni datos válidos) - Fecha: '{fecha_val}', Desc: '{desc_val[:60]}', Montos: {has_amounts}, Cargos/Abonos: {has_cargos_abonos}")
+                        #print(f"   Texto completo: {all_row_text[:150]}")
                 
                 # For BanBajío, also accept rows with "SALDO INICIAL" even if they don't have a date
                 if bank_config['name'] == 'Banbajío' and not has_date:
@@ -3120,6 +3138,16 @@ def main():
                         # This is a sub-row, skip it (it will be handled as continuation if needed)
                         continue
                     # Add row if it has date, even if description/amounts are empty (they'll be added in continuation rows)
+                    # Special debug for "IVA SOBRE COMISIONES E INTERESES" row before adding
+                    desc_val_check = str(row_data.get('descripcion') or '').strip()
+                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                        print(f"🔍🔍 KONFIO DEBUG - Agregando IVA SOBRE COMISIONES a movement_rows:")
+                        print(f"   Fecha: '{row_data.get('fecha', '')}'")
+                        print(f"   Descripción: '{desc_val_check}'")
+                        print(f"   Cargos: '{row_data.get('cargos', '')}'")
+                        print(f"   Abonos: '{row_data.get('abonos', '')}'")
+                        print(f"   _amounts: {row_data.get('_amounts', [])}")
+                        print(f"   Total movement_rows antes de agregar: {len(movement_rows)}")
                     movement_rows.append(row_data)
                 elif has_description_or_amounts:
                     # For Banregio, only include rows where description starts with "TRA" or "DOC"
@@ -3315,8 +3343,32 @@ def main():
                             
                             if not potential_date:
                                 # No date found, treat as continuation
-                                # Append text to description, but filter out amounts
-                                # First, collect all text from the row
+                                # IMPORTANT: First extract amounts from the continuation row before filtering text
+                                # This ensures amounts like "$2,266.83" are captured even if they're on the same line as "DIGITAL"
+                                
+                                # IMPORTANT: Always re-scan words directly for amounts to ensure we capture them
+                                # This is critical because amounts might not be detected in extract_movement_row if they're in continuation rows
+                                cont_amounts = []
+                                konfio_amount_pattern = re.compile(r'\$\s*\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})|\d{1,3}(?:[\.,\s]\d{3})*[\.,]\d{2}')
+                                for word in row_words:
+                                    word_text = word.get('text', '').strip()
+                                    word_x0 = word.get('x0', 0)
+                                    word_x1 = word.get('x1', 0)
+                                    word_center = (word_x0 + word_x1) / 2
+                                    amount_match = konfio_amount_pattern.search(word_text)
+                                    if amount_match:
+                                        cont_amounts.append((amount_match.group(), word_center))
+                                
+                                # Also include amounts from row_data if any (in case they were detected earlier)
+                                existing_amounts = row_data.get('_amounts', [])
+                                if existing_amounts:
+                                    # Merge with cont_amounts, avoiding duplicates
+                                    existing_centers = {center for _, center in cont_amounts}
+                                    for amt_text, center in existing_amounts:
+                                        if center not in existing_centers:
+                                            cont_amounts.append((amt_text, center))
+                                
+                                # Now filter text for description (but amounts are already captured above)
                                 cont_text_parts = []
                                 for word in row_words:
                                     word_text = word.get('text', '').strip()
@@ -3345,8 +3397,7 @@ def main():
                                     else:
                                         prev['descripcion'] = cont_text
                                 
-                                # Also check for amounts in the row
-                                cont_amounts = row_data.get('_amounts', [])
+                                # Assign amounts from continuation row to cargos/abonos
                                 if cont_amounts and columns_config:
                                     # Get column ranges for numeric columns
                                     col_ranges = {}
@@ -3356,7 +3407,7 @@ def main():
                                             col_ranges[col] = (x0, x1)
                                     
                                     # Assign amounts from continuation row
-                                    tolerance = 10
+                                    tolerance = 20  # Increased tolerance for Konfio to capture amounts that might be slightly misaligned
                                     for amt_text, center in cont_amounts:
                                         assigned = False
                                         for col in ('cargos', 'abonos', 'saldo'):
@@ -3371,6 +3422,30 @@ def main():
                                                             prev[col] = amt_text
                                                     assigned = True
                                                     break
+                                        
+                                        # If not assigned by range, use proximity as fallback for Konfio
+                                        if not assigned and bank_config['name'] == 'Konfio':
+                                            # Find the nearest column
+                                            nearest_col = None
+                                            min_distance = float('inf')
+                                            for col in ('cargos', 'abonos', 'saldo'):
+                                                if col in col_ranges:
+                                                    x0, x1 = col_ranges[col]
+                                                    col_center = (x0 + x1) / 2
+                                                    distance = abs(center - col_center)
+                                                    if distance < min_distance:
+                                                        min_distance = distance
+                                                        nearest_col = col
+                                            
+                                            # If amount is reasonably close to a column (within 50 pixels), assign it
+                                            if nearest_col and min_distance < 50:
+                                                existing = prev.get(nearest_col) or ''
+                                                if not existing or amt_text not in existing:
+                                                    if existing:
+                                                        prev[nearest_col] = (existing + ' ' + amt_text).strip()
+                                                    else:
+                                                        prev[nearest_col] = amt_text
+                                                    assigned = True
                                 # Merge amounts list
                                 prev_amounts = prev.get('_amounts', [])
                                 prev['_amounts'] = prev_amounts + row_data.get('_amounts', [])
@@ -3584,10 +3659,27 @@ def main():
             # We'll assign each detected amount to the appropriate numeric column
             # ONLY if it's within the column's coordinate range
             for amt_text, center in amounts:
+                # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
+                if bank_config['name'] == 'Konfio':
+                    desc_val_check = str(r.get('descripcion') or '').strip()
+                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                        print(f"🔍🔍 KONFIO DEBUG - Reasignando montos, monto: '{amt_text}', coordenada X: {center}")
+                        print(f"   Rangos de columnas: cargos={col_ranges.get('cargos')}, abonos={col_ranges.get('abonos')}")
+                
                 # Find which numeric column this amount belongs to based on coordinate range
                 # Use a small tolerance for edge cases (amounts near column boundaries)
-                tolerance = 10
+                # For Konfio, use larger tolerance to capture amounts that might be slightly misaligned
+                # The monto "$2,266.83" has coordinate 410.22, and cargos range is (340, 388)
+                # So we need a tolerance of at least 22 to capture it (410.22 - 388 = 22.22)
+                tolerance = 30 if bank_config['name'] == 'Konfio' else 10
                 assigned = False
+                
+                # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
+                if bank_config['name'] == 'Konfio':
+                    desc_val_check = str(r.get('descripcion') or '').strip()
+                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                        print(f"🔍🔍 KONFIO DEBUG - Reasignando montos, monto: '{amt_text}', coordenada X: {center}, tolerancia: {tolerance}")
+                        print(f"   Rangos de columnas: cargos={col_ranges.get('cargos')}, abonos={col_ranges.get('abonos')}")
                 
                 # First, check if amount is within any numeric column range
                 # This takes priority over description range check
@@ -3595,6 +3687,13 @@ def main():
                     if col in col_ranges:
                         x0, x1 = col_ranges[col]
                         # Check with tolerance to handle amounts slightly outside the range
+                        # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
+                        if bank_config['name'] == 'Konfio':
+                            desc_val_check = str(r.get('descripcion') or '').strip()
+                            if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                                in_range = (x0 - tolerance) <= center <= (x1 + tolerance)
+                                print(f"   Verificando columna {col}: rango ({x0}, {x1}), centro={center:.2f}, dentro del rango? {in_range} (rango efectivo: {x0 - tolerance:.2f} a {x1 + tolerance:.2f})")
+                        
                         if (x0 - tolerance) <= center <= (x1 + tolerance):
                             # Amount is within a numeric column range - assign it regardless of description range
                             # Amount is within this column's range (with tolerance)
@@ -3633,28 +3732,61 @@ def main():
                 # Only exclude from description range if it's NOT in any numeric column range
                 if not assigned and col_centers:
                     # Calculate distances, but only consider columns that are reasonably close
+                    # For Konfio, use larger tolerance to capture amounts that might be slightly misaligned
+                    proximity_check_tolerance = 50 if bank_config['name'] == 'Konfio' else 20
                     valid_cols = {}
                     for col in col_centers.keys():
                         if col in col_ranges:
                             x0, x1 = col_ranges[col]
                             # Only consider if center is reasonably close to the column
-                            if center >= (x0 - 20) and center <= (x1 + 20):
+                            if center >= (x0 - proximity_check_tolerance) and center <= (x1 + proximity_check_tolerance):
                                 valid_cols[col] = abs(center - col_centers[col])
+                                
+                                # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
+                                if bank_config['name'] == 'Konfio':
+                                    desc_val_check = str(r.get('descripcion') or '').strip()
+                                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                                        print(f"   Columna {col} considerada para proximidad: distancia={abs(center - col_centers[col]):.2f}")
                     
                     if valid_cols:
                         nearest = min(valid_cols.keys(), key=lambda c: valid_cols[c])
+                        nearest_distance = valid_cols[nearest]
+                        
+                        # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
+                        if bank_config['name'] == 'Konfio':
+                            desc_val_check = str(r.get('descripcion') or '').strip()
+                            if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                                print(f"   Columna más cercana: {nearest}, distancia: {nearest_distance:.2f}")
+                        
                         # Check if amount is in description range AND not in any numeric column
                         # If it's close to a numeric column, assign it even if it's also in description range
                         in_desc_range = descripcion_range and descripcion_range[0] <= center <= descripcion_range[1]
                         in_num_range = False
+                        # For Konfio, use larger tolerance for proximity check
+                        proximity_tolerance = 50 if bank_config['name'] == 'Konfio' else 20
                         for col in col_ranges.keys():
                             x0, x1 = col_ranges[col]
-                            if (x0 - 20) <= center <= (x1 + 20):
+                            if (x0 - proximity_tolerance) <= center <= (x1 + proximity_tolerance):
                                 in_num_range = True
                                 break
                         
                         # Only skip if in description range AND NOT in any numeric column range
-                        if not in_desc_range or in_num_range:
+                        # For Konfio, be more lenient - if amount is close to a numeric column, assign it
+                        if bank_config['name'] == 'Konfio' and nearest_distance < 50:
+                            # For Konfio, if amount is within 50 pixels of nearest column, assign it
+                            existing = r.get(nearest, '').strip()
+                            if not existing or amt_text not in existing:
+                                if existing:
+                                    r[nearest] = (existing + ' ' + amt_text).strip()
+                                else:
+                                    r[nearest] = amt_text
+                                
+                                # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
+                                desc_val_check = str(r.get('descripcion') or '').strip()
+                                if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                                    print(f"   ✅ Monto '{amt_text}' asignado a {nearest} por proximidad (distancia: {nearest_distance:.2f})")
+                                assigned = True
+                        elif not in_desc_range or in_num_range:
                             existing = r.get(nearest, '').strip()
                             if existing:
                                 # If existing is a valid amount, preserve it
@@ -3670,14 +3802,58 @@ def main():
                                 r[nearest] = amt_text
                                 assigned = True
                                 break
+                        
+                        # For Konfio, if still not assigned and amount is reasonably close, assign it anyway
+                        if not assigned and bank_config['name'] == 'Konfio':
+                            if nearest_distance < 100:  # Within 100 pixels
+                                existing = r.get(nearest, '').strip()
+                                if not existing or amt_text not in existing:
+                                    if existing:
+                                        r[nearest] = (existing + ' ' + amt_text).strip()
+                                    else:
+                                        r[nearest] = amt_text
+                                    
+                                    # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
+                                    desc_val_check = str(r.get('descripcion') or '').strip()
+                                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                                        print(f"   ✅ Monto '{amt_text}' asignado a {nearest} por fallback (distancia: {nearest_distance:.2f})")
+                                    assigned = True
                 
                 # Only skip if amount is in description range AND NOT assigned to any numeric column
                 # This prevents amounts in cargos/abonos/saldo from being skipped
-                if not assigned and descripcion_range:
-                    if descripcion_range[0] <= center <= descripcion_range[1]:
-                        # Amount is in description range and wasn't assigned to any numeric column
-                        # Skip it to avoid assigning description amounts to numeric columns
-                        continue
+                # For Konfio, if amount is not assigned and is close to cargos/abonos columns, assign it anyway
+                if not assigned:
+                    if bank_config['name'] == 'Konfio':
+                        # For Konfio, if amount is reasonably close to cargos or abonos, assign it
+                        # The monto "$2,266.83" has coordinate 410.22, which is close to cargos (340-388)
+                        for col in ('cargos', 'abonos'):
+                            if col in col_ranges:
+                                x0, x1 = col_ranges[col]
+                                col_center = (x0 + x1) / 2
+                                distance = abs(center - col_center)
+                                # If within 50 pixels of column center, assign it
+                                if distance < 50:
+                                    existing = r.get(col, '').strip()
+                                    if not existing or amt_text not in existing:
+                                        if existing:
+                                            r[col] = (existing + ' ' + amt_text).strip()
+                                        else:
+                                            r[col] = amt_text
+                                        
+                                        # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
+                                        desc_val_check = str(r.get('descripcion') or '').strip()
+                                        if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                                            print(f"   ✅ Monto '{amt_text}' asignado a {col} por proximidad (distancia: {distance:.2f})")
+                                        assigned = True
+                                        break
+                        if assigned:
+                            continue
+                    
+                    if descripcion_range:
+                        if descripcion_range[0] <= center <= descripcion_range[1]:
+                            # Amount is in description range and wasn't assigned to any numeric column
+                            # Skip it to avoid assigning description amounts to numeric columns
+                            continue
 
             # Remove amount tokens from descripcion if present
             if r.get('descripcion'):
@@ -3735,7 +3911,30 @@ def main():
 
         # Create df_mov from movement_rows if not already created
         if df_mov is None:
+            # Special debug for "IVA SOBRE COMISIONES E INTERESES" row before creating DataFrame
+            if bank_config['name'] == 'Konfio':
+                for idx, r in enumerate(movement_rows):
+                    desc_val_check = str(r.get('descripcion') or '').strip()
+                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                        print(f"🔍🔍 KONFIO DEBUG - Antes de crear DataFrame, fila {idx}:")
+                        print(f"   Fecha: '{r.get('fecha', '')}'")
+                        print(f"   Descripción: '{desc_val_check}'")
+                        print(f"   Cargos: '{r.get('cargos', '')}'")
+                        print(f"   Abonos: '{r.get('abonos', '')}'")
+                        print(f"   _amounts: {r.get('_amounts', [])}")
             df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
+            
+            # Special debug for "IVA SOBRE COMISIONES E INTERESES" row after creating DataFrame
+            if bank_config['name'] == 'Konfio' and df_mov is not None and len(df_mov) > 0:
+                for idx, row in df_mov.iterrows():
+                    desc_val_check = str(row.get('descripcion', '') or '').strip()
+                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                        print(f"🔍🔍 KONFIO DEBUG - Después de crear DataFrame, fila {idx}:")
+                        print(f"   Fecha: '{row.get('fecha', '')}'")
+                        print(f"   Descripción: '{desc_val_check}'")
+                        print(f"   Cargos: '{row.get('cargos', '')}'")
+                        print(f"   Abonos: '{row.get('abonos', '')}'")
+                        print(f"   Columnas disponibles: {list(df_mov.columns)}")
     else:
         # No coordinate-based extraction available, use raw text extraction
         movement_entries = group_entries_from_lines(movements_lines)
@@ -3992,6 +4191,24 @@ def main():
 
     # Apply description building
     df_mov['Descripcion'] = df_mov.apply(_build_description, axis=1)
+    
+    # Special debug for "IVA SOBRE COMISIONES E INTERESES" row after building description
+    if bank_config['name'] == 'Konfio' and df_mov is not None and len(df_mov) > 0:
+        for idx, row in df_mov.iterrows():
+            desc_val_check = str(row.get('Descripcion', '') or '').strip()
+            if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                print(f"🔍🔍 KONFIO DEBUG - Después de construir Descripcion, fila {idx}:")
+                print(f"   Fecha: '{row.get('Fecha', row.get('fecha', ''))}'")
+                print(f"   Descripción: '{desc_val_check}'")
+                # Check both lowercase and uppercase column names (before and after rename)
+                cargos_val = row.get('Cargos', row.get('cargos', ''))
+                abonos_val = row.get('Abonos', row.get('abonos', ''))
+                print(f"   Cargos: '{cargos_val}'")
+                print(f"   Abonos: '{abonos_val}'")
+                print(f"   Columnas disponibles: {list(df_mov.columns)}")
+                # Also check _amounts if it exists
+                if '_amounts' in row:
+                    print(f"   _amounts: {row.get('_amounts', [])}")
 
     # Drop old columns used to build description
     drop_cols = []
@@ -4000,6 +4217,17 @@ def main():
             drop_cols.append(c)
     if drop_cols:
         df_mov = df_mov.drop(columns=drop_cols)
+
+    # Special debug for "IVA SOBRE COMISIONES E INTERESES" row before rename
+    if bank_config['name'] == 'Konfio' and df_mov is not None and len(df_mov) > 0:
+        for idx, row in df_mov.iterrows():
+            desc_val_check = str(row.get('Descripcion', '') or '').strip()
+            if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                print(f"🔍🔍 KONFIO DEBUG - Antes de renombrar columnas, fila {idx}:")
+                print(f"   Columnas disponibles: {list(df_mov.columns)}")
+                print(f"   cargos: '{row.get('cargos', '')}'")
+                print(f"   abonos: '{row.get('abonos', '')}'")
+                print(f"   _amounts: {row.get('_amounts', [])}")
 
     # Rename columns to match desired format
     column_rename = {}
@@ -4062,7 +4290,24 @@ def main():
             return cleaned if cleaned else ''
         
         if 'Cargos' in df_mov.columns:
+            # Special debug for "IVA SOBRE COMISIONES E INTERESES" row before cleaning
+            for idx, row in df_mov.iterrows():
+                desc_val_check = str(row.get('Descripción', '') or '').strip()
+                if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                    print(f"🔍🔍 KONFIO DEBUG - Antes de limpiar montos, fila {idx}:")
+                    print(f"   Cargos (antes): '{row.get('Cargos', '')}'")
+                    print(f"   Abonos (antes): '{row.get('Abonos', '')}'")
+            
             df_mov['Cargos'] = df_mov['Cargos'].apply(clean_konfio_amounts)
+            
+            # Special debug for "IVA SOBRE COMISIONES E INTERESES" row after cleaning
+            for idx, row in df_mov.iterrows():
+                desc_val_check = str(row.get('Descripción', '') or '').strip()
+                if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                    print(f"🔍🔍 KONFIO DEBUG - Después de limpiar montos, fila {idx}:")
+                    print(f"   Cargos (después): '{row.get('Cargos', '')}'")
+                    print(f"   Abonos (después): '{row.get('Abonos', '')}'")
+        
         if 'Abonos' in df_mov.columns:
             df_mov['Abonos'] = df_mov['Abonos'].apply(clean_konfio_amounts)
 
@@ -4336,6 +4581,17 @@ def main():
             #print("   - Escribiendo pestaña 'Summary'...")
             df_summary.to_excel(writer, sheet_name='Summary', index=False)
             
+            # Special debug for "IVA SOBRE COMISIONES E INTERESES" row before exporting to Excel
+            if bank_config['name'] == 'Konfio' and df_mov is not None and len(df_mov) > 0:
+                for idx, row in df_mov.iterrows():
+                    desc_val_check = str(row.get('Descripcion', '') or '').strip()
+                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper():
+                        print(f"🔍🔍 KONFIO DEBUG - Antes de exportar a Excel, fila {idx}:")
+                        print(f"   Fecha: '{row.get('Fecha', '')}'")
+                        print(f"   Descripción: '{desc_val_check}'")
+                        print(f"   Cargos: '{row.get('Cargos', '')}'")
+                        print(f"   Abonos: '{row.get('Abonos', '')}'")
+                        print(f"   Columnas disponibles: {list(df_mov.columns)}")
             #print("   - Escribiendo pestaña 'Movements'...")
             df_mov.to_excel(writer, sheet_name='Movements', index=False)
             
