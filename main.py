@@ -639,6 +639,68 @@ def convert_ocr_data_to_words_format(ocr_data: dict) -> list:
     return words
 
 
+def fix_ocr_amount_errors(word_text: str, word_x0: float, columns_config: dict, bank_name: str = None) -> str:
+    """
+    Corrige errores comunes del OCR en montos, usando coordenadas X para validar.
+    
+    Errores corregidos:
+    - "$" leído como "3" al inicio de montos (ej: "3728.00" → "$728.00")
+    
+    Args:
+        word_text: Texto de la palabra extraída por OCR
+        word_x0: Coordenada X izquierda de la palabra
+        columns_config: Configuración de columnas del banco (con rangos X)
+        bank_name: Nombre del banco (solo aplica para bancos específicos)
+    
+    Returns:
+        Texto corregido o texto original si no necesita corrección
+    """
+    if not word_text or not columns_config:
+        return word_text
+    
+    # Solo aplicar correcciones para bancos específicos
+    if bank_name != 'HSBC':
+        return word_text
+    
+    # Patrón: número con 2 decimales que empieza con "3" pero no tiene "$"
+    # Ejemplos válidos: "3728.00", "3.78", "3,000.00"
+    # No válidos: "30,000.00" (empieza con 30), "3728" (sin decimales)
+    # El patrón captura cualquier cantidad de dígitos después del "3"
+    amount_pattern = re.compile(r'^3(\d+(?:[,\s]\d{3})*\.\d{2})$')
+    match = amount_pattern.match(word_text.strip())
+    
+    if not match:
+        # Debug: mostrar por qué no coincide
+        if word_text.strip().startswith('3') and '.' in word_text:
+            print(f"    [OCR Fix Debug] Patrón no coincide para '{word_text}' (X={word_x0:.1f})")
+        return word_text
+    
+    # Validación adicional: verificar que esté en rango de columnas de montos
+    # Esto reduce falsos positivos (números que realmente empiezan con "3")
+    cargos_range = columns_config.get('cargos', (0, 0))
+    abonos_range = columns_config.get('abonos', (0, 0))
+    saldo_range = columns_config.get('saldo', (0, 0))
+    
+    # Verificar si la palabra está en alguna columna de montos
+    in_amount_column = (
+        (cargos_range[0] <= word_x0 <= cargos_range[1]) or
+        (abonos_range[0] <= word_x0 <= abonos_range[1]) or
+        (saldo_range[0] <= word_x0 <= saldo_range[1])
+    )
+    
+    if in_amount_column:
+        # Corregir: reemplazar "3" inicial por "$"
+        corrected = f"${match.group(1)}"
+        print(f"    [OCR Fix] Corregido '{word_text}' → '{corrected}' (X={word_x0:.1f})")
+        return corrected
+    else:
+        # Debug: mostrar por qué no se corrigió (no está en columna de montos)
+        print(f"    [OCR Fix Debug] '{word_text}' coincide con patrón pero X={word_x0:.1f} no está en rangos:")
+        print(f"        cargos: {cargos_range}, abonos: {abonos_range}, saldo: {saldo_range}")
+    
+    return word_text
+
+
 def convert_ocr_text_to_words_format(ocr_text: str, page_number: int = 1) -> list:
     """
     [DEPRECATED] Convierte texto OCR a formato de palabras con coordenadas aproximadas.
@@ -3378,6 +3440,16 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
         x1 = word.get('x1', 0)
         center = (x0 + x1) / 2
 
+        # Aplicar corrección de errores OCR (solo para HSBC)
+        if bank_name == 'HSBC' and columns:
+            original_text = text
+            text = fix_ocr_amount_errors(text, x0, columns, bank_name)
+            # Actualizar el texto en el diccionario word para que se use en descripciones
+            if text != original_text:
+                word['text'] = text
+                # Debug: mostrar corrección aplicada
+                print(f"    [OCR Fix Applied] '{original_text}' → '{text}' en extract_movement_row")
+
         # detect amount tokens inside the word
         # For Konfio, only detect amounts that have currency format ($) or decimal format (with .XX or ,XX)
         # This prevents account numbers like "3817" from being detected as amounts
@@ -4201,6 +4273,34 @@ def main():
                 print(f"\n[DEBUG HSBC] ===== FILA {row_idx + 1} =====")
                 print(f"    Texto completo: '{row_text}'")
                 print(f"    Número de palabras: {len(row_words)}")
+                
+                # Mostrar palabras individuales con sus coordenadas (para depuración de OCR)
+                if '3728.00' in row_text or '728.00' in row_text or 'DMX' in row_text:
+                    print(f"    [DEBUG OCR] Palabras individuales de esta fila:")
+                    words_with_dollar = []
+                    for w_idx, word in enumerate(row_words):
+                        word_text = word.get('text', '').strip()
+                        word_x0 = word.get('x0', 0)
+                        word_x1 = word.get('x1', 0)
+                        word_top = word.get('top', 0)
+                        word_conf = word.get('conf', 0)
+                        print(f"        Palabra {w_idx + 1}: '{word_text}' | X:({word_x0:.1f}-{word_x1:.1f}) Y:{word_top:.1f} Conf:{word_conf:.1f}")
+                        if '$' in word_text:
+                            words_with_dollar.append((w_idx + 1, word_text, word_x0, word_conf))
+                    
+                    if words_with_dollar:
+                        print(f"    [DEBUG OCR] Palabras con '$' encontradas: {words_with_dollar}")
+                    else:
+                        print(f"    [DEBUG OCR] ⚠️  NO se encontró '$' en palabras individuales - posible problema de OCR")
+                        # Buscar si hay palabras que empiezan con "3" seguidas de "728.00"
+                        for w_idx, word in enumerate(row_words):
+                            word_text = word.get('text', '').strip()
+                            if word_text == '3' or word_text.startswith('3'):
+                                next_word_idx = w_idx + 1
+                                if next_word_idx < len(row_words):
+                                    next_word_text = row_words[next_word_idx].get('text', '').strip()
+                                    if '728.00' in next_word_text or '728' in next_word_text:
+                                        print(f"    [DEBUG OCR] ⚠️  Posible '$' leído como '3': palabra {w_idx + 1}='{word_text}' seguida de '{next_word_text}'")
                 
                 # Extraer movimiento usando BANK_CONFIGS
                 row_data = extract_movement_row(row_words, columns_config, 'HSBC', date_pattern)
