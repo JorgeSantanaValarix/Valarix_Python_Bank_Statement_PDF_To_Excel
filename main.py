@@ -652,7 +652,16 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
     day_pattern = re.compile(r'^(\d{1,2})\s+')
     
     # Patrón para detectar montos ($X,XXX.XX) - incluye el símbolo $ en el resultado
-    amount_pattern = re.compile(r'(\$\s*[\d,\.]+)')
+    # Mejorado para capturar montos con espacios internos (ej: "$721 588.28" -> "$721,588.28")
+    # Captura montos completos incluyendo espacios internos: $ seguido de dígitos con espacios/comas, y opcionalmente .XX
+    # El patrón captura: "$721 588.28", "$721,588.28", "$ 278,400.00", etc.
+    # Usa un patrón que captura desde $ hasta encontrar un espacio seguido de texto no numérico o fin de línea
+    # Patrón mejorado que captura montos completos con espacios internos
+    # Captura: $ seguido de dígitos con espacios/comas entre grupos, y opcionalmente .XX
+    # El patrón debe capturar "$721 588.28" completo, no solo "$721"
+    # Usa un patrón más flexible que captura desde $ hasta encontrar un espacio seguido de texto no numérico
+    # o hasta el fin de línea, pero incluyendo espacios internos entre dígitos
+    amount_pattern = re.compile(r'(\$\s*\d{1,3}(?:[,\s]\d{3})*(?:\s+\d{3})*(?:\.\d{2})?)')
     
     # Palabras clave para distinguir Retiro vs Depósito
     retiro_keywords = ['retiro', 'cargo', 'debito', 'cajero', 'cheque']
@@ -681,10 +690,60 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
             continue
         
         # Extraer todos los montos en la línea
-        amounts = amount_pattern.findall(line)
+        # Usar un método más robusto que capture montos completos con espacios internos
+        # Buscar todas las posiciones de $ en la línea
+        dollar_positions = [i for i, char in enumerate(line) if char == '$']
+        amounts_raw = []
         
-        if len(amounts) < 1:
+        for pos in dollar_positions:
+            # Capturar desde $ hasta el siguiente $ o hasta espacio seguido de letra (no dígito)
+            remaining = line[pos:]
+            # Buscar el monto completo: desde $ hasta encontrar espacio seguido de letra o siguiente $
+            # Patrón: $ seguido de dígitos, espacios, comas, puntos
+            match = re.match(r'(\$\s*[\d\s,\.]+)', remaining)
+            if match:
+                monto_candidato = match.group(1)
+                # Encontrar dónde termina realmente el monto
+                # Buscar el siguiente $ después del primero
+                next_dollar = remaining.find('$', 1)
+                # Buscar espacio seguido de letra (no dígito)
+                next_letter_space = re.search(r'\s+[A-Za-z]', remaining[1:])
+                
+                if next_dollar != -1 and (next_letter_space is None or next_dollar < next_letter_space.start() + 1):
+                    # El siguiente $ está antes del espacio con letra, cortar ahí
+                    monto_candidato = remaining[:next_dollar].strip()
+                elif next_letter_space:
+                    # Hay un espacio seguido de letra, cortar antes de ese espacio
+                    monto_candidato = remaining[:next_letter_space.start() + 1].strip()
+                else:
+                    # No hay siguiente $ ni espacio con letra, tomar hasta el fin de línea
+                    monto_candidato = remaining.strip()
+                
+                amounts_raw.append(monto_candidato)
+        
+        if len(amounts_raw) < 1:
             continue  # No hay montos, no es un movimiento válido
+        
+        # Limpiar montos: reemplazar espacios internos con comas para formato consistente
+        # Ejemplo: "$721 588.28" -> "$721,588.28" o "$ 278,400.00" -> "$278,400.00"
+        amounts = []
+        for amt in amounts_raw:
+            # Primero, quitar espacios después del $ si los hay
+            cleaned = amt.strip()
+            # Reemplazar espacios entre dígitos con comas
+            # Patrón: buscar dígito seguido de espacio(s) seguido de dígito
+            # Esto convierte "$721 588.28" en "$721,588.28"
+            # Iterar hasta que no haya más espacios entre dígitos
+            while re.search(r'(\d)\s+(\d)', cleaned):
+                cleaned = re.sub(r'(\d)\s+(\d)', r'\1,\2', cleaned)
+            # Eliminar espacios restantes (como el espacio después del $)
+            cleaned = re.sub(r'\s+', '', cleaned)
+            # Asegurar formato correcto: si hay múltiples comas consecutivas, dejar solo una
+            cleaned = re.sub(r',+', ',', cleaned)
+            # Asegurar que después del $ no haya espacio
+            cleaned = re.sub(r'\$\s+', '$', cleaned)
+            amounts.append(cleaned)
+            print(f"    [DEBUG HSBC] Monto limpiado: '{amt}' -> '{cleaned}'")
         
         day = day_match.group(1)
         
@@ -712,6 +771,14 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
             'saldo': ''
         }
         
+        # DEBUG: Mostrar información de la línea procesada
+        print(f"\n[DEBUG HSBC] Fila detectada:")
+        print(f"    Línea completa: {line[:120]}")
+        print(f"    Día extraído: '{day}'")
+        print(f"    Descripción: '{desc_and_ref[:80]}'")
+        print(f"    Montos encontrados ({len(amounts)}): {amounts}")
+        print(f"    Tipo detectado: retiro={is_retiro}, deposito={is_deposito}")
+        
         # Asignar montos según cantidad y tipo
         # En HSBC, la estructura es: Día | Descripción | Referencia | Retiro/Cargo | Depósito/Abono | Saldo
         # Si hay 2 montos: Primero = Retiro/Cargo o Depósito/Abono, Segundo = Saldo
@@ -720,16 +787,20 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
         if len(amounts) == 1:
             # Solo un monto = Saldo (caso raro, pero posible)
             movement['saldo'] = amounts[0].strip()
+            print(f"    Asignación (1 monto): saldo={movement['saldo']}")
         elif len(amounts) == 2:
             # Dos montos: Primero = Retiro/Cargo o Depósito/Abono, Segundo = Saldo
             if is_retiro:
                 movement['cargos'] = amounts[0].strip()
+                print(f"    Asignación (2 montos, retiro): cargos={movement['cargos']}, saldo={amounts[1].strip()}")
             elif is_deposito:
                 movement['abonos'] = amounts[0].strip()
+                print(f"    Asignación (2 montos, deposito): abonos={movement['abonos']}, saldo={amounts[1].strip()}")
             else:
                 # No se puede determinar por descripción, intentar por posición
                 # En HSBC, si solo hay 2 montos, el primero es generalmente Retiro/Cargo
                 movement['cargos'] = amounts[0].strip()
+                print(f"    Asignación (2 montos, sin tipo claro): cargos={movement['cargos']}, saldo={amounts[1].strip()}")
             movement['saldo'] = amounts[1].strip()
         else:
             # Tres o más montos: Primero = Retiro/Cargo, Segundo = Depósito/Abono, Último = Saldo
@@ -738,10 +809,17 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
             if len(amounts) >= 3:
                 movement['abonos'] = amounts[1].strip()  # Segunda columna de monto = Depósito/Abono
             movement['saldo'] = amounts[-1].strip()  # Último siempre es Saldo
+            print(f"    Asignación ({len(amounts)} montos): cargos={movement['cargos']}, abonos={movement.get('abonos', '')}, saldo={movement['saldo']}")
         
         # Validar que el movimiento tiene datos mínimos
         if movement['descripcion'] and (movement['cargos'] or movement['abonos'] or movement['saldo']):
             movements.append(movement)
+            print(f"    ✅ Fila ACEPTADA - Resultado final:")
+            print(f"        fecha='{movement['fecha']}', descripcion='{movement['descripcion'][:60]}'")
+            print(f"        cargos='{movement['cargos']}', abonos='{movement['abonos']}', saldo='{movement['saldo']}'")
+        else:
+            print(f"    ❌ Fila RECHAZADA - Falta descripción o montos")
+            print(f"        descripcion='{movement['descripcion']}', tiene_cargos={bool(movement['cargos'])}, tiene_abonos={bool(movement['abonos'])}, tiene_saldo={bool(movement['saldo'])}")
     
     return movements
 
