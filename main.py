@@ -156,7 +156,7 @@ BANK_CONFIGS = {
 
     "HSBC": {
         "name": "HSBC",
-        "movements_start": "ISR Retenido en el año",  # String que marca el inicio de la sección de movimientos
+        "movements_start": "Día",  # String que marca el inicio de la sección de movimientos (encabezado de la tabla)
         "movements_end": "CoDi",                      # String que marca el fin de la sección de movimientos
         "columns": {
             "fecha": (87, 103),             # Columna Fecha de Operación
@@ -758,10 +758,12 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
 def filter_hsbc_movements_section(pages_data: list, start_string: str, end_string: str) -> list:
     """
     Filtra palabras que están entre start_string y end_string para HSBC.
+    El string de inicio puede estar dividido en múltiples palabras, así que busca todas las palabras
+    que forman el string de inicio.
     
     Args:
         pages_data: Lista de diccionarios con formato [{"page": int, "words": list}, ...]
-        start_string: String que marca el inicio de la sección (ej: "ISR Retenido en el año")
+        start_string: String que marca el inicio de la sección (ej: "DETALLE MOVIMIENTOS HSBC")
         end_string: String que marca el fin de la sección (ej: "CoDi")
     
     Returns:
@@ -770,27 +772,134 @@ def filter_hsbc_movements_section(pages_data: list, start_string: str, end_strin
     filtered_words = []
     in_section = False
     
+    print(f"[DEBUG HSBC filter] ===== FILTRANDO SECCIÓN DE MOVIMIENTOS =====")
+    print(f"    Start string: '{start_string}'")
+    print(f"    End string: '{end_string}'")
+    print(f"    Total de páginas: {len(pages_data)}")
+    
+    total_words_before = sum(len(p.get('words', [])) for p in pages_data)
+    print(f"    Total de palabras antes de filtrar: {total_words_before}")
+    
+    # Normalizar strings para búsqueda (case-insensitive)
+    start_string_normalized = start_string.upper().strip()
+    start_words_list = start_string_normalized.split()
+    end_string_normalized = end_string.upper().strip()
+    
+    print(f"    Buscando inicio: palabras clave = {start_words_list}")
+    print(f"    Buscando fin: '{end_string_normalized}'")
+    
     for page_data in pages_data:
+        page_num = page_data.get('page', 0)
         words = page_data.get('words', [])
         
-        for word in words:
-            word_text = word.get('text', '').strip()
+        print(f"\n    [DEBUG HSBC filter] Procesando página {page_num}: {len(words)} palabras")
+        
+        # Buscar inicio: el string puede estar dividido en múltiples palabras
+        if not in_section:
+            # Construir texto de la página para búsqueda
+            page_text = ' '.join([w.get('text', '').strip() for w in words]).upper()
             
-            # Detectar inicio (búsqueda case-insensitive y parcial)
-            if not in_section:
-                # Buscar si alguna palabra contiene el string de inicio
-                if start_string.lower() in word_text.lower():
-                    in_section = True
-                    continue  # No incluir la palabra de inicio
-            
-            # Detectar fin (búsqueda case-insensitive y parcial)
-            if in_section:
-                if end_string.lower() in word_text.lower():
-                    break  # Detener completamente
-            
-            # Si estamos en la sección, agregar palabra
-            if in_section:
+            # Buscar si el string de inicio está en el texto de la página (puede estar dividido)
+            if start_string_normalized in page_text:
+                in_section = True
+                # Encontrar la posición donde empieza el string
+                start_pos = page_text.find(start_string_normalized)
+                print(f"    ✓ Inicio encontrado en página {page_num} en posición {start_pos}")
+                print(f"        Texto alrededor: '{page_text[max(0, start_pos-30):start_pos+len(start_string_normalized)+30]}'")
+                
+                # Encontrar la primera palabra después del inicio
+                # Contar palabras hasta llegar al inicio
+                word_count = 0
+                current_text = ''
+                start_word_index = None
+                for idx, word in enumerate(words):
+                    word_text = word.get('text', '').strip()
+                    current_text += word_text + ' '
+                    if start_string_normalized in current_text.upper():
+                        # Ya pasamos el inicio, encontrar el índice de la última palabra del inicio
+                        # Buscar cuántas palabras forman el inicio
+                        start_word_index = idx + 1  # Empezar desde la siguiente palabra después del inicio
+                        break
+                
+                # Si encontramos el inicio, procesar las palabras restantes de esta página
+                if start_word_index is not None and start_word_index < len(words):
+                    print(f"        Procesando palabras desde índice {start_word_index} hasta {len(words)-1} de la página {page_num}")
+                    # Procesar palabras desde después del inicio hasta el final de la página
+                    for word in words[start_word_index:]:
+                        word_text = word.get('text', '').strip()
+                        word_text_upper = word_text.upper()
+                        
+                        # Detectar fin (búsqueda case-insensitive y parcial)
+                        if end_string_normalized in word_text_upper:
+                            print(f"    ✓ Fin encontrado en página {page_num}: '{word_text}'")
+                            print(f"        Total de palabras filtradas hasta ahora: {len(filtered_words)}")
+                            # Detener completamente (no procesar más páginas)
+                            return filtered_words
+                        
+                        # Agregar información de página a la palabra si no la tiene
+                        if 'page' not in word:
+                            word['page'] = page_num
+                        
+                        # Agregar palabra a la sección
+                        filtered_words.append(word)
+                    
+                    print(f"    Página {page_num}: {len(words) - start_word_index} palabras agregadas a sección (total acumulado: {len(filtered_words)})")
+                    # Continuar con la siguiente página
+                    continue
+        
+        # Si ya estamos en la sección, procesar todas las palabras de esta página
+        if in_section:
+            for word in words:
+                word_text = word.get('text', '').strip()
+                word_text_upper = word_text.upper()
+                
+                # Detectar fin (búsqueda case-insensitive y parcial)
+                if end_string_normalized in word_text_upper:
+                    print(f"    ✓ Fin encontrado en página {page_num}: '{word_text}'")
+                    print(f"        Total de palabras filtradas hasta ahora: {len(filtered_words)}")
+                    # Detener completamente (no procesar más páginas)
+                    return filtered_words
+                
+                # Agregar información de página a la palabra si no la tiene
+                if 'page' not in word:
+                    word['page'] = page_num
+                
+                # Agregar palabra a la sección
                 filtered_words.append(word)
+            
+            print(f"    Página {page_num}: {len(words)} palabras agregadas a sección (total acumulado: {len(filtered_words)})")
+        else:
+            # Buscar inicio palabra por palabra (método alternativo si el método anterior no funcionó)
+            # Construir texto acumulativo de palabras consecutivas
+            for i in range(len(words) - len(start_words_list) + 1):
+                # Tomar un grupo de palabras consecutivas del tamaño del string de inicio
+                consecutive_words = words[i:i+len(start_words_list)]
+                consecutive_text = ' '.join([w.get('text', '').strip() for w in consecutive_words]).upper()
+                
+                # Verificar si este grupo de palabras coincide con el string de inicio
+                if consecutive_text == start_string_normalized or start_string_normalized in consecutive_text:
+                    in_section = True
+                    print(f"    ✓ Inicio encontrado en página {page_num} (método alternativo)")
+                    print(f"        Palabras encontradas: {[w.get('text', '') for w in consecutive_words]}")
+                    print(f"        Texto combinado: '{consecutive_text}'")
+                    # Continuar desde la siguiente palabra después del inicio
+                    break
+    
+    print(f"\n    [DEBUG HSBC filter] ===== RESUMEN FILTRADO =====")
+    print(f"    Total de palabras después de filtrar: {len(filtered_words)}")
+    print(f"    Palabras filtradas: {len(filtered_words)} de {total_words_before} ({len(filtered_words)/total_words_before*100:.1f}%)")
+    
+    if len(filtered_words) == 0:
+        print(f"    ⚠️  ADVERTENCIA: No se encontraron palabras en la sección de movimientos")
+        print(f"    Posibles causas:")
+        print(f"        - El string de inicio '{start_string}' no se encontró en ninguna página")
+        print(f"        - El string de fin '{end_string}' se encontró antes del inicio")
+        print(f"        - Las palabras no tienen el formato esperado")
+        print(f"    Sugerencia: Verificar que el string de inicio aparezca en el PDF")
+    
+    if in_section and len(filtered_words) == 0:
+        print(f"    ⚠️  ADVERTENCIA: Se encontró el inicio pero no se agregaron palabras")
+        print(f"    Posible causa: El fin se encontró inmediatamente después del inicio")
     
     return filtered_words
 
@@ -2959,27 +3068,33 @@ def group_words_by_row(words, y_tolerance=5):
     if not words:
         return []
     
-    # Sort by top coordinate
-    sorted_words = sorted(words, key=lambda w: w.get('top', 0))
+    # Sort by page first (if available), then by top coordinate
+    # This ensures words from page 1 come before words from page 2, etc.
+    sorted_words = sorted(words, key=lambda w: (w.get('page', 0), w.get('top', 0)))
     
     rows = []
     current_row = []
     current_y = None
+    current_page = None
     
     for word in sorted_words:
         word_y = word.get('top', 0)
+        word_page = word.get('page', 0)
+        
         if current_y is None:
             current_y = word_y
+            current_page = word_page
         
-        # If word is within y_tolerance of current row, add it
-        if abs(word_y - current_y) <= y_tolerance:
+        # If word is on the same page and within y_tolerance of current row, add it
+        if word_page == current_page and abs(word_y - current_y) <= y_tolerance:
             current_row.append(word)
         else:
-            # Start a new row
+            # Start a new row (either new page or different Y position)
             if current_row:
                 rows.append(current_row)
             current_row = [word]
             current_y = word_y
+            current_page = word_page
     
     # Don't forget the last row
     if current_row:
@@ -3101,6 +3216,31 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
     
     # Sort words by X coordinate within the row
     sorted_words = sorted(words, key=lambda w: w.get('x0', 0))
+    
+    # For HSBC, first try to extract date from fecha column range
+    if bank_name == 'HSBC' and 'fecha' in columns:
+        fecha_x0, fecha_x1 = columns['fecha']
+        # Collect all words that are in the fecha column range
+        fecha_words = []
+        for word in sorted_words:
+            x0 = word.get('x0', 0)
+            x1 = word.get('x1', 0)
+            center = (x0 + x1) / 2
+            if fecha_x0 <= center <= fecha_x1:
+                fecha_words.append(word)
+        
+        if len(fecha_words) > 0:
+            # Get all text from fecha words, preserving order
+            fecha_texts = [w.get('text', '').strip() for w in fecha_words]
+            fecha_text = ' '.join(fecha_texts)
+            
+            # For HSBC, date is only 2 digits (01-31)
+            hsbc_date_match = date_pattern.search(fecha_text)
+            if hsbc_date_match:
+                date_text = hsbc_date_match.group(1)  # Just the 2 digits (01-31)
+                row_data['fecha'] = date_text
+                # Remove these words from sorted_words so they're not processed again
+                sorted_words = [w for w in sorted_words if w not in fecha_words]
     
     # For Konfio, first try to reconstruct dates that might be split across multiple words
     # Konfio dates can be split like "31" and "mar 2023" in separate words
@@ -3258,8 +3398,31 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
         if date_match and 'fecha' in columns and 'descripcion' in columns:
             date_text = date_match.group()
             date_end_pos = date_match.end()
+            # For HSBC, ensure we split the 2-digit date from the rest of the text
+            if bank_name == 'HSBC':
+                # The date should be exactly 2 digits (01-31) at the start
+                # Extract the 2 digits and everything after as description
+                hsbc_date_match = re.match(r'^(0[1-9]|[12][0-9]|3[01])(\s+.*)?', text)
+                if hsbc_date_match:
+                    date_text = hsbc_date_match.group(1)  # Just the 2 digits (01-31)
+                    description_text = hsbc_date_match.group(2)  # Everything after (with leading space)
+                    if description_text:
+                        description_text = description_text.strip()  # Remove leading space
+                    else:
+                        description_text = ''
+                    
+                    # Assign date to fecha column (only if not already assigned)
+                    if not row_data.get('fecha'):
+                        row_data['fecha'] = date_text
+                    
+                    # Assign description to descripcion column
+                    if description_text:
+                        if row_data['descripcion']:
+                            row_data['descripcion'] += ' ' + description_text
+                        else:
+                            row_data['descripcion'] = description_text
             # For Banregio, ensure we split the 2-digit date from the rest of the text
-            if bank_name == 'Banregio':
+            elif bank_name == 'Banregio':
                 # The date should be exactly 2 digits (01-31) at the start
                 # Extract the 2 digits and everything after as description
                 banregio_date_match = re.match(r'^(0[1-9]|[12][0-9]|3[01])(\s+.*)?', text)
@@ -4015,23 +4178,61 @@ def main():
         # Filtrar palabras en la sección de movimientos
         filtered_words = filter_hsbc_movements_section(extracted_data, start_string, end_string)
         
-        # Agrupar palabras por filas (igual que otros bancos)
-        word_rows = group_words_by_row(filtered_words, y_tolerance=3)
-        
-        # Patrón de fecha para HSBC (solo día: 01-31)
-        date_pattern = re.compile(r"^(0[1-9]|[12][0-9]|3[01])(?=\s|$)")
-        
-        # Extraer movimientos usando la misma lógica que otros bancos
-        for row_words in word_rows:
-            if not row_words:
-                continue
+        if not filtered_words:
+            df_mov = pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
+        else:
+            # Agrupar palabras por filas (igual que otros bancos)
+            word_rows = group_words_by_row(filtered_words, y_tolerance=3)
             
-            # Extraer movimiento usando BANK_CONFIGS
-            row_data = extract_movement_row(row_words, columns_config, 'HSBC', date_pattern)
+            print(f"[DEBUG HSBC] ===== PROCESANDO FILAS DESPUÉS DE DETECTAR INICIO =====")
+            print(f"    Total de filas agrupadas: {len(word_rows)}")
             
-            # Validar si es una transacción válida
-            if is_transaction_row(row_data, 'HSBC'):
-                movement_rows.append(row_data)
+            # Patrón de fecha para HSBC (solo día: 01-31)
+            date_pattern = re.compile(r"^(0[1-9]|[12][0-9]|3[01])(?=\s|$)")
+            
+            # Extraer movimientos usando la misma lógica que otros bancos
+            for row_idx, row_words in enumerate(word_rows):
+                if not row_words:
+                    continue
+                
+                # Construir texto completo de la fila
+                row_text = ' '.join([w.get('text', '').strip() for w in row_words])
+                
+                print(f"\n[DEBUG HSBC] ===== FILA {row_idx + 1} =====")
+                print(f"    Texto completo: '{row_text}'")
+                print(f"    Número de palabras: {len(row_words)}")
+                
+                # Extraer movimiento usando BANK_CONFIGS
+                row_data = extract_movement_row(row_words, columns_config, 'HSBC', date_pattern)
+                
+                # Mostrar datos extraídos
+                print(f"    Datos extraídos:")
+                print(f"        fecha: '{row_data.get('fecha', '')}'")
+                print(f"        descripcion: '{row_data.get('descripcion', '')[:80]}'")
+                print(f"        cargos: '{row_data.get('cargos', '')}'")
+                print(f"        abonos: '{row_data.get('abonos', '')}'")
+                print(f"        saldo: '{row_data.get('saldo', '')}'")
+                
+                # Validar si es una transacción válida
+                is_valid = is_transaction_row(row_data, 'HSBC')
+                print(f"    ¿Es fila válida? {is_valid}")
+                
+                if is_valid:
+                    movement_rows.append(row_data)
+                    print(f"    ✅ FILA {row_idx + 1} ACEPTADA - Agregada a movimientos")
+                else:
+                    print(f"    ❌ FILA {row_idx + 1} RECHAZADA - No cumple requisitos")
+                    fecha = (row_data.get('fecha') or '').strip()
+                    cargos = (row_data.get('cargos') or '').strip()
+                    abonos = (row_data.get('abonos') or '').strip()
+                    saldo = (row_data.get('saldo') or '').strip()
+                    has_date = bool(fecha)
+                    has_amount = bool(cargos or abonos or saldo)
+                    print(f"        Razón: has_date={has_date}, has_amount={has_amount}")
+            
+            print(f"\n[DEBUG HSBC] ===== RESUMEN FINAL =====")
+            print(f"    Total de filas procesadas: {len(word_rows)}")
+            print(f"    Total de movimientos extraídos: {len(movement_rows)}")
         
         df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
         
