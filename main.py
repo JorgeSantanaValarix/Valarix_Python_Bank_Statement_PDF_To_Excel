@@ -749,6 +749,126 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
     return movements
 
 
+def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
+    """
+    Extrae información de resumen de HSBC desde el texto OCR de la página 1.
+    
+    Busca:
+    - Total Abonos: "Depósitos/Abonos $X,XXX.XX"
+    - Total Cargos: "Retiros/Cargos $X,XXX.XX"
+    - Saldo Final: "Saldo Final del Periodo $X,XXX.XX"
+    
+    Args:
+        pages_data: Lista de diccionarios con formato [{"page": int, "content": str, "words": list}, ...]
+    
+    Returns:
+        Diccionario con información de resumen: {
+            'total_abonos': str o None,
+            'total_cargos': str o None,
+            'saldo_final': str o None,
+            'total_depositos': str o None,
+            'total_retiros': str o None
+        }
+    """
+    summary_data = {
+        'total_depositos': None,
+        'total_retiros': None,
+        'total_cargos': None,
+        'total_abonos': None,
+        'saldo_final': None,
+        'total_movimientos': None,
+        'saldo_anterior': None
+    }
+    
+    # Obtener texto de la página 1 (índice 0)
+    if not pages_data or len(pages_data) == 0:
+        return summary_data
+    
+    page_1_data = pages_data[0]  # Primera página
+    page_1_text = page_1_data.get('content', '')
+    
+    if not page_1_text:
+        return summary_data
+    
+    lines = page_1_text.split('\n')
+    
+    print(f"[DEBUG HSBC] Buscando resumen en {len(lines)} líneas de la página 1...")
+    
+    # Patrones más flexibles para buscar los valores (permitir espacios variables, $ opcional, y caracteres especiales)
+    # Buscar "Depósitos" seguido de "!" o "/Abonos" y luego $ y monto
+    # Ejemplo real: "Depósitos! $ 308,422.54"
+    # El patrón debe buscar "Depósitos" seguido de "!" o ">" y luego el monto
+    depositos_pattern = re.compile(r'Dep[oó]sitos?\s*[!>]\s*\$?\s*([\d,\.]+)', re.IGNORECASE)
+    
+    # Buscar "Retiros/Cargos" seguido de $ y monto
+    retiros_pattern = re.compile(r'Retiros?/Cargos?\s*\$?\s*([\d,\.]+)', re.IGNORECASE)
+    
+    # Buscar "Saldo Final del" (con o sin "Periodo") seguido de $ y monto
+    # Ejemplo real: "Saldo Final del $ 671,749.84"
+    # El patrón debe permitir texto antes de "Saldo Final del"
+    saldo_final_pattern = re.compile(r'Saldo\s+Final\s+del\s+(?:Periodo\s+)?\$?\s*([\d,\.]+)', re.IGNORECASE)
+    
+    # También buscar variaciones de "Saldo Final" sin "del" (más flexible, permite texto antes)
+    saldo_final_pattern2 = re.compile(r'Saldo\s+Final\s+del\s*\$?\s*([\d,\.]+)', re.IGNORECASE)
+    
+    for i, line in enumerate(lines):
+        line = line.strip()
+        
+        # Debug: mostrar líneas que contienen palabras clave relevantes
+        line_lower = line.lower()
+        if any(keyword in line_lower for keyword in ['depósitos', 'depositos', 'abonos', 'retiros', 'cargos', 'saldo final']):
+            print(f"[DEBUG HSBC] Línea {i+1} relevante: {line[:100]}")
+        
+        # Buscar Depósitos/Abonos - buscar "Depósitos" seguido de "!" o ">" y luego monto
+        # Ejemplo: "Depósitos! $ 308,422.54"
+        if not summary_data['total_abonos']:
+            match = depositos_pattern.search(line)
+            if match:
+                amount_str = match.group(1)
+                # Convertir a número usando normalize_amount_str (igual que extract_summary_from_pdf)
+                amount = normalize_amount_str(amount_str)
+                if amount > 0:
+                    summary_data['total_abonos'] = amount
+                    summary_data['total_depositos'] = amount
+                    print(f"[DEBUG HSBC] ✓ Total Abonos encontrado en línea {i+1}: ${amount:,.2f} (texto: {line[:80]})")
+        
+        # Buscar Retiros/Cargos
+        if not summary_data['total_cargos']:
+            match = retiros_pattern.search(line)
+            if match:
+                amount_str = match.group(1)
+                # Convertir a número usando normalize_amount_str (igual que extract_summary_from_pdf)
+                amount = normalize_amount_str(amount_str)
+                if amount > 0:
+                    summary_data['total_cargos'] = amount
+                    summary_data['total_retiros'] = amount
+                    print(f"[DEBUG HSBC] ✓ Total Cargos encontrado en línea {i+1}: ${amount:,.2f} (texto: {line[:80]})")
+        
+        # Buscar Saldo Final del Periodo (patrón completo)
+        if not summary_data['saldo_final']:
+            match = saldo_final_pattern.search(line)
+            if not match:
+                # Intentar patrón alternativo: "Saldo Final del" sin "Periodo"
+                match = saldo_final_pattern2.search(line)
+            if match:
+                amount_str = match.group(1)
+                # Convertir a número usando normalize_amount_str (igual que extract_summary_from_pdf)
+                amount = normalize_amount_str(amount_str)
+                if amount > 0:
+                    summary_data['saldo_final'] = amount
+                    print(f"[DEBUG HSBC] ✓ Saldo Final encontrado en línea {i+1}: ${amount:,.2f} (texto: {line[:80]})")
+    
+    # Si no se encontraron todos los valores, mostrar advertencia
+    if not summary_data['total_abonos']:
+        print(f"[DEBUG HSBC] ⚠️ No se encontró Total Abonos")
+    if not summary_data['total_cargos']:
+        print(f"[DEBUG HSBC] ⚠️ No se encontró Total Cargos")
+    if not summary_data['saldo_final']:
+        print(f"[DEBUG HSBC] ⚠️ No se encontró Saldo Final")
+    
+    return summary_data
+
+
 def extract_summary_from_pdf(pdf_path: str) -> dict:
     """
     Extract summary information from PDF (totals, deposits, withdrawals, balance, movement count).
@@ -3258,6 +3378,7 @@ def main():
     # For all banks including Konfio, use coordinate-based extraction
     movement_rows = []
     df_mov = None  # Initialize to avoid UnboundLocalError
+    pdf_summary = None  # Initialize to avoid UnboundLocalError
     
     # Si es HSBC y se usó OCR, usar extracción con regex/patrones (saltar procesamiento con coordenadas)
     if is_hsbc and used_ocr:
@@ -3268,6 +3389,10 @@ def main():
         print(f"[DEBUG HSBC] Columnas iniciales: {list(df_mov.columns)}")
         if len(df_mov) > 0:
             print(f"[DEBUG HSBC] Primera fila muestra: {df_mov.iloc[0].to_dict()}")
+        
+        # Extraer resumen desde texto OCR de la página 1
+        print("[INFO] Extrayendo resumen de HSBC desde texto OCR...")
+        pdf_summary = extract_hsbc_summary_from_ocr_text(extracted_data)
     else:
         # Flujo normal: procesar con coordenadas o texto plano
         # regex to detect decimal-like amounts (used to strip amounts from descriptions and detect amounts)
@@ -4867,7 +4992,11 @@ def main():
     # Extract summary from PDF and calculate totals for validation
     # IMPORTANT: Calculate totals AFTER removing DIGITEM rows and BEFORE adding the "Total" row
     #print("🔍 Extrayendo información de resumen del PDF para validación...")
-    pdf_summary = extract_summary_from_pdf(pdf_path)
+    # Para HSBC con OCR, el resumen ya fue extraído desde el texto OCR arriba
+    # Para otros casos, extraer desde PDF
+    if not (is_hsbc and used_ocr):
+        pdf_summary = extract_summary_from_pdf(pdf_path)
+    # Si es HSBC con OCR, pdf_summary ya fue extraído arriba en extract_hsbc_summary_from_ocr_text
     extracted_totals = calculate_extracted_totals(df_mov, bank_config['name'])
     
     # Add a "Total" row at the end summing only "Abonos" and "Cargos" columns
