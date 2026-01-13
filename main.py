@@ -4,10 +4,46 @@ import re
 import pdfplumber
 import pandas as pd
 
+# NUEVOS IMPORTS para Tesseract OCR (mínimos):
+try:
+    import pytesseract
+    import fitz  # PyMuPDF - para convertir PDF a imágenes
+    from PIL import Image
+    TESSERACT_AVAILABLE = True
+except ImportError:
+    TESSERACT_AVAILABLE = False
+    print("[ADVERTENCIA] Tesseract OCR no disponible. Instala: pip install pytesseract pymupdf pillow")
+
 
 # Bank configurations with column coordinate ranges (X-axis)
 # Use find_coordinates.py to get the exact ranges for your PDF
 # python find_coordinates.py <pdf_path> <page_number>
+
+def configure_tesseract():
+    """
+    Configura la ruta a Tesseract OCR si no está en PATH.
+    Detecta automáticamente la ubicación común en Windows.
+    """
+    if not TESSERACT_AVAILABLE:
+        return False
+    
+    default_paths = [
+        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+    ]
+    
+    for path in default_paths:
+        if os.path.exists(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            return True
+    
+    # Si no se encuentra, intentar usar el que está en PATH
+    try:
+        pytesseract.get_tesseract_version()
+        return True
+    except:
+        return False
+
 BANK_CONFIGS = {
     "BBVA": {
         "name": "BBVA",
@@ -358,6 +394,40 @@ def find_column_coordinates(pdf_path: str, page_number: int = 1):
         print(f"❌ Error: {e}")
 
 
+def detect_bank_from_text(text: str) -> str:
+    """
+    Detect the bank from extracted text content.
+    Returns the bank name if detected, otherwise returns DEFAULT_BANK.
+    """
+    if not text:
+        return DEFAULT_BANK
+    
+    # Split into lines and check each line
+    lines = text.split('\n')
+    for line in lines:
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+        
+        # Check each bank's keywords
+        for bank_name, keywords in BANK_KEYWORDS.items():
+            for keyword_pattern in keywords:
+                if re.search(keyword_pattern, line_clean, re.I):
+                    print(f"🏦 Banco detectado: {bank_name}")
+                    return bank_name
+        
+        # Also check if line contains bank name directly (case insensitive)
+        line_upper = line_clean.upper()
+        for bank_name in BANK_KEYWORDS.keys():
+            # Check for exact bank name match (as whole word)
+            if re.search(rf'\b{re.escape(bank_name.upper())}\b', line_upper):
+                print(f"🏦 Banco detectado: {bank_name}")
+                return bank_name
+    
+    # If no bank detected, return default
+    return DEFAULT_BANK
+
+
 def detect_bank_from_pdf(pdf_path: str) -> str:
     """
     Detect the bank from PDF content by reading line by line.
@@ -368,34 +438,15 @@ def detect_bank_from_pdf(pdf_path: str) -> str:
             # Read first few pages (usually bank name appears early)
             max_pages_to_check = min(3, len(pdf.pages))
             
+            all_text = ""
             for page_num in range(max_pages_to_check):
                 page = pdf.pages[page_num]
                 text = page.extract_text()
-                
-                if not text:
-                    continue
-                
-                # Split into lines and check each line
-                lines = text.split('\n')
-                for line in lines:
-                    line_clean = line.strip()
-                    if not line_clean:
-                        continue
-                    
-                    # Check each bank's keywords
-                    for bank_name, keywords in BANK_KEYWORDS.items():
-                        for keyword_pattern in keywords:
-                            if re.search(keyword_pattern, line_clean, re.I):
-                                print(f"🏦 Banco detectado: {bank_name}")
-                                return bank_name
-                    
-                    # Also check if line contains bank name directly (case insensitive)
-                    line_upper = line_clean.upper()
-                    for bank_name in BANK_KEYWORDS.keys():
-                        # Check for exact bank name match (as whole word)
-                        if re.search(rf'\b{re.escape(bank_name.upper())}\b', line_upper):
-                            print(f"🏦 Banco detectado: {bank_name}")
-                            return bank_name
+                if text:
+                    all_text += text + "\n"
+            
+            if all_text:
+                return detect_bank_from_text(all_text)
     
     except Exception as e:
         pass
@@ -404,6 +455,298 @@ def detect_bank_from_pdf(pdf_path: str) -> str:
     # If no bank detected, return default
     #print(f"⚠️  No se pudo detectar el banco, usando: {DEFAULT_BANK}")
     return DEFAULT_BANK
+
+
+def is_pdf_text_illegible(pdf_path: str, cid_threshold: float = 0.05) -> tuple:
+    """
+    Detecta si un PDF tiene texto ilegible (caracteres CID).
+    
+    Args:
+        pdf_path: Ruta al archivo PDF
+        cid_threshold: Ratio mínimo de caracteres CID para considerar ilegible (default: 5%)
+    
+    Returns:
+        Tuple: (is_illegible: bool, cid_ratio: float, ascii_ratio: float)
+    """
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            if len(pdf.pages) == 0:
+                return False, 0.0, 0.0
+            
+            # Analizar primera página (suficiente para detectar problema)
+            first_page = pdf.pages[0]
+            text = first_page.extract_text() or ""
+            
+            if not text or len(text) < 50:
+                # Si no hay texto o es muy corto, puede ser ilegible
+                return True, 1.0, 0.0
+            
+            # Contar caracteres CID
+            cid_count = text.count('(cid:')
+            total_chars = len(text)
+            cid_ratio = cid_count / total_chars if total_chars > 0 else 0.0
+            
+            # Contar caracteres ASCII
+            ascii_count = sum(1 for c in text if ord(c) < 128)
+            ascii_ratio = ascii_count / total_chars if total_chars > 0 else 0.0
+            
+            # Considerar ilegible si:
+            # - Ratio CID > threshold, O
+            # - Ratio ASCII < 0.7 (menos del 70% es ASCII)
+            is_illegible = (cid_ratio > cid_threshold) or (ascii_ratio < 0.7)
+            
+            return is_illegible, cid_ratio, ascii_ratio
+            
+    except Exception as e:
+        # Si hay error leyendo con pdfplumber, asumir que puede ser ilegible
+        print(f"[ADVERTENCIA] Error analizando PDF: {e}")
+        return True, 1.0, 0.0
+
+
+def convert_ocr_text_to_words_format(ocr_text: str, page_number: int = 1) -> list:
+    """
+    Convierte texto OCR a formato de palabras con coordenadas aproximadas.
+    Compatible con el formato esperado por el resto del código.
+    
+    Args:
+        ocr_text: Texto extraído por OCR
+        page_number: Número de página
+    
+    Returns:
+        Lista de diccionarios con formato: 
+        [{'text': str, 'x0': float, 'top': float, 'x1': float, 'bottom': float}, ...]
+    """
+    words = []
+    lines = ocr_text.split('\n')
+    
+    y_pos = 100  # Posición Y inicial
+    
+    for line in lines:
+        if not line.strip():
+            y_pos += 20  # Espacio entre líneas
+            continue
+        
+        # Dividir línea en palabras
+        line_words = line.split()
+        x_pos = 50  # Posición X inicial
+        
+        for word_text in line_words:
+            if word_text.strip():
+                # Aproximación de ancho basado en longitud del texto
+                word_width = len(word_text) * 8
+                
+                words.append({
+                    'text': word_text,
+                    'x0': x_pos,
+                    'top': y_pos,
+                    'x1': x_pos + word_width,
+                    'bottom': y_pos + 15
+                })
+                
+                x_pos += word_width + 10  # Espacio entre palabras
+        
+        y_pos += 25  # Altura de línea
+    
+    return words
+
+
+def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> list:
+    """
+    Extrae texto de PDF usando Tesseract OCR local.
+    100% privado - no envía datos a servidores externos.
+    Usa PyMuPDF para convertir PDF a imágenes (no requiere Poppler).
+    
+    Args:
+        pdf_path: Ruta al archivo PDF
+        lang: Idioma para OCR (default: 'spa+eng' para español+inglés)
+    
+    Returns:
+        Lista de diccionarios con formato: [{"page": int, "content": str, "words": list}, ...]
+        Compatible con el formato de retorno de extract_text_from_pdf.
+    
+    Raises:
+        Exception: Si Tesseract no está disponible o hay error
+    """
+    if not TESSERACT_AVAILABLE:
+        raise Exception("Tesseract OCR no está disponible. Instala: pip install pytesseract pymupdf pillow")
+    
+    # Configurar Tesseract si es necesario
+    if not configure_tesseract():
+        raise Exception("Tesseract OCR no encontrado. Instala Tesseract desde: https://github.com/UB-Mannheim/tesseract/wiki")
+    
+    print("[INFO] Extrayendo texto con Tesseract OCR local (100% privado)...")
+    
+    extracted_data = []
+    
+    try:
+        # Usar PyMuPDF para convertir PDF a imágenes (no requiere Poppler)
+        doc = fitz.open(pdf_path)
+        
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            print(f"[INFO] Procesando página {page_num + 1}/{len(doc)} con OCR...")
+            
+            # Convertir página a imagen (alta resolución)
+            mat = fitz.Matrix(2.0, 2.0)  # Zoom 2x para mejor calidad OCR
+            pix = page.get_pixmap(matrix=mat)
+            img_data = pix.tobytes("png")
+            
+            # Convertir a PIL Image
+            from io import BytesIO
+            img = Image.open(BytesIO(img_data))
+            
+            # Hacer OCR
+            text = pytesseract.image_to_string(img, lang=lang)
+            
+            # Convertir texto a formato de palabras (aproximado)
+            words = convert_ocr_text_to_words_format(text, page_num + 1)
+            
+            extracted_data.append({
+                "page": page_num + 1,
+                "content": text,
+                "words": words
+            })
+        
+        doc.close()
+        
+        print(f"[OK] OCR completado. Páginas procesadas: {len(extracted_data)}")
+        return extracted_data
+        
+    except Exception as e:
+        raise Exception(f"Error en Tesseract OCR: {e}")
+
+
+def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
+    """
+    Extrae movimientos de HSBC del texto OCR usando regex/patrones.
+    Maneja correctamente: Día | Descripción | Referencia/Serial | Retiro/Cargo | Depósito/Abono | Saldo
+    
+    IMPORTANTE: Solo extrae información después de "ISR Retenido en el año" y antes de "CoDi"
+    
+    Args:
+        pages_data: Lista de diccionarios con formato [{"page": int, "content": str, "words": list}, ...]
+    
+    Returns:
+        Lista de diccionarios con movimientos: [{"fecha": str, "descripcion": str, "cargos": str, "abonos": str, "saldo": str}, ...]
+        - fecha: Solo el día (ej: "03", "13")
+        - descripcion: Descripción completa del movimiento
+        - cargos: Monto si es retiro/cargo (ej: "$9,500.00") o vacío
+        - abonos: Monto si es depósito/abono (ej: "$278,400.00") o vacío
+        - saldo: Saldo después del movimiento (ej: "$466,722.66")
+    """
+    movements = []
+    all_text = '\n'.join([p.get('content', '') for p in pages_data])
+    lines = all_text.split('\n')
+    
+    # Buscar sección de movimientos después de "ISR Retenido en el año" y antes de "CoDi"
+    in_movements_section = False
+    start_found = False
+    
+    # Patrón para detectar inicio de sección de movimientos
+    start_pattern = re.compile(r'ISR\s+Retenido\s+en\s+el\s+a[ñn]o', re.IGNORECASE)
+    
+    # Patrón para detectar fin de sección de movimientos
+    end_pattern = re.compile(r'\bCoDi\b', re.IGNORECASE)
+    
+    # Patrón para detectar día al inicio de línea (01-31)
+    day_pattern = re.compile(r'^(\d{1,2})\s+')
+    
+    # Patrón para detectar montos ($X,XXX.XX) - incluye el símbolo $ en el resultado
+    amount_pattern = re.compile(r'(\$\s*[\d,\.]+)')
+    
+    # Palabras clave para distinguir Retiro vs Depósito
+    retiro_keywords = ['retiro', 'cargo', 'debito', 'cajero', 'cheque']
+    deposito_keywords = ['deposito', 'abono', 'credito', 'transferencia', 'transf', 'pago', 'rec']
+    
+    for line in lines:
+        line = line.strip()
+        
+        # Detectar inicio de sección de movimientos
+        if not start_found:
+            if start_pattern.search(line):
+                start_found = True
+                in_movements_section = True
+                print(f"[INFO] Inicio de sección de movimientos HSBC encontrado: ISR Retenido en el año")
+                continue
+        
+        # Detectar fin de sección de movimientos
+        if in_movements_section and end_pattern.search(line):
+            print(f"[INFO] Fin de sección de movimientos HSBC encontrado: CoDi")
+            break  # Detener completamente la extracción
+        
+        if not in_movements_section:
+            continue
+        
+        # Buscar línea que empieza con día (01-31)
+        day_match = day_pattern.match(line)
+        if not day_match:
+            continue
+        
+        # Extraer todos los montos en la línea
+        amounts = amount_pattern.findall(line)
+        
+        if len(amounts) < 1:
+            continue  # No hay montos, no es un movimiento válido
+        
+        day = day_match.group(1)
+        
+        # Extraer descripción y referencia (todo hasta el primer $)
+        first_dollar = line.find('$')
+        if first_dollar == -1:
+            continue
+        
+        desc_and_ref = line[day_match.end():first_dollar].strip()
+        
+        # Limpiar descripción (normalizar espacios)
+        desc_and_ref = re.sub(r'\s+', ' ', desc_and_ref)
+        
+        # Determinar si es Retiro o Depósito basado en descripción
+        desc_lower = desc_and_ref.lower()
+        is_retiro = any(keyword in desc_lower for keyword in retiro_keywords)
+        is_deposito = any(keyword in desc_lower for keyword in deposito_keywords)
+        
+        # Construir movimiento - fecha es solo el día (ej: "03", "13")
+        movement = {
+            'fecha': day,  # Solo el día, sin mes/año
+            'descripcion': desc_and_ref,
+            'cargos': '',
+            'abonos': '',
+            'saldo': ''
+        }
+        
+        # Asignar montos según cantidad y tipo
+        # En HSBC, la estructura es: Día | Descripción | Referencia | Retiro/Cargo | Depósito/Abono | Saldo
+        # Si hay 2 montos: Primero = Retiro/Cargo o Depósito/Abono, Segundo = Saldo
+        # Si hay 3 montos: Primero = Retiro/Cargo, Segundo = Depósito/Abono, Tercero = Saldo
+        
+        if len(amounts) == 1:
+            # Solo un monto = Saldo (caso raro, pero posible)
+            movement['saldo'] = amounts[0].strip()
+        elif len(amounts) == 2:
+            # Dos montos: Primero = Retiro/Cargo o Depósito/Abono, Segundo = Saldo
+            if is_retiro:
+                movement['cargos'] = amounts[0].strip()
+            elif is_deposito:
+                movement['abonos'] = amounts[0].strip()
+            else:
+                # No se puede determinar por descripción, intentar por posición
+                # En HSBC, si solo hay 2 montos, el primero es generalmente Retiro/Cargo
+                movement['cargos'] = amounts[0].strip()
+            movement['saldo'] = amounts[1].strip()
+        else:
+            # Tres o más montos: Primero = Retiro/Cargo, Segundo = Depósito/Abono, Último = Saldo
+            # Asignar según posición (más confiable que palabras clave)
+            movement['cargos'] = amounts[0].strip()  # Primera columna de monto = Retiro/Cargo
+            if len(amounts) >= 3:
+                movement['abonos'] = amounts[1].strip()  # Segunda columna de monto = Depósito/Abono
+            movement['saldo'] = amounts[-1].strip()  # Último siempre es Saldo
+        
+        # Validar que el movimiento tiene datos mínimos
+        if movement['descripcion'] and (movement['cargos'] or movement['abonos'] or movement['saldo']):
+            movements.append(movement)
+    
+    print(f"[INFO] Extraídos {len(movements)} movimientos de HSBC usando regex/patrones")
+    return movements
 
 
 def extract_summary_from_pdf(pdf_path: str) -> dict:
@@ -1817,7 +2160,29 @@ def extract_text_from_pdf(pdf_path: str) -> list:
     """
     Extract text and word positions from each page of a PDF.
     Returns a list of dictionaries (page_number, text, words).
+    
+    Si detecta texto ilegible (caracteres CID), usa Tesseract OCR como fallback.
     """
+    # PASO 1: Detectar si el PDF tiene texto ilegible
+    is_illegible, cid_ratio, ascii_ratio = is_pdf_text_illegible(pdf_path)
+    
+    if is_illegible and TESSERACT_AVAILABLE:
+        print(f"[INFO] PDF detectado como ilegible (CID ratio: {cid_ratio:.2%}, ASCII ratio: {ascii_ratio:.2%})")
+        print(f"[INFO] Usando Tesseract OCR local como fallback...")
+        print(f"[INFO] El banco se detectará después de procesar con OCR...")
+        try:
+            # Usar Tesseract OCR
+            extracted_data = extract_text_with_tesseract_ocr(pdf_path)
+            # Marcar que se usó OCR
+            for page_data in extracted_data:
+                page_data['_used_ocr'] = True
+            return extracted_data
+        except Exception as e:
+            print(f"[ADVERTENCIA] Error con Tesseract OCR: {e}")
+            print(f"[INFO] Continuando con extracción normal (puede tener caracteres ilegibles)...")
+            # Continuar con extracción normal si OCR falla
+    
+    # PASO 2: Extracción normal con pdfplumber (código existente - SIN CAMBIOS)
     extracted_data = []
     
     # Detect bank to apply Konfio-specific fixes
@@ -1845,7 +2210,8 @@ def extract_text_from_pdf(pdf_path: str) -> list:
             extracted_data.append({
                 "page": page_number,
                 "content": text if text else "",
-                "words": words
+                "words": words,
+                "_used_ocr": False  # Flag para indicar que NO viene de OCR
             })
 
     return extracted_data
@@ -2569,14 +2935,27 @@ def main():
 
     print("Reading PDF...")
     
-    # Detect bank from PDF content (read PDF directly for detection)
-    detected_bank = detect_bank_from_pdf(pdf_path)
-    
     # Now extract full data
     extracted_data = extract_text_from_pdf(pdf_path)
-    # split pages into lines
+    
+    # Detectar si se usó OCR
+    used_ocr = any(p.get('_used_ocr', False) for p in extracted_data)
+    
+    # Detect bank: from extracted text if OCR was used, otherwise from PDF
+    if used_ocr:
+        # Si se usó OCR, detectar banco desde el texto extraído
+        print(f"[INFO] Detectando banco desde texto extraído con OCR...")
+        all_text = '\n'.join([p.get('content', '') for p in extracted_data[:3]])  # Primeras 3 páginas
+        detected_bank = detect_bank_from_text(all_text)
+    else:
+        # Si no se usó OCR, detectar banco desde PDF (método normal)
+        detected_bank = detect_bank_from_pdf(pdf_path)
+    
+    is_hsbc = (detected_bank == "HSBC")
+    
+    # split pages into lines (necesario para el procesamiento posterior)
     pages_lines = split_pages_into_lines(extracted_data)
-
+    
     # Get bank config based on detected bank
     bank_config = BANK_CONFIGS.get(detected_bank)
     if not bank_config:
@@ -2879,63 +3258,75 @@ def main():
     # For all banks including Konfio, use coordinate-based extraction
     movement_rows = []
     df_mov = None  # Initialize to avoid UnboundLocalError
-    # regex to detect decimal-like amounts (used to strip amounts from descriptions and detect amounts)
-    dec_amount_re = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
-    # Pattern to detect end of movements table for specific banks
-    movement_end_pattern = None
-    if bank_config['name'] == 'Banamex':
-        movement_end_pattern = re.compile(r'SALDO\s+MINIMO\s+REQUERIDO', re.I)
-    elif bank_config['name'] == 'Santander':
-        # Santander: "TOTAL 821,646.20 820,238.73 1,417.18" - indicates end of movements table
-        movement_end_pattern = re.compile(r'^TOTAL\s+[\d,\.]+\s+[\d,\.]+\s+[\d,\.]+', re.I)
-    elif bank_config['name'] == 'Banorte':
-        # Banorte: "INVERSION ENLACE NEGOCIOS" - indicates end of movements table
-        movement_end_pattern = re.compile(r'INVERSION\s+ENLACE\s+NEGOCIOS', re.I)
-    elif bank_config['name'] == 'Banregio':
-        # Banregio: "Total" - indicates end of movements table
-        movement_end_pattern = re.compile(r'^Total\b', re.I)
-    elif bank_config['name'] == 'Scotiabank':
-        # Scotiabank: "LAS TASAS DE INTERES ESTAN EXPRESADAS EN TERMINOS ANUALES SIMPLES." - indicates end of movements table
-        # Use a more flexible pattern to handle variations in spacing and formatting
-        movement_end_pattern = re.compile(r'LAS\s+TASAS\s+DE\s+INTERES\s+ESTAN\s+EXPRESADAS\s+EN\s+TERMINOS\s+ANUALES\s+SIMPLES\.?', re.I)
-    elif bank_config['name'] == 'Inbursa':
-        # Inbursa: "Si desea recibir pagos a través de transferencias bancarias electrónicas" - indicates end of movements table
-        # Use a flexible pattern to handle variations in spacing and formatting
-        movement_end_pattern = re.compile(r'Si\s+desea\s+recibir\s+pagos\s+a\s+trav[eé]s\s+de\s+transferencias\s+bancarias\s+electr[oó]nicas', re.I)
-    elif bank_config['name'] == 'Konfio':
-        # Konfio: "Subtotal" - indicates end of movements table
-        movement_end_pattern = re.compile(r'^Subtotal\b', re.I)
-    elif bank_config['name'] == 'Clara':
-        # Clara: "Total" followed by 2 amounts - indicates end of movements table
-        # Pattern: "Total" followed by space and two amounts (numbers with optional commas and decimals)
-        movement_end_pattern = re.compile(r'\bTotal\b\s+[\d,\.]+\s+[\d,\.]+', re.I)
-    elif bank_config['name'] == 'Base':
-        # Base: "[SALDO INICIAL DE" - indicates end of movements table
-        movement_end_pattern = re.compile(r'\[SALDO\s+INICIAL\s+DE', re.I)
-    elif bank_config['name'] == 'Banbajío':
-        # Banbajío: "SALDO TOTAL*" - indicates end of movements table
-        movement_end_pattern = re.compile(r'SALDO\s+TOTAL\*?', re.I)
     
-    extraction_stopped = False
-    # For Banregio, initialize flag to track when we're in the commission zone
-    in_comision_zone = False
-    # For BanBajío, track detected rows for debugging
-    banbajio_detected_rows = 0
-    for page_data in extracted_data:
-        if extraction_stopped:
-            break
+    # Si es HSBC y se usó OCR, usar extracción con regex/patrones (saltar procesamiento con coordenadas)
+    if is_hsbc and used_ocr:
+        print("[INFO] HSBC detectado con OCR - Usando extracción con regex/patrones...")
+        movement_rows = extract_hsbc_movements_from_ocr_text(extracted_data)
+        df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
+        print(f"[DEBUG HSBC] DataFrame creado con {len(df_mov)} filas")
+        print(f"[DEBUG HSBC] Columnas iniciales: {list(df_mov.columns)}")
+        if len(df_mov) > 0:
+            print(f"[DEBUG HSBC] Primera fila muestra: {df_mov.iloc[0].to_dict()}")
+    else:
+        # Flujo normal: procesar con coordenadas o texto plano
+        # regex to detect decimal-like amounts (used to strip amounts from descriptions and detect amounts)
+        dec_amount_re = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
+        # Pattern to detect end of movements table for specific banks
+        movement_end_pattern = None
+        if bank_config['name'] == 'Banamex':
+            movement_end_pattern = re.compile(r'SALDO\s+MINIMO\s+REQUERIDO', re.I)
+        elif bank_config['name'] == 'Santander':
+            # Santander: "TOTAL 821,646.20 820,238.73 1,417.18" - indicates end of movements table
+            movement_end_pattern = re.compile(r'^TOTAL\s+[\d,\.]+\s+[\d,\.]+\s+[\d,\.]+', re.I)
+        elif bank_config['name'] == 'Banorte':
+            # Banorte: "INVERSION ENLACE NEGOCIOS" - indicates end of movements table
+            movement_end_pattern = re.compile(r'INVERSION\s+ENLACE\s+NEGOCIOS', re.I)
+        elif bank_config['name'] == 'Banregio':
+            # Banregio: "Total" - indicates end of movements table
+            movement_end_pattern = re.compile(r'^Total\b', re.I)
+        elif bank_config['name'] == 'Scotiabank':
+            # Scotiabank: "LAS TASAS DE INTERES ESTAN EXPRESADAS EN TERMINOS ANUALES SIMPLES." - indicates end of movements table
+            # Use a more flexible pattern to handle variations in spacing and formatting
+            movement_end_pattern = re.compile(r'LAS\s+TASAS\s+DE\s+INTERES\s+ESTAN\s+EXPRESADAS\s+EN\s+TERMINOS\s+ANUALES\s+SIMPLES\.?', re.I)
+        elif bank_config['name'] == 'Inbursa':
+            # Inbursa: "Si desea recibir pagos a través de transferencias bancarias electrónicas" - indicates end of movements table
+            # Use a flexible pattern to handle variations in spacing and formatting
+            movement_end_pattern = re.compile(r'Si\s+desea\s+recibir\s+pagos\s+a\s+trav[eé]s\s+de\s+transferencias\s+bancarias\s+electr[oó]nicas', re.I)
+        elif bank_config['name'] == 'Konfio':
+            # Konfio: "Subtotal" - indicates end of movements table
+            movement_end_pattern = re.compile(r'^Subtotal\b', re.I)
+        elif bank_config['name'] == 'Clara':
+            # Clara: "Total" followed by 2 amounts - indicates end of movements table
+            # Pattern: "Total" followed by space and two amounts (numbers with optional commas and decimals)
+            movement_end_pattern = re.compile(r'\bTotal\b\s+[\d,\.]+\s+[\d,\.]+', re.I)
+        elif bank_config['name'] == 'Base':
+            # Base: "[SALDO INICIAL DE" - indicates end of movements table
+            movement_end_pattern = re.compile(r'\[SALDO\s+INICIAL\s+DE', re.I)
+        elif bank_config['name'] == 'Banbajío':
+            # Banbajío: "SALDO TOTAL*" - indicates end of movements table
+            movement_end_pattern = re.compile(r'SALDO\s+TOTAL\*?', re.I)
+        
+        extraction_stopped = False
+        # For Banregio, initialize flag to track when we're in the commission zone
+        in_comision_zone = False
+        # For BanBajío, track detected rows for debugging
+        banbajio_detected_rows = 0
+        for page_data in extracted_data:
+            if extraction_stopped:
+                break
             
-        page_num = page_data['page']
-        words = page_data.get('words', [])
-        
-        if not words:
-            continue
-        
-        # Check if this page contains movements (page >= movement_start_page if found)
-        if movement_start_found and page_num < movement_start_page:
-            continue
-        
-        # Group words by row
+            page_num = page_data['page']
+            words = page_data.get('words', [])
+            
+            if not words:
+                continue
+            
+            # Check if this page contains movements (page >= movement_start_page if found)
+            if movement_start_found and page_num < movement_start_page:
+                continue
+            
+            # Group words by row
         # For Konfio, use a larger y_tolerance to capture multi-line descriptions
         # Use y_tolerance=3 for all banks to avoid grouping multiple movements into one row
         # The split_row_if_multiple_movements function will handle cases where movements are still grouped
@@ -4010,6 +4401,10 @@ def main():
         # Remove original 'fecha' column (liq will be removed later when building description)
         if 'fecha' in df_mov.columns:
             df_mov = df_mov.drop(columns=['fecha'])
+    elif bank_config['name'] == 'HSBC':
+        # For HSBC, preserve 'fecha' column as-is (will be renamed to 'Fecha' later)
+        # Don't create 'Fecha Oper' or 'Fecha Liq' for HSBC
+        pass
     else:
         # For other banks, use existing logic (search for two dates in 'fecha' column)
         if 'fecha' in df_mov.columns:
@@ -4024,15 +4419,44 @@ def main():
             df_mov['Fecha Liq'] = dates.apply(lambda t: t[1])
 
     # Remove original 'fecha' if present (only if not already removed)
-    if 'fecha' in df_mov.columns:
+    # Skip this for HSBC - HSBC will handle 'fecha' to 'Fecha' conversion in its own block
+    if 'fecha' in df_mov.columns and bank_config['name'] != 'HSBC':
         df_mov = df_mov.drop(columns=['fecha'])
     
     # For non-BBVA banks, use only 'Fecha' column (based on Fecha Oper) and remove Fecha Liq
-    # Skip this for Banregio, Base, and BanBajío as they already have 'Fecha' column set
-    if bank_config['name'] != 'BBVA' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base' and bank_config['name'] != 'Banbajío':
+    # Skip this for Banregio, Base, BanBajío, and HSBC (HSBC already has 'Fecha' from OCR or will be set below)
+    if bank_config['name'] != 'BBVA' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base' and bank_config['name'] != 'Banbajío' and bank_config['name'] != 'HSBC':
         if 'Fecha Oper' in df_mov.columns:
             df_mov['Fecha'] = df_mov['Fecha Oper']
             df_mov = df_mov.drop(columns=['Fecha Oper', 'Fecha Liq'])
+    
+    # For HSBC, ensure 'Fecha' column exists and remove all unwanted columns
+    if bank_config['name'] == 'HSBC':
+        print(f"[DEBUG HSBC] Antes de procesar columnas - Columnas actuales: {list(df_mov.columns)}")
+        # Convert 'fecha' to 'Fecha' if needed (DO THIS FIRST before removing columns)
+        if 'fecha' in df_mov.columns:
+            print(f"[DEBUG HSBC] Columna 'fecha' encontrada, convirtiendo a 'Fecha'...")
+            if 'Fecha' not in df_mov.columns:
+                df_mov['Fecha'] = df_mov['fecha']
+                print(f"[DEBUG HSBC] Columna 'Fecha' creada desde 'fecha'")
+            else:
+                print(f"[DEBUG HSBC] Columna 'Fecha' ya existe, no se crea duplicada")
+            # Remove 'fecha' after creating 'Fecha'
+            df_mov = df_mov.drop(columns=['fecha'])
+            print(f"[DEBUG HSBC] Columna 'fecha' eliminada")
+        elif 'Fecha Oper' in df_mov.columns and 'Fecha' not in df_mov.columns:
+            print(f"[DEBUG HSBC] Columna 'Fecha Oper' encontrada, convirtiendo a 'Fecha'...")
+            df_mov['Fecha'] = df_mov['Fecha Oper']
+        else:
+            print(f"[DEBUG HSBC] No se encontró 'fecha' ni 'Fecha Oper' en columnas: {list(df_mov.columns)}")
+        
+        # Remove ALL other unwanted columns for HSBC
+        unwanted_cols = ['Fecha Oper', 'Fecha Liq', 'raw', 'liq']
+        for col in unwanted_cols:
+            if col in df_mov.columns:
+                print(f"[DEBUG HSBC] Eliminando columna no deseada: {col}")
+                df_mov = df_mov.drop(columns=[col])
+        print(f"[DEBUG HSBC] Después de procesar columnas - Columnas actuales: {list(df_mov.columns)}")
 
     # For BBVA, split 'saldo' column into 'OPERACIÓN' and 'LIQUIDACIÓN'
     if bank_config['name'] == 'BBVA' and 'saldo' in df_mov.columns:
@@ -4087,6 +4511,10 @@ def main():
             # fallback to raw if no column-based description
             if not parts and 'raw' in row and row.get('raw'):
                 parts = [str(row.get('raw'))]
+        elif bank_config['name'] == 'HSBC':
+            # For HSBC, only use 'descripcion' column (don't use 'raw' or 'liq')
+            if 'descripcion' in row and row.get('descripcion'):
+                parts.append(str(row.get('descripcion')))
         else:
             # For other banks, use existing logic
             # prefer explicit columns if present
@@ -4140,6 +4568,9 @@ def main():
     for c in ('liq', 'descripcion'):
         if c in df_mov.columns:
             drop_cols.append(c)
+    # For HSBC, also drop 'raw' column
+    if bank_config['name'] == 'HSBC' and 'raw' in df_mov.columns:
+        drop_cols.append('raw')
     if drop_cols:
         df_mov = df_mov.drop(columns=drop_cols)
 
@@ -4158,8 +4589,18 @@ def main():
         if 'LIQUIDACIÓN' in df_mov.columns:
             column_rename['LIQUIDACIÓN'] = 'Liquidación'
     else:
+        # For HSBC and other banks, rename columns
+        # For HSBC, 'fecha' was already converted to 'Fecha' earlier, so skip if 'Fecha' already exists
+        if bank_config['name'] == 'HSBC':
+            print(f"[DEBUG HSBC] En bloque de renombrado - Columnas antes: {list(df_mov.columns)}")
+        if 'fecha' in df_mov.columns and 'Fecha' not in df_mov.columns:
+            column_rename['fecha'] = 'Fecha'
+            if bank_config['name'] == 'HSBC':
+                print(f"[DEBUG HSBC] Agregando renombrado: 'fecha' -> 'Fecha'")
         if 'Descripcion' in df_mov.columns:
             column_rename['Descripcion'] = 'Descripción'
+        if 'descripcion' in df_mov.columns:
+            column_rename['descripcion'] = 'Descripción'
         if 'cargos' in df_mov.columns:
             column_rename['cargos'] = 'Cargos'
         if 'abonos' in df_mov.columns:
@@ -4168,7 +4609,15 @@ def main():
             column_rename['saldo'] = 'Saldo'
     
     if column_rename:
+        if bank_config['name'] == 'HSBC':
+            print(f"[DEBUG HSBC] Aplicando renombrados: {column_rename}")
         df_mov = df_mov.rename(columns=column_rename)
+        if bank_config['name'] == 'HSBC':
+            print(f"[DEBUG HSBC] Después de renombrado - Columnas: {list(df_mov.columns)}")
+    
+    # For HSBC, remove 'raw' column if it still exists (after renaming)
+    if bank_config['name'] == 'HSBC' and 'raw' in df_mov.columns:
+        df_mov = df_mov.drop(columns=['raw'])
 
     # For Clara, clean "MXN" and other text from Abonos column
     if bank_config['name'] == 'Clara' and 'Abonos' in df_mov.columns:
@@ -4223,12 +4672,42 @@ def main():
         # Add any remaining columns that are not in desired_order
         other_cols = [c for c in df_mov.columns if c not in desired_order]
         df_mov = df_mov[desired_order + other_cols]
+    elif bank_config['name'] == 'HSBC':
+        # For HSBC: ONLY Fecha, Descripción, Cargos, Abonos, Saldo
+        print(f"[DEBUG HSBC] En bloque de reordenamiento - Columnas antes: {list(df_mov.columns)}")
+        # Ensure 'Fecha' column exists (should already exist from earlier processing)
+        if 'Fecha' not in df_mov.columns and 'fecha' in df_mov.columns:
+            print(f"[DEBUG HSBC] 'Fecha' no existe pero 'fecha' sí, creando 'Fecha'...")
+            df_mov['Fecha'] = df_mov['fecha']
+            df_mov = df_mov.drop(columns=['fecha'])
+            print(f"[DEBUG HSBC] 'Fecha' creada y 'fecha' eliminada")
+        elif 'Fecha' in df_mov.columns:
+            print(f"[DEBUG HSBC] Columna 'Fecha' ya existe ✓")
+        else:
+            print(f"[DEBUG HSBC] ⚠️ ADVERTENCIA: Ni 'Fecha' ni 'fecha' encontradas en: {list(df_mov.columns)}")
+        
+        desired_order = ['Fecha', 'Descripción', 'Cargos', 'Abonos', 'Saldo']
+        print(f"[DEBUG HSBC] Orden deseado: {desired_order}")
+        # Filter to only include columns that exist in the dataframe
+        desired_order = [col for col in desired_order if col in df_mov.columns]
+        print(f"[DEBUG HSBC] Orden después de filtrar columnas existentes: {desired_order}")
+        # Remove ALL other columns that are not in desired_order
+        columns_to_remove = [c for c in df_mov.columns if c not in desired_order]
+        if columns_to_remove:
+            print(f"[DEBUG HSBC] Eliminando columnas no deseadas: {columns_to_remove}")
+            df_mov = df_mov.drop(columns=columns_to_remove)
+        # Reorder to match desired_order exactly
+        if desired_order:  # Only reorder if we have columns
+            df_mov = df_mov[desired_order]
+            print(f"[DEBUG HSBC] Columnas finales después de reordenar: {list(df_mov.columns)}")
+        else:
+            print(f"[DEBUG HSBC] ⚠️ ADVERTENCIA: No hay columnas en desired_order para reordenar")
     else:
         # For other banks: Fecha, Descripción, Cargos, Abonos, Saldo (if available)
         # Build desired_order based on what columns are configured for this bank
         desired_order = ['Fecha', 'Descripción', 'Cargos', 'Abonos']
         
-        # Only include Saldo if it's in the bank's column configuration
+        # For other banks, only include Saldo if it's in the bank's column configuration
         if 'saldo' in columns_config:
             desired_order.append('Saldo')
         
