@@ -156,12 +156,14 @@ BANK_CONFIGS = {
 
     "HSBC": {
         "name": "HSBC",
+        "movements_start": "ISR Retenido en el año",  # String que marca el inicio de la sección de movimientos
+        "movements_end": "CoDi",                      # String que marca el fin de la sección de movimientos
         "columns": {
-            "fecha": (17, 45),             # Columna Fecha de Operación
-            "descripcion": (55, 260),      # Columna Descripción (ampliado para capturar mejor)
-            "cargos": (275, 316),          # Columna Cargos (ampliado ligeramente)
-            "abonos": (345, 395),          # Columna Abonos (ampliado ligeramente)
-            "saldo": (425, 472),           # Columna Saldo (ampliado ligeramente)
+            "fecha": (87, 103),             # Columna Fecha de Operación
+            "descripcion": (124, 505),      # Columna Descripción (ampliado para capturar mejor)
+            "cargos": (710, 800),          # Columna Cargos (ampliado ligeramente)
+            "abonos": (865, 950),          # Columna Abonos (ampliado ligeramente)
+            "saldo": (1050, 1130),           # Columna Saldo (ampliado ligeramente)
         }
     },
     "Base": {
@@ -315,8 +317,76 @@ def fix_duplicated_chars(text_str):
 def find_column_coordinates(pdf_path: str, page_number: int = 1):
     """Extract all words from a page and show their coordinates.
     Helps user find exact X ranges for columns.
+    Detecta automáticamente si debe usar OCR para PDFs ilegibles.
     """
     try:
+        # PASO 1: Detectar si el PDF es ilegible
+        is_illegible, cid_ratio, ascii_ratio = is_pdf_text_illegible(pdf_path)
+        
+        if is_illegible and TESSERACT_AVAILABLE:
+            print(f"[INFO] PDF detectado como ilegible (CID ratio: {cid_ratio:.2%}, ASCII ratio: {ascii_ratio:.2%})")
+            print(f"[INFO] Usando OCR para analizar coordenadas...")
+            
+            # Extraer con OCR (ahora usa image_to_data() con coordenadas reales)
+            pages_data = extract_text_with_tesseract_ocr(pdf_path)
+            
+            # Detectar banco desde texto OCR
+            all_text = '\n'.join([p.get('content', '') for p in pages_data[:3]])
+            detected_bank = detect_bank_from_text(all_text)
+            
+            print(f"🏦 Banco detectado: {detected_bank}")
+            print(f"📄 Mostrando coordenadas extraídas con OCR (coordenadas reales)...")
+            
+            # Filtrar página si es necesario
+            if page_number:
+                pages_data = [p for p in pages_data if p['page'] == page_number]
+            
+            # Mostrar palabras con coordenadas reales del OCR
+            print(f"\n📄 Página {page_number} del PDF (OCR): {pdf_path}")
+            print("=" * 120)
+            print(f"{'Y (top)':<8} {'X0':<8} {'X1':<8} {'X_center':<10} {'Conf':<6} {'Texto':<40}")
+            print("-" * 120)
+            
+            # Agrupar palabras por Y (filas)
+            rows = {}
+            for page_data in pages_data:
+                words = page_data.get('words', [])
+                for word in words:
+                    top = int(round(word.get('top', 0)))
+                    if top not in rows:
+                        rows[top] = []
+                    rows[top].append(word)
+            
+            # Print words sorted by Y then X
+            for top in sorted(rows.keys()):
+                row_words = sorted(rows[top], key=lambda w: w.get('x0', 0))
+                for word in row_words:
+                    x0 = word.get('x0', 0)
+                    x1 = word.get('x1', 0)
+                    x_center = (x0 + x1) / 2
+                    conf = word.get('conf', 0)
+                    text = word.get('text', '')
+                    print(f"{top:<8} {x0:<8.1f} {x1:<8.1f} {x_center:<10.1f} {conf:<6.1f} {text:<40}")
+            
+            print("\n" + "=" * 120)
+            print("\nRangos aproximados de columnas (X0 a X1) - Coordenadas reales del OCR:")
+            print("-" * 120)
+            
+            # Find column boundaries
+            all_x0 = [w.get('x0', 0) for word_list in rows.values() for w in word_list]
+            all_x1 = [w.get('x1', 0) for word_list in rows.values() for w in word_list]
+            
+            if all_x0 and all_x1:
+                min_x = min(all_x0)
+                max_x = max(all_x1)
+                print(f"Rango X total: {min_x:.1f} a {max_x:.1f}")
+                print("\nAnaliza la salida anterior y proporciona estos valores en BANK_CONFIGS:")
+            else:
+                print("⚠️  No se encontraron palabras con coordenadas en esta página")
+            
+            return
+        
+        # PASO 2: PDF legible - comportamiento normal (pdfplumber)
         # Detect bank to apply Konfio-specific fixes
         detected_bank = detect_bank_from_pdf(pdf_path)
         is_konfio = (detected_bank == "Konfio")
@@ -503,10 +573,76 @@ def is_pdf_text_illegible(pdf_path: str, cid_threshold: float = 0.05) -> tuple:
         return True, 1.0, 0.0
 
 
+def extract_text_from_ocr_data(ocr_data: dict) -> str:
+    """
+    Extrae texto plano de los datos OCR para mantener compatibilidad con 'content'.
+    
+    Args:
+        ocr_data: Diccionario con datos de pytesseract.image_to_data()
+    
+    Returns:
+        Texto plano extraído del OCR
+    """
+    text_parts = []
+    n_items = len(ocr_data.get('text', []))
+    
+    for i in range(n_items):
+        level = ocr_data.get('level', [])[i] if i < len(ocr_data.get('level', [])) else 0
+        text = ocr_data.get('text', [])[i] if i < len(ocr_data.get('text', [])) else ''
+        conf = float(ocr_data.get('conf', [])[i]) if i < len(ocr_data.get('conf', [])) else 0
+        
+        # Solo agregar palabras (level == 5) con texto y confianza > 0
+        if level == 5 and text and conf > 0:
+            text_parts.append(text)
+    
+    return ' '.join(text_parts)
+
+
+def convert_ocr_data_to_words_format(ocr_data: dict) -> list:
+    """
+    Convierte datos OCR de pytesseract.image_to_data() a formato de palabras con coordenadas reales.
+    Compatible con el formato esperado por el resto del código.
+    
+    Args:
+        ocr_data: Diccionario con datos de pytesseract.image_to_data()
+    
+    Returns:
+        Lista de diccionarios con formato: 
+        [{'text': str, 'x0': float, 'top': float, 'x1': float, 'bottom': float, 'conf': float, 'line_num': int}, ...]
+    """
+    words = []
+    n_items = len(ocr_data.get('text', []))
+    
+    for i in range(n_items):
+        level = ocr_data.get('level', [])[i] if i < len(ocr_data.get('level', [])) else 0
+        text = ocr_data.get('text', [])[i] if i < len(ocr_data.get('text', [])) else ''
+        conf = float(ocr_data.get('conf', [])[i]) if i < len(ocr_data.get('conf', [])) else 0
+        
+        # Solo procesar palabras (level == 5) con texto y confianza razonable
+        if level == 5 and text and conf > 0:
+            left = float(ocr_data.get('left', [])[i]) if i < len(ocr_data.get('left', [])) else 0
+            top = float(ocr_data.get('top', [])[i]) if i < len(ocr_data.get('top', [])) else 0
+            width = float(ocr_data.get('width', [])[i]) if i < len(ocr_data.get('width', [])) else 0
+            height = float(ocr_data.get('height', [])[i]) if i < len(ocr_data.get('height', [])) else 0
+            line_num = int(ocr_data.get('line_num', [])[i]) if i < len(ocr_data.get('line_num', [])) else 0
+            
+            words.append({
+                'text': text.strip(),
+                'x0': left,
+                'top': top,
+                'x1': left + width,
+                'bottom': top + height,
+                'conf': conf,
+                'line_num': line_num
+            })
+    
+    return words
+
+
 def convert_ocr_text_to_words_format(ocr_text: str, page_number: int = 1) -> list:
     """
-    Convierte texto OCR a formato de palabras con coordenadas aproximadas.
-    Compatible con el formato esperado por el resto del código.
+    [DEPRECATED] Convierte texto OCR a formato de palabras con coordenadas aproximadas.
+    Esta función está deprecada. Usar convert_ocr_data_to_words_format() en su lugar.
     
     Args:
         ocr_text: Texto extraído por OCR
@@ -595,11 +731,14 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
             from io import BytesIO
             img = Image.open(BytesIO(img_data))
             
-            # Hacer OCR
-            text = pytesseract.image_to_string(img, lang=lang)
+            # Hacer OCR con coordenadas reales
+            ocr_data = pytesseract.image_to_data(img, lang=lang, output_type=pytesseract.Output.DICT)
             
-            # Convertir texto a formato de palabras (aproximado)
-            words = convert_ocr_text_to_words_format(text, page_num + 1)
+            # Extraer texto plano para mantener compatibilidad con 'content'
+            text = extract_text_from_ocr_data(ocr_data)
+            
+            # Convertir datos OCR a formato de palabras con coordenadas reales
+            words = convert_ocr_data_to_words_format(ocr_data)
             
             extracted_data.append({
                 "page": page_num + 1,
@@ -616,15 +755,57 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
         raise Exception(f"Error en Tesseract OCR: {e}")
 
 
-def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
+def filter_hsbc_movements_section(pages_data: list, start_string: str, end_string: str) -> list:
     """
-    Extrae movimientos de HSBC del texto OCR usando regex/patrones.
-    Maneja correctamente: Día | Descripción | Referencia/Serial | Retiro/Cargo | Depósito/Abono | Saldo
+    Filtra palabras que están entre start_string y end_string para HSBC.
+    
+    Args:
+        pages_data: Lista de diccionarios con formato [{"page": int, "words": list}, ...]
+        start_string: String que marca el inicio de la sección (ej: "ISR Retenido en el año")
+        end_string: String que marca el fin de la sección (ej: "CoDi")
+    
+    Returns:
+        Lista de palabras filtradas que están en la sección de movimientos
+    """
+    filtered_words = []
+    in_section = False
+    
+    for page_data in pages_data:
+        words = page_data.get('words', [])
+        
+        for word in words:
+            word_text = word.get('text', '').strip()
+            
+            # Detectar inicio (búsqueda case-insensitive y parcial)
+            if not in_section:
+                # Buscar si alguna palabra contiene el string de inicio
+                if start_string.lower() in word_text.lower():
+                    in_section = True
+                    continue  # No incluir la palabra de inicio
+            
+            # Detectar fin (búsqueda case-insensitive y parcial)
+            if in_section:
+                if end_string.lower() in word_text.lower():
+                    break  # Detener completamente
+            
+            # Si estamos en la sección, agregar palabra
+            if in_section:
+                filtered_words.append(word)
+    
+    return filtered_words
+
+
+def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict = None) -> list:
+    """
+    Extrae movimientos de HSBC del texto OCR usando coordenadas X reales.
+    Asigna montos a columnas (Cargos/Abonos/Saldo) basándose en posición X, no en palabras clave.
     
     IMPORTANTE: Solo extrae información después de "ISR Retenido en el año" y antes de "CoDi"
     
     Args:
         pages_data: Lista de diccionarios con formato [{"page": int, "content": str, "words": list}, ...]
+        columns_config: Diccionario con rangos X de columnas desde BANK_CONFIGS.
+                       Formato: {"cargos": (x_min, x_max), "abonos": (x_min, x_max), "saldo": (x_min, x_max), ...}
     
     Returns:
         Lista de diccionarios con movimientos: [{"fecha": str, "descripcion": str, "cargos": str, "abonos": str, "saldo": str}, ...]
@@ -637,6 +818,17 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
     movements = []
     all_text = '\n'.join([p.get('content', '') for p in pages_data])
     lines = all_text.split('\n')
+    
+    print(f"[DEBUG HSBC] ===== INICIO EXTRACCIÓN HSBC =====")
+    print(f"    Total de páginas: {len(pages_data)}")
+    print(f"    Longitud total del texto: {len(all_text)} caracteres")
+    print(f"    Total de líneas: {len(lines)}")
+    print(f"    Primeras 5 líneas del texto:")
+    for i, line in enumerate(lines[:5]):
+        print(f"        Línea {i+1}: '{line[:100]}'")
+    print(f"    Últimas 5 líneas del texto:")
+    for i, line in enumerate(lines[-5:]):
+        print(f"        Línea {len(lines)-4+i}: '{line[:100]}'")
     
     # Buscar sección de movimientos después de "ISR Retenido en el año" y antes de "CoDi"
     in_movements_section = False
@@ -663,11 +855,29 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
     # o hasta el fin de línea, pero incluyendo espacios internos entre dígitos
     amount_pattern = re.compile(r'(\$\s*\d{1,3}(?:[,\s]\d{3})*(?:\s+\d{3})*(?:\.\d{2})?)')
     
-    # Palabras clave para distinguir Retiro vs Depósito
-    retiro_keywords = ['retiro', 'cargo', 'debito', 'cajero', 'cheque']
-    deposito_keywords = ['deposito', 'abono', 'credito', 'transferencia', 'transf', 'pago', 'rec']
+    # Validar que columns_config tenga los rangos necesarios
+    if not columns_config:
+        raise ValueError("columns_config es requerido. Debe contener rangos X para 'cargos', 'abonos' y 'saldo'.")
     
+    required_columns = ['cargos', 'abonos', 'saldo']
+    missing_columns = [col for col in required_columns if col not in columns_config]
+    if missing_columns:
+        raise ValueError(f"columns_config debe contener rangos para: {missing_columns}")
+    
+    # Obtener rangos X de columnas
+    cargos_range = columns_config.get('cargos')
+    abonos_range = columns_config.get('abonos')
+    saldo_range = columns_config.get('saldo')
+    
+    print(f"[DEBUG HSBC] Usando rangos de BANK_CONFIGS:")
+    print(f"    Cargos: {cargos_range}")
+    print(f"    Abonos: {abonos_range}")
+    print(f"    Saldo: {saldo_range}")
+    print(f"[DEBUG HSBC] Total de líneas en texto OCR: {len(lines)}")
+    
+    line_count = 0
     for line in lines:
+        line_count += 1
         line = line.strip()
         
         # Detectar inicio de sección de movimientos
@@ -675,10 +885,12 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
             if start_pattern.search(line):
                 start_found = True
                 in_movements_section = True
+                print(f"[DEBUG HSBC] ✓ Inicio de sección encontrado en línea {line_count}: '{line[:80]}'")
                 continue
         
         # Detectar fin de sección de movimientos
         if in_movements_section and end_pattern.search(line):
+            print(f"[DEBUG HSBC] ✓ Fin de sección encontrado en línea {line_count}: '{line[:80]}'")
             break  # Detener completamente la extracción
         
         if not in_movements_section:
@@ -688,6 +900,10 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
         day_match = day_pattern.match(line)
         if not day_match:
             continue
+        
+        print(f"\n[DEBUG HSBC] ===== FILA {line_count} DETECTADA =====")
+        print(f"    Línea completa: '{line[:120]}'")
+        print(f"    Día detectado: '{day_match.group(1)}'")
         
         # Extraer todos los montos en la línea
         # Usar un método más robusto que capture montos completos con espacios internos
@@ -721,7 +937,10 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
                 
                 amounts_raw.append(monto_candidato)
         
+        print(f"    Montos RAW encontrados ({len(amounts_raw)}): {amounts_raw}")
+        
         if len(amounts_raw) < 1:
+            print(f"    ❌ FILA {line_count} RECHAZADA: No hay montos")
             continue  # No hay montos, no es un movimiento válido
         
         # Limpiar montos: reemplazar espacios internos con comas para formato consistente
@@ -757,11 +976,6 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
         # Limpiar descripción (normalizar espacios)
         desc_and_ref = re.sub(r'\s+', ' ', desc_and_ref)
         
-        # Determinar si es Retiro o Depósito basado en descripción
-        desc_lower = desc_and_ref.lower()
-        is_retiro = any(keyword in desc_lower for keyword in retiro_keywords)
-        is_deposito = any(keyword in desc_lower for keyword in deposito_keywords)
-        
         # Construir movimiento - fecha es solo el día (ej: "03", "13")
         movement = {
             'fecha': day,  # Solo el día, sin mes/año
@@ -777,51 +991,357 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
         print(f"    Día extraído: '{day}'")
         print(f"    Descripción: '{desc_and_ref[:80]}'")
         print(f"    Montos encontrados ({len(amounts)}): {amounts}")
-        print(f"    Tipo detectado: retiro={is_retiro}, deposito={is_deposito}")
         
-        # Asignar montos según cantidad y tipo
-        # En HSBC, la estructura es: Día | Descripción | Referencia | Retiro/Cargo | Depósito/Abono | Saldo
-        # Si hay 2 montos: Primero = Retiro/Cargo o Depósito/Abono, Segundo = Saldo
-        # Si hay 3 montos: Primero = Retiro/Cargo, Segundo = Depósito/Abono, Tercero = Saldo
+        # Asignar montos según coordenadas X (no palabras clave)
+        # Calcular posición Y aproximada de la línea (para buscar coordenadas)
+        # Usar el índice de la línea en el texto para estimar Y
+        line_index = lines.index(line)
+        line_y_approx = 100 + (line_index * 25)  # Estimación: 25 píxeles por línea
         
-        if len(amounts) == 1:
-            # Solo un monto = Saldo (caso raro, pero posible)
-            movement['saldo'] = amounts[0].strip()
-            print(f"    Asignación (1 monto): saldo={movement['saldo']}")
-        elif len(amounts) == 2:
-            # Dos montos: Primero = Retiro/Cargo o Depósito/Abono, Segundo = Saldo
-            if is_retiro:
-                movement['cargos'] = amounts[0].strip()
-                print(f"    Asignación (2 montos, retiro): cargos={movement['cargos']}, saldo={amounts[1].strip()}")
-            elif is_deposito:
-                movement['abonos'] = amounts[0].strip()
-                print(f"    Asignación (2 montos, deposito): abonos={movement['abonos']}, saldo={amounts[1].strip()}")
+        # Para cada monto, encontrar sus coordenadas X y asignar a columna
+        amounts_with_columns = []
+        for amount in amounts:
+            amount_clean = amount.strip()
+            
+            # Encontrar coordenadas X reales del monto
+            x0, x1 = find_amount_coordinates(amount_clean, line, line_y_approx, pages_data, y_tolerance=20)
+            
+            if x0 is not None and x1 is not None:
+                # Calcular centro del monto para debug
+                x_center = (x0 + x1) / 2
+                
+                # Usar assign_word_to_column() para determinar la columna
+                col_name = assign_word_to_column(x0, x1, columns_config)
+                
+                if col_name:
+                    amounts_with_columns.append({
+                        'amount': amount_clean,
+                        'column': col_name,
+                        'x0': x0,
+                        'x1': x1,
+                        'x_center': x_center
+                    })
+                    print(f"    [DEBUG HSBC] Monto '{amount_clean}' → Columna '{col_name}' (X: {x0:.1f}-{x1:.1f}, centro: {x_center:.1f})")
+                else:
+                    # No se pudo asignar a ninguna columna, mostrar información de debug
+                    amounts_with_columns.append({
+                        'amount': amount_clean,
+                        'column': None,
+                        'x0': x0,
+                        'x1': x1
+                    })
+                    print(f"    [DEBUG HSBC] Monto '{amount_clean}' → NO asignado a columna (X: {x0:.1f}-{x1:.1f}, centro: {x_center:.1f})")
+                    # Mostrar rangos disponibles para debug
+                    for col_name, (col_x_min, col_x_max) in columns_config.items():
+                        if col_name in ['cargos', 'abonos', 'saldo']:
+                            # Validar rango
+                            actual_min = min(col_x_min, col_x_max)
+                            actual_max = max(col_x_min, col_x_max)
+                            in_range = actual_min <= x_center <= actual_max
+                            print(f"        {col_name}: ({col_x_min}, {col_x_max}) → {'✓' if in_range else '✗'} (centro {x_center:.1f} {'está' if in_range else 'NO está'} en rango)")
             else:
-                # No se puede determinar por descripción, intentar por posición
-                # En HSBC, si solo hay 2 montos, el primero es generalmente Retiro/Cargo
-                movement['cargos'] = amounts[0].strip()
-                print(f"    Asignación (2 montos, sin tipo claro): cargos={movement['cargos']}, saldo={amounts[1].strip()}")
-            movement['saldo'] = amounts[1].strip()
-        else:
-            # Tres o más montos: Primero = Retiro/Cargo, Segundo = Depósito/Abono, Último = Saldo
-            # Asignar según posición (más confiable que palabras clave)
-            movement['cargos'] = amounts[0].strip()  # Primera columna de monto = Retiro/Cargo
-            if len(amounts) >= 3:
-                movement['abonos'] = amounts[1].strip()  # Segunda columna de monto = Depósito/Abono
-            movement['saldo'] = amounts[-1].strip()  # Último siempre es Saldo
-            print(f"    Asignación ({len(amounts)} montos): cargos={movement['cargos']}, abonos={movement.get('abonos', '')}, saldo={movement['saldo']}")
+                # No se encontraron coordenadas, usar lógica de fallback por posición
+                amounts_with_columns.append({
+                    'amount': amount_clean,
+                    'column': None,
+                    'x0': None,
+                    'x1': None
+                })
+                print(f"    [DEBUG HSBC] Monto '{amount_clean}' → NO se encontraron coordenadas X")
+        
+        # Asignar montos a columnas según resultados
+        # Si hay ambigüedad (monto asignado a cargos pero podría ser abonos), usar contexto
+        # Estrategia: Si hay 2 montos y ambos están en rango de cargos, el más a la izquierda es cargos, el otro es saldo
+        # Si un monto está en rango de cargos pero está más cerca del centro de abonos, reconsiderar
+        
+        # Primero, identificar montos que podrían estar mal asignados
+        # Si un monto está en rango de cargos pero su centro está más cerca del centro de abonos, reconsiderar
+        for amt_data in amounts_with_columns:
+            if amt_data['column'] == 'cargos' and amt_data.get('x_center') is not None:
+                x_center = amt_data['x_center']
+                # Calcular distancia a centros de ambos rangos
+                if 'cargos' in columns_config and 'abonos' in columns_config:
+                    cargos_min, cargos_max = columns_config['cargos']
+                    abonos_min, abonos_max = columns_config['abonos']
+                    if cargos_min > cargos_max:
+                        cargos_min, cargos_max = cargos_max, cargos_min
+                    if abonos_min > abonos_max:
+                        abonos_min, abonos_max = abonos_max, abonos_min
+                    
+                    cargos_center = (cargos_min + cargos_max) / 2
+                    abonos_center = (abonos_min + abonos_max) / 2
+                    
+                    dist_cargos = abs(x_center - cargos_center)
+                    dist_abonos = abs(x_center - abonos_center)
+                    
+                    # Si está significativamente más cerca de abonos (diferencia > 30 píxeles), reconsiderar
+                    if dist_abonos < dist_cargos and (dist_cargos - dist_abonos) > 30:
+                        # Verificar si está dentro o cerca del rango de abonos (expandir rango 50 píxeles)
+                        abonos_range_expanded_min = abonos_min - 50
+                        abonos_range_expanded_max = abonos_max + 50
+                        if abonos_range_expanded_min <= x_center <= abonos_range_expanded_max:
+                            amt_data['column'] = 'abonos'
+                            print(f"    [DEBUG HSBC] Reasignación inteligente: '{amt_data['amount']}' de 'cargos' a 'abonos'")
+                            print(f"        Razón: más cerca de abonos (dist_abonos={dist_abonos:.1f} vs dist_cargos={dist_cargos:.1f}, centro={x_center:.1f})")
+                            print(f"        Rango abonos: ({abonos_min}, {abonos_max}), expandido: ({abonos_range_expanded_min}, {abonos_range_expanded_max})")
+        
+        # Ahora asignar montos a columnas
+        for amt_data in amounts_with_columns:
+            amt = amt_data['amount']
+            col = amt_data['column']
+            
+            # Solo asignar si la columna no está ya ocupada
+            if col == 'saldo' and not movement.get('saldo'):
+                movement['saldo'] = amt
+            elif col == 'cargos' and not movement.get('cargos'):
+                movement['cargos'] = amt
+            elif col == 'abonos' and not movement.get('abonos'):
+                movement['abonos'] = amt
+        
+        # Asegurar que saldo esté asignado cuando hay 2 montos
+        # Si hay 2 montos y saldo no está asignado, el segundo monto es saldo (estructura típica HSBC)
+        if len(amounts) == 2 and not movement.get('saldo'):
+            # Verificar si el segundo monto está asignado a otra columna
+            second_amt_data = amounts_with_columns[1] if len(amounts_with_columns) > 1 else None
+            if second_amt_data and second_amt_data.get('column') and second_amt_data['column'] != 'saldo':
+                # El segundo monto está asignado a otra columna (cargos o abonos), pero debería ser saldo
+                # Reasignar el segundo monto a saldo
+                movement['saldo'] = amounts[1].strip()
+                print(f"    [DEBUG HSBC] Corrección: Segundo monto '{amounts[1].strip()}' reasignado a saldo (estaba en '{second_amt_data['column']}')")
+            elif not second_amt_data or not second_amt_data.get('column'):
+                # El segundo monto no está asignado, asignarlo a saldo
+                movement['saldo'] = amounts[1].strip()
+                print(f"    [DEBUG HSBC] Asignación: Segundo monto '{amounts[1].strip()}' → saldo (estructura típica HSBC)")
+        
+        # Fallback: si hay montos sin asignar, usar lógica por posición
+        unassigned = [a for a in amounts_with_columns if a['column'] is None]
+        if unassigned:
+            print(f"    [DEBUG HSBC] {len(unassigned)} montos sin asignar, usando fallback por posición")
+            
+            # Si hay 2 montos
+            if len(amounts) == 2:
+                assigned_cols = [a['column'] for a in amounts_with_columns if a['column']]
+                
+                # Si saldo aún no está asignado, el segundo monto es saldo
+                if 'saldo' not in assigned_cols and not movement.get('saldo'):
+                    movement['saldo'] = amounts[1].strip()
+                    print(f"    [DEBUG HSBC] Fallback: Segundo monto '{amounts[1].strip()}' → saldo")
+                
+                # Si cargos y abonos no están asignados, el primer monto es cargos (por estructura HSBC)
+                if 'cargos' not in assigned_cols and 'abonos' not in assigned_cols and not movement.get('cargos'):
+                    # En HSBC, cuando hay 2 montos, el primero es generalmente Cargos (Retiro/Cargo)
+                    # Solo asignar a Abonos si hay evidencia clara (coordenadas X muy cerca de rango abonos)
+                    first_amt = amounts_with_columns[0]
+                    if first_amt['x0'] is not None:
+                        # Calcular distancia a cada rango
+                        x_center = (first_amt['x0'] + first_amt['x1']) / 2
+                        cargos_center = (cargos_range[0] + cargos_range[1]) / 2
+                        abonos_center = (abonos_range[0] + abonos_range[1]) / 2
+                        
+                        dist_cargos = abs(x_center - cargos_center)
+                        dist_abonos = abs(x_center - abonos_center)
+                        
+                        # Si está significativamente más cerca de abonos (diferencia > 50 píxeles), asignar a abonos
+                        # De lo contrario, asignar a cargos (estructura típica de HSBC)
+                        if dist_abonos < dist_cargos and (dist_cargos - dist_abonos) > 50:
+                            movement['abonos'] = first_amt['amount']
+                            print(f"    [DEBUG HSBC] Fallback: Primer monto '{first_amt['amount']}' → abonos (dist: abonos={dist_abonos:.1f}, cargos={dist_cargos:.1f})")
+                        else:
+                            movement['cargos'] = first_amt['amount']
+                            print(f"    [DEBUG HSBC] Fallback: Primer monto '{first_amt['amount']}' → cargos (dist: abonos={dist_abonos:.1f}, cargos={dist_cargos:.1f})")
+                    else:
+                        # Sin coordenadas, usar estructura típica: primer monto = cargos
+                        movement['cargos'] = first_amt['amount']
+                        print(f"    [DEBUG HSBC] Fallback: Primer monto '{first_amt['amount']}' → cargos (sin coordenadas, estructura típica)")
+            
+            # Si hay 3+ montos, asignar por posición: primero=cargos, segundo=abonos, último=saldo
+            elif len(amounts) >= 3:
+                if not movement.get('cargos'):
+                    movement['cargos'] = amounts[0].strip()
+                if not movement.get('abonos'):
+                    movement['abonos'] = amounts[1].strip()
+                if not movement.get('saldo'):
+                    movement['saldo'] = amounts[-1].strip()
+                    print(f"    [DEBUG HSBC] Fallback: Último monto '{amounts[-1].strip()}' → saldo")
+        
+        # Verificación final: Asegurar que saldo esté asignado cuando hay 2+ montos
+        # Esta es una verificación de seguridad adicional
+        if len(amounts) >= 2 and not movement.get('saldo'):
+            # Si hay 2+ montos y saldo no está asignado, asignar el último monto a saldo
+            movement['saldo'] = amounts[-1].strip()
+            print(f"    [DEBUG HSBC] Verificación final: Último monto '{amounts[-1].strip()}' → saldo (saldo faltante)")
+        
+        # Actualizar prints de debug
+        print(f"    Asignación final:")
+        print(f"        cargos={movement.get('cargos', '')}")
+        print(f"        abonos={movement.get('abonos', '')}")
+        print(f"        saldo={movement.get('saldo', '')}")
         
         # Validar que el movimiento tiene datos mínimos
+        print(f"\n[DEBUG HSBC] ===== VALIDACIÓN FINAL FILA {line_count} =====")
+        print(f"    Descripción: '{movement['descripcion'][:80] if movement['descripcion'] else '(vacía)'}'")
+        print(f"    Cargos: '{movement['cargos'] if movement['cargos'] else '(vacío)'}'")
+        print(f"    Abonos: '{movement['abonos'] if movement['abonos'] else '(vacío)'}'")
+        print(f"    Saldo: '{movement['saldo'] if movement['saldo'] else '(vacío)'}'")
+        print(f"    Tiene descripción: {bool(movement['descripcion'])}")
+        print(f"    Tiene montos: {bool(movement['cargos'] or movement['abonos'] or movement['saldo'])}")
+        
         if movement['descripcion'] and (movement['cargos'] or movement['abonos'] or movement['saldo']):
             movements.append(movement)
-            print(f"    ✅ Fila ACEPTADA - Resultado final:")
-            print(f"        fecha='{movement['fecha']}', descripcion='{movement['descripcion'][:60]}'")
+            print(f"    ✅ FILA {line_count} ACEPTADA - Agregada a movimientos")
+            print(f"        Resultado final: fecha='{movement['fecha']}', descripcion='{movement['descripcion'][:60]}'")
             print(f"        cargos='{movement['cargos']}', abonos='{movement['abonos']}', saldo='{movement['saldo']}'")
         else:
-            print(f"    ❌ Fila RECHAZADA - Falta descripción o montos")
-            print(f"        descripcion='{movement['descripcion']}', tiene_cargos={bool(movement['cargos'])}, tiene_abonos={bool(movement['abonos'])}, tiene_saldo={bool(movement['saldo'])}")
+            print(f"    ❌ FILA {line_count} RECHAZADA - No cumple requisitos mínimos")
+            print(f"        Razón: {'Falta descripción' if not movement['descripcion'] else ''} {'Faltan montos' if not (movement['cargos'] or movement['abonos'] or movement['saldo']) else ''}")
+    
+    print(f"\n[DEBUG HSBC] ===== RESUMEN FINAL =====")
+    print(f"    Total de líneas procesadas: {line_count}")
+    print(f"    Sección de movimientos encontrada: {start_found}")
+    print(f"    Total de movimientos extraídos: {len(movements)}")
+    if movements:
+        print(f"    Primer movimiento: fecha='{movements[0]['fecha']}', descripcion='{movements[0]['descripcion'][:50]}'")
+        print(f"    Último movimiento: fecha='{movements[-1]['fecha']}', descripcion='{movements[-1]['descripcion'][:50]}'")
+    else:
+        print(f"    ⚠️  NO SE EXTRAJERON MOVIMIENTOS")
     
     return movements
+
+
+def find_amount_coordinates(amount_text: str, line_text: str, line_y_approx: float, pages_data: list, y_tolerance: float = 15) -> tuple:
+    """
+    Encuentra las coordenadas X reales de un monto en pages_data['words'] usando coordenadas reales del OCR.
+    
+    Args:
+        amount_text: Texto del monto (ej: "$30,022.54")
+        line_text: Texto completo de la línea donde aparece el monto
+        line_y_approx: Posición Y aproximada de la línea (para filtrar palabras)
+        pages_data: Lista de diccionarios con palabras y coordenadas
+        y_tolerance: Tolerancia en píxeles para buscar en la misma línea Y (reducida a 15 para coordenadas reales)
+    
+    Returns:
+        Tupla (x0, x1) con coordenadas X del monto, o (None, None) si no se encuentra
+    """
+    # Normalizar amount_text para comparación (quitar espacios, normalizar formato)
+    amount_normalized = amount_text.replace(' ', '').replace(',', '').replace('$', '')
+    
+    # Debug: mostrar información de búsqueda
+    print(f"    [DEBUG find_amount_coordinates] Buscando monto: '{amount_text}' (normalizado: '{amount_normalized}')")
+    print(f"    [DEBUG find_amount_coordinates] Línea Y aproximada: {line_y_approx:.1f}, tolerancia: {y_tolerance}")
+    print(f"    [DEBUG find_amount_coordinates] Línea completa: '{line_text[:100]}'")
+    
+    # Buscar en todas las páginas
+    words_checked = 0
+    words_in_y_range = 0
+    for page_data in pages_data:
+        words = page_data.get('words', [])
+        
+        # Agrupar palabras por line_num si está disponible (más preciso)
+        words_by_line = {}
+        for word in words:
+            line_num = word.get('line_num', None)
+            if line_num is not None:
+                if line_num not in words_by_line:
+                    words_by_line[line_num] = []
+                words_by_line[line_num].append(word)
+        
+        for word in words:
+            words_checked += 1
+            word_text = word.get('text', '').strip()
+            word_y = word.get('top', 0)
+            word_x0 = word.get('x0', 0)
+            word_x1 = word.get('x1', 0)
+            word_line_num = word.get('line_num', None)
+            word_conf = word.get('conf', 100)
+            
+            # Filtrar palabras con baja confianza (opcional, pero útil)
+            if word_conf < 30:
+                continue
+            
+            # Verificar si está en la misma línea Y (con tolerancia reducida para coordenadas reales)
+            if abs(word_y - line_y_approx) > y_tolerance:
+                continue
+            
+            words_in_y_range += 1
+            
+            # Verificar si esta palabra contiene el monto
+            # Normalizar palabra para comparación
+            word_normalized = word_text.replace(' ', '').replace(',', '').replace('$', '')
+            
+            # Buscar si el monto está contenido en esta palabra o en palabras adyacentes
+            if amount_normalized in word_normalized or word_normalized in amount_normalized:
+                print(f"    [DEBUG find_amount_coordinates] ✓ Encontrado en palabra: '{word_text}' (Y: {word_y:.1f}, X: {word_x0:.1f}-{word_x1:.1f}, conf: {word_conf:.1f})")
+                return (word_x0, word_x1)
+            
+            # También buscar si el monto aparece como parte de la línea
+            # (puede estar dividido en múltiples palabras: "$30" "022.54")
+            if '$' in word_text:
+                # Esta palabra tiene $, puede ser el inicio del monto
+                # Si tenemos line_num, buscar solo en la misma línea
+                if word_line_num is not None and word_line_num in words_by_line:
+                    # Buscar en palabras de la misma línea (más preciso)
+                    line_words = words_by_line[word_line_num]
+                    word_idx = next((i for i, w in enumerate(line_words) if w == word), -1)
+                    
+                    if word_idx >= 0:
+                        combined_text = word_text
+                        combined_x0 = word_x0
+                        combined_x1 = word_x1
+                        
+                        # Buscar palabras siguientes en la misma línea
+                        for next_word in line_words[word_idx + 1:]:
+                            next_word_text = next_word.get('text', '').strip()
+                            
+                            # Agregar palabra siguiente
+                            combined_text += next_word_text
+                            combined_x1 = next_word.get('x1', combined_x1)
+                            
+                            # Normalizar y comparar
+                            combined_normalized = combined_text.replace(' ', '').replace(',', '').replace('$', '')
+                            if amount_normalized in combined_normalized:
+                                print(f"    [DEBUG find_amount_coordinates] ✓ Encontrado en palabras combinadas (line_num={word_line_num}): '{combined_text}' (X: {combined_x0:.1f}-{combined_x1:.1f})")
+                                return (combined_x0, combined_x1)
+                            
+                            # Si ya tenemos suficientes caracteres, detener
+                            if len(combined_normalized) >= len(amount_normalized) + 5:
+                                break
+                else:
+                    # Fallback: buscar en todas las palabras (método anterior)
+                    word_idx = words.index(word)
+                    combined_text = word_text
+                    combined_x0 = word_x0
+                    combined_x1 = word_x1
+                    
+                    # Buscar palabras siguientes en la misma línea Y
+                    for next_word in words[word_idx + 1:]:
+                        next_word_y = next_word.get('top', 0)
+                        next_word_text = next_word.get('text', '').strip()
+                        
+                        if abs(next_word_y - line_y_approx) > y_tolerance:
+                            break  # Ya no está en la misma línea
+                        
+                        # Agregar palabra siguiente
+                        combined_text += next_word_text
+                        combined_x1 = next_word.get('x1', combined_x1)
+                        
+                        # Normalizar y comparar
+                        combined_normalized = combined_text.replace(' ', '').replace(',', '').replace('$', '')
+                        if amount_normalized in combined_normalized:
+                            print(f"    [DEBUG find_amount_coordinates] ✓ Encontrado en palabras combinadas: '{combined_text}' (X: {combined_x0:.1f}-{combined_x1:.1f})")
+                            return (combined_x0, combined_x1)
+                        
+                        # Si ya tenemos suficientes caracteres, detener
+                        if len(combined_normalized) >= len(amount_normalized) + 5:
+                            break
+    
+    # Debug: mostrar estadísticas si no se encontró
+    print(f"    [DEBUG find_amount_coordinates] ✗ NO encontrado. Palabras revisadas: {words_checked}, en rango Y: {words_in_y_range}")
+    print(f"    [DEBUG find_amount_coordinates] Posibles causas:")
+    print(f"        - line_y_approx ({line_y_approx:.1f}) no coincide con Y real de las palabras")
+    print(f"        - El monto está dividido en múltiples palabras y no se combinó correctamente")
+    print(f"        - El formato del monto en words no coincide con amount_text")
+    
+    return (None, None)
 
 
 def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
@@ -2472,21 +2992,44 @@ def assign_word_to_column(word_x0, word_x1, columns):
     """Assign a word (with x0, x1 coordinates) to a column based on X-ranges.
     Returns column name or None if not in any range.
     Prioritizes numeric columns (cargos, abonos, saldo) over description when there's overlap.
+    When a word falls in multiple overlapping ranges, assigns to the range whose center is closest.
     """
     word_center = (word_x0 + word_x1) / 2
     
     # First, check numeric columns (cargos, abonos, saldo) to prioritize them
     # This fixes the issue where cargos (360-398) overlaps with descripcion (160-400)
     numeric_cols = ['cargos', 'abonos', 'saldo']
+    
+    # Collect all matching columns and their distances to center
+    matching_cols = []
     for col_name in numeric_cols:
         if col_name in columns:
             x_min, x_max = columns[col_name]
+            
+            # Validar y corregir rangos invertidos
+            if x_min > x_max:
+                print(f"[ADVERTENCIA] Rango invertido para '{col_name}': ({x_min}, {x_max}). Corrigiendo a ({x_max}, {x_min})")
+                x_min, x_max = x_max, x_min  # Intercambiar valores
+            
             if x_min <= word_center <= x_max:
-                return col_name
+                # Calcular distancia del centro del monto al centro del rango
+                range_center = (x_min + x_max) / 2
+                distance = abs(word_center - range_center)
+                matching_cols.append((col_name, distance, range_center))
+    
+    # Si hay múltiples coincidencias, retornar la más cercana al centro del rango
+    if matching_cols:
+        # Ordenar por distancia (más cercana primero)
+        matching_cols.sort(key=lambda x: x[1])
+        return matching_cols[0][0]  # Retornar la columna más cercana
     
     # Then check other columns (fecha, liq, descripcion, etc.)
     for col_name, (x_min, x_max) in columns.items():
         if col_name not in numeric_cols:  # Skip numeric cols, already checked
+            # Validar y corregir rangos invertidos
+            if x_min > x_max:
+                x_min, x_max = x_max, x_min  # Intercambiar valores
+            
             if x_min <= word_center <= x_max:
                 return col_name
     
@@ -2505,12 +3048,17 @@ def is_transaction_row(row_data, bank_name=None):
     saldo = (row_data.get('saldo') or '').strip()
     
     # Must have a date matching DD/MMM pattern
+    # For HSBC: date is only 2 digits (01-31)
     # For Banregio: date is only 2 digits (01-31)
     # For Base: date format is DD/MM/YYYY (e.g., "30/04/2024")
     # For other banks: supports both "DIA MES" (01 ABR) and "MES DIA" (ABR 01) formats
     # Pattern for dates: supports multiple formats including "DIA MES AÑO" (06 mar 2023)
     has_date = False
-    if bank_name == 'Banregio':
+    if bank_name == 'HSBC':
+        # For HSBC, date is only 2 digits (01-31)
+        hsbc_date_re = re.compile(r'^(0[1-9]|[12][0-9]|3[01])$')
+        has_date = bool(hsbc_date_re.match(fecha))
+    elif bank_name == 'Banregio':
         # For Banregio, date is only 2 digits (01-31)
         banregio_date_re = re.compile(r'^(0[1-9]|[12][0-9]|3[01])$')
         has_date = bool(banregio_date_re.match(fecha))
@@ -2537,7 +3085,11 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
     
     # Pattern to detect dates (for separating date from description)
     if date_pattern is None:
-        if bank_name == 'Banregio':
+        if bank_name == 'HSBC':
+            # For HSBC, date is only 2 digits (01-31) at the start of the text
+            # Pattern should match "03" or "03 RETIRO ..." but not "003" or "30"
+            date_pattern = re.compile(r"^(0[1-9]|[12][0-9]|3[01])(?=\s|$)")
+        elif bank_name == 'Banregio':
             # For Banregio, date is only 2 digits (01-31) at the start of the text
             # Pattern should match "04" or "04 TRA ..." but not "004" or "40"
             date_pattern = re.compile(r"^(0[1-9]|[12][0-9]|3[01])(?=\s|$)")
@@ -3440,9 +3992,47 @@ def main():
     df_mov = None  # Initialize to avoid UnboundLocalError
     pdf_summary = None  # Initialize to avoid UnboundLocalError
     
-    # Si es HSBC y se usó OCR, usar extracción con regex/patrones (saltar procesamiento con coordenadas)
+    # Si es HSBC y se usó OCR, usar la misma lógica que otros bancos
     if is_hsbc and used_ocr:
-        movement_rows = extract_hsbc_movements_from_ocr_text(extracted_data)
+        # Obtener columns_config desde BANK_CONFIGS
+        columns_config = bank_config.get("columns", {})
+        
+        if not columns_config:
+            print("[ADVERTENCIA] BANK_CONFIGS para HSBC no tiene 'columns'. Usando valores por defecto.")
+            # Valores por defecto (deberían calibrarse con --find)
+            columns_config = {
+                "fecha": (87, 103),
+                "descripcion": (124, 505),
+                "cargos": (710, 800),
+                "abonos": (865, 950),
+                "saldo": (1050, 1130),
+            }
+        
+        # Obtener strings de inicio/fin desde BANK_CONFIGS
+        start_string = bank_config.get('movements_start', 'ISR Retenido en el año')
+        end_string = bank_config.get('movements_end', 'CoDi')
+        
+        # Filtrar palabras en la sección de movimientos
+        filtered_words = filter_hsbc_movements_section(extracted_data, start_string, end_string)
+        
+        # Agrupar palabras por filas (igual que otros bancos)
+        word_rows = group_words_by_row(filtered_words, y_tolerance=3)
+        
+        # Patrón de fecha para HSBC (solo día: 01-31)
+        date_pattern = re.compile(r"^(0[1-9]|[12][0-9]|3[01])(?=\s|$)")
+        
+        # Extraer movimientos usando la misma lógica que otros bancos
+        for row_words in word_rows:
+            if not row_words:
+                continue
+            
+            # Extraer movimiento usando BANK_CONFIGS
+            row_data = extract_movement_row(row_words, columns_config, 'HSBC', date_pattern)
+            
+            # Validar si es una transacción válida
+            if is_transaction_row(row_data, 'HSBC'):
+                movement_rows.append(row_data)
+        
         df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
         
         # Extraer resumen desde texto OCR de la página 1
