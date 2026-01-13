@@ -666,12 +666,10 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
             if start_pattern.search(line):
                 start_found = True
                 in_movements_section = True
-                print(f"[INFO] Inicio de sección de movimientos HSBC encontrado: ISR Retenido en el año")
                 continue
         
         # Detectar fin de sección de movimientos
         if in_movements_section and end_pattern.search(line):
-            print(f"[INFO] Fin de sección de movimientos HSBC encontrado: CoDi")
             break  # Detener completamente la extracción
         
         if not in_movements_section:
@@ -745,7 +743,6 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list) -> list:
         if movement['descripcion'] and (movement['cargos'] or movement['abonos'] or movement['saldo']):
             movements.append(movement)
     
-    print(f"[INFO] Extraídos {len(movements)} movimientos de HSBC usando regex/patrones")
     return movements
 
 
@@ -792,7 +789,6 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
     
     lines = page_1_text.split('\n')
     
-    print(f"[DEBUG HSBC] Buscando resumen en {len(lines)} líneas de la página 1...")
     
     # Patrones más flexibles para buscar los valores (permitir espacios variables, $ opcional, y caracteres especiales)
     # Buscar "Depósitos" seguido de "!" o "/Abonos" y luego $ y monto
@@ -814,10 +810,6 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
     for i, line in enumerate(lines):
         line = line.strip()
         
-        # Debug: mostrar líneas que contienen palabras clave relevantes
-        line_lower = line.lower()
-        if any(keyword in line_lower for keyword in ['depósitos', 'depositos', 'abonos', 'retiros', 'cargos', 'saldo final']):
-            print(f"[DEBUG HSBC] Línea {i+1} relevante: {line[:100]}")
         
         # Buscar Depósitos/Abonos - buscar "Depósitos" seguido de "!" o ">" y luego monto
         # Ejemplo: "Depósitos! $ 308,422.54"
@@ -830,7 +822,6 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
                 if amount > 0:
                     summary_data['total_abonos'] = amount
                     summary_data['total_depositos'] = amount
-                    print(f"[DEBUG HSBC] ✓ Total Abonos encontrado en línea {i+1}: ${amount:,.2f} (texto: {line[:80]})")
         
         # Buscar Retiros/Cargos
         if not summary_data['total_cargos']:
@@ -842,7 +833,6 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
                 if amount > 0:
                     summary_data['total_cargos'] = amount
                     summary_data['total_retiros'] = amount
-                    print(f"[DEBUG HSBC] ✓ Total Cargos encontrado en línea {i+1}: ${amount:,.2f} (texto: {line[:80]})")
         
         # Buscar Saldo Final del Periodo (patrón completo)
         if not summary_data['saldo_final']:
@@ -856,15 +846,7 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
                 amount = normalize_amount_str(amount_str)
                 if amount > 0:
                     summary_data['saldo_final'] = amount
-                    print(f"[DEBUG HSBC] ✓ Saldo Final encontrado en línea {i+1}: ${amount:,.2f} (texto: {line[:80]})")
     
-    # Si no se encontraron todos los valores, mostrar advertencia
-    if not summary_data['total_abonos']:
-        print(f"[DEBUG HSBC] ⚠️ No se encontró Total Abonos")
-    if not summary_data['total_cargos']:
-        print(f"[DEBUG HSBC] ⚠️ No se encontró Total Cargos")
-    if not summary_data['saldo_final']:
-        print(f"[DEBUG HSBC] ⚠️ No se encontró Saldo Final")
     
     return summary_data
 
@@ -3382,16 +3364,10 @@ def main():
     
     # Si es HSBC y se usó OCR, usar extracción con regex/patrones (saltar procesamiento con coordenadas)
     if is_hsbc and used_ocr:
-        print("[INFO] HSBC detectado con OCR - Usando extracción con regex/patrones...")
         movement_rows = extract_hsbc_movements_from_ocr_text(extracted_data)
         df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
-        print(f"[DEBUG HSBC] DataFrame creado con {len(df_mov)} filas")
-        print(f"[DEBUG HSBC] Columnas iniciales: {list(df_mov.columns)}")
-        if len(df_mov) > 0:
-            print(f"[DEBUG HSBC] Primera fila muestra: {df_mov.iloc[0].to_dict()}")
         
         # Extraer resumen desde texto OCR de la página 1
-        print("[INFO] Extrayendo resumen de HSBC desde texto OCR...")
         pdf_summary = extract_hsbc_summary_from_ocr_text(extracted_data)
     else:
         # Flujo normal: procesar con coordenadas o texto plano
@@ -4557,31 +4533,20 @@ def main():
     
     # For HSBC, ensure 'Fecha' column exists and remove all unwanted columns
     if bank_config['name'] == 'HSBC':
-        print(f"[DEBUG HSBC] Antes de procesar columnas - Columnas actuales: {list(df_mov.columns)}")
         # Convert 'fecha' to 'Fecha' if needed (DO THIS FIRST before removing columns)
         if 'fecha' in df_mov.columns:
-            print(f"[DEBUG HSBC] Columna 'fecha' encontrada, convirtiendo a 'Fecha'...")
             if 'Fecha' not in df_mov.columns:
                 df_mov['Fecha'] = df_mov['fecha']
-                print(f"[DEBUG HSBC] Columna 'Fecha' creada desde 'fecha'")
-            else:
-                print(f"[DEBUG HSBC] Columna 'Fecha' ya existe, no se crea duplicada")
             # Remove 'fecha' after creating 'Fecha'
             df_mov = df_mov.drop(columns=['fecha'])
-            print(f"[DEBUG HSBC] Columna 'fecha' eliminada")
         elif 'Fecha Oper' in df_mov.columns and 'Fecha' not in df_mov.columns:
-            print(f"[DEBUG HSBC] Columna 'Fecha Oper' encontrada, convirtiendo a 'Fecha'...")
             df_mov['Fecha'] = df_mov['Fecha Oper']
-        else:
-            print(f"[DEBUG HSBC] No se encontró 'fecha' ni 'Fecha Oper' en columnas: {list(df_mov.columns)}")
         
         # Remove ALL other unwanted columns for HSBC
         unwanted_cols = ['Fecha Oper', 'Fecha Liq', 'raw', 'liq']
         for col in unwanted_cols:
             if col in df_mov.columns:
-                print(f"[DEBUG HSBC] Eliminando columna no deseada: {col}")
                 df_mov = df_mov.drop(columns=[col])
-        print(f"[DEBUG HSBC] Después de procesar columnas - Columnas actuales: {list(df_mov.columns)}")
 
     # For BBVA, split 'saldo' column into 'OPERACIÓN' and 'LIQUIDACIÓN'
     if bank_config['name'] == 'BBVA' and 'saldo' in df_mov.columns:
@@ -4716,12 +4681,8 @@ def main():
     else:
         # For HSBC and other banks, rename columns
         # For HSBC, 'fecha' was already converted to 'Fecha' earlier, so skip if 'Fecha' already exists
-        if bank_config['name'] == 'HSBC':
-            print(f"[DEBUG HSBC] En bloque de renombrado - Columnas antes: {list(df_mov.columns)}")
         if 'fecha' in df_mov.columns and 'Fecha' not in df_mov.columns:
             column_rename['fecha'] = 'Fecha'
-            if bank_config['name'] == 'HSBC':
-                print(f"[DEBUG HSBC] Agregando renombrado: 'fecha' -> 'Fecha'")
         if 'Descripcion' in df_mov.columns:
             column_rename['Descripcion'] = 'Descripción'
         if 'descripcion' in df_mov.columns:
@@ -4734,11 +4695,7 @@ def main():
             column_rename['saldo'] = 'Saldo'
     
     if column_rename:
-        if bank_config['name'] == 'HSBC':
-            print(f"[DEBUG HSBC] Aplicando renombrados: {column_rename}")
         df_mov = df_mov.rename(columns=column_rename)
-        if bank_config['name'] == 'HSBC':
-            print(f"[DEBUG HSBC] Después de renombrado - Columnas: {list(df_mov.columns)}")
     
     # For HSBC, remove 'raw' column if it still exists (after renaming)
     if bank_config['name'] == 'HSBC' and 'raw' in df_mov.columns:
@@ -4799,34 +4756,21 @@ def main():
         df_mov = df_mov[desired_order + other_cols]
     elif bank_config['name'] == 'HSBC':
         # For HSBC: ONLY Fecha, Descripción, Cargos, Abonos, Saldo
-        print(f"[DEBUG HSBC] En bloque de reordenamiento - Columnas antes: {list(df_mov.columns)}")
         # Ensure 'Fecha' column exists (should already exist from earlier processing)
         if 'Fecha' not in df_mov.columns and 'fecha' in df_mov.columns:
-            print(f"[DEBUG HSBC] 'Fecha' no existe pero 'fecha' sí, creando 'Fecha'...")
             df_mov['Fecha'] = df_mov['fecha']
             df_mov = df_mov.drop(columns=['fecha'])
-            print(f"[DEBUG HSBC] 'Fecha' creada y 'fecha' eliminada")
-        elif 'Fecha' in df_mov.columns:
-            print(f"[DEBUG HSBC] Columna 'Fecha' ya existe ✓")
-        else:
-            print(f"[DEBUG HSBC] ⚠️ ADVERTENCIA: Ni 'Fecha' ni 'fecha' encontradas en: {list(df_mov.columns)}")
         
         desired_order = ['Fecha', 'Descripción', 'Cargos', 'Abonos', 'Saldo']
-        print(f"[DEBUG HSBC] Orden deseado: {desired_order}")
         # Filter to only include columns that exist in the dataframe
         desired_order = [col for col in desired_order if col in df_mov.columns]
-        print(f"[DEBUG HSBC] Orden después de filtrar columnas existentes: {desired_order}")
         # Remove ALL other columns that are not in desired_order
         columns_to_remove = [c for c in df_mov.columns if c not in desired_order]
         if columns_to_remove:
-            print(f"[DEBUG HSBC] Eliminando columnas no deseadas: {columns_to_remove}")
             df_mov = df_mov.drop(columns=columns_to_remove)
         # Reorder to match desired_order exactly
         if desired_order:  # Only reorder if we have columns
             df_mov = df_mov[desired_order]
-            print(f"[DEBUG HSBC] Columnas finales después de reordenar: {list(df_mov.columns)}")
-        else:
-            print(f"[DEBUG HSBC] ⚠️ ADVERTENCIA: No hay columnas en desired_order para reordenar")
     else:
         # For other banks: Fecha, Descripción, Cargos, Abonos, Saldo (if available)
         # Build desired_order based on what columns are configured for this bank
