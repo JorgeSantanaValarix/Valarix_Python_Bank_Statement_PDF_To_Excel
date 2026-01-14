@@ -4235,238 +4235,238 @@ def main():
                 continue
             
             # Group words by row
-        # For Konfio, use a larger y_tolerance to capture multi-line descriptions
-        # Use y_tolerance=3 for all banks to avoid grouping multiple movements into one row
-        # The split_row_if_multiple_movements function will handle cases where movements are still grouped
-        y_tol = 8 if bank_config['name'] == 'Konfio' else 3
-        word_rows = group_words_by_row(words, y_tolerance=y_tol)
-    
-        # Check if grouped rows contain multiple movements and split them
-        # This applies to all banks to ensure each movement is in its own row
-        if columns_config:
-            split_rows = []
-            for row_words in word_rows:
-                if not row_words:
+            # For Konfio, use a larger y_tolerance to capture multi-line descriptions
+            # Use y_tolerance=3 for all banks to avoid grouping multiple movements into one row
+            # The split_row_if_multiple_movements function will handle cases where movements are still grouped
+            y_tol = 8 if bank_config['name'] == 'Konfio' else 3
+            word_rows = group_words_by_row(words, y_tolerance=y_tol)
+            
+            # Check if grouped rows contain multiple movements and split them
+            # This applies to all banks to ensure each movement is in its own row
+            if columns_config:
+                split_rows = []
+                for row_words in word_rows:
+                    if not row_words:
+                        continue
+                    
+                    # Use the generic function to split rows with multiple movements
+                    # Pass bank_name to enable bank-specific logic
+                    split_result = split_row_if_multiple_movements(row_words, columns_config, date_pattern, bank_config['name'])
+                    split_rows.extend(split_result)
+                
+                word_rows = split_rows
+            
+            for row_idx, row_words in enumerate(word_rows):
+                if not row_words or extraction_stopped:
                     continue
-                
-                # Use the generic function to split rows with multiple movements
-                # Pass bank_name to enable bank-specific logic
-                split_result = split_row_if_multiple_movements(row_words, columns_config, date_pattern, bank_config['name'])
-                split_rows.extend(split_result)
-            
-            word_rows = split_rows
-        
-        for row_idx, row_words in enumerate(word_rows):
-            if not row_words or extraction_stopped:
-                continue
 
-            # For Banbajío, Banregio, Inbursa, and Scotiabank, skip the header line if it appears on subsequent pages
-            if bank_config['name'] == 'Banbajío' and banbajio_header_pattern:
-                all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                if banbajio_header_pattern.search(all_row_text):
-                    continue  # Skip the header line
-            
-            if bank_config['name'] == 'Banregio' and banregio_header_pattern:
-                all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                if banregio_header_pattern.search(all_row_text):
-                    continue  # Skip the header line
-            
-            if bank_config['name'] == 'Inbursa' and inbursa_header_pattern:
-                all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                if inbursa_header_pattern.search(all_row_text):
-                    continue  # Skip the header line
-            
-            # For Scotiabank, skip the header line if it appears during coordinate-based extraction
-            if bank_config['name'] == 'Scotiabank' and scotiabank_header_pattern:
-                all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                if scotiabank_header_pattern.search(all_row_text):
-                    continue  # Skip the header line
-            
-            # For Base, skip the start pattern line if it appears during coordinate-based extraction
-            if bank_config['name'] == 'Base' and base_start_pattern:
-                all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                if base_start_pattern.search(all_row_text):
-                    continue  # Skip the start pattern line
-            
-            # For Clara, skip the "Movimientos" header line if it appears during coordinate-based extraction
-            if bank_config['name'] == 'Clara' and clara_start_pattern:
-                all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                if clara_start_pattern.search(all_row_text):
-                    continue  # Skip the header line
-                
-            # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
-            if bank_config['name'] == 'Banregio':
-                all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                if re.search(r'^del\s+01\s+al', all_row_text, re.I):
-                    continue  # Skip irrelevant information rows
-
-            # Check for end pattern (for Banamex, Santander, Banregio, Scotiabank, Konfio, Clara, etc.)
-            if movement_end_pattern:
-                all_text = ' '.join([w.get('text', '') for w in row_words])
-                match_found = False
-                
-                # For Scotiabank, try multiple flexible patterns to handle variations in spacing and formatting
-                if bank_config['name'] == 'Scotiabank':
-                    # Try multiple flexible patterns
-                    scotiabank_end_patterns = [
-                        re.compile(r'LAS\s+TASAS\s+DE\s+INTERES\s+ESTAN\s+EXPRESADAS\s+EN\s+TERMINOS\s+ANUALES\s+SIMPLES\.?', re.I),
-                        re.compile(r'LAS\s+TASAS\s+DE\s+INTERES.*?ESTAN.*?EXPRESADAS.*?EN.*?TERMINOS.*?ANUALES.*?SIMPLES\.?', re.I),
-                        re.compile(r'LAS.*?TASAS.*?DE.*?INTERES.*?ESTAN.*?EXPRESADAS.*?EN.*?TERMINOS.*?ANUALES.*?SIMPLES', re.I),
-                    ]
-                    for pattern in scotiabank_end_patterns:
-                        if pattern.search(all_text):
-                            match_found = True
-                            break
-                elif bank_config['name'] == 'Clara':
-                    # For Clara, check for "Total" followed by 2 amounts
-                    # Try multiple flexible patterns
-                    clara_end_patterns = [
-                        re.compile(r'\bTotal\b\s+MXN\s+[\d,\.]+\s+MXN\s+[\d,\.]+', re.I),  # "Total MXN ... MXN ..."
-                        re.compile(r'\bTotal\b\s+[\d,\.]+\s+[\d,\.]+', re.I),  # "Total" followed by two amounts
-                        re.compile(r'^Total\b\s+[\d,\.]+\s+[\d,\.]+', re.I),  # "Total" at start of line
-                    ]
-                    for pattern in clara_end_patterns:
-                        if pattern.search(all_text):
-                            match_found = True
-                            break
-                else:
-                    # For other banks (Banregio, Banamex, Santander, Banorte, Konfio, Banbajío), use the standard pattern
-                    if movement_end_pattern.search(all_text):
-                        match_found = True
-                        #if bank_config['name'] == 'Banbajío':
-                            #print(f"🛑 BanBajío: Fin de extracción detectado en página {page_num}, fila {row_idx+1}: {all_row_text[:100]}")
-                
-                if match_found:
-                    #print(f"🛑 Fin de tabla de movimientos detectado en página {page_num}")
-                    extraction_stopped = True
-                    break
-
-            # Extract structured row using coordinates
-            # Pass bank_name and date_pattern to enable date/description separation
-            row_data = extract_movement_row(row_words, columns_config, bank_config['name'], date_pattern)
-            
-            # Debug for Konfio: print row data after extraction (only first 3 pages)
-            if bank_config['name'] == 'Konfio' and page_num <= 3:
-                all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                fecha_val = str(row_data.get('fecha') or '').strip()
-                desc_val = str(row_data.get('descripcion') or '').strip()
-                cargos_val = str(row_data.get('cargos') or '').strip()
-                abonos_val = str(row_data.get('abonos') or '').strip()
-                #print(f"🔍 Konfio: Fila extraída (página {page_num}, fila {row_idx+1}) - Fecha: '{fecha_val}', Desc: '{desc_val[:60]}', Cargos: '{cargos_val}', Abonos: '{abonos_val}'")
-                #print(f"   Texto completo: {all_row_text[:150]}")
-            
-            # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
-            if bank_config['name'] == 'Konfio':
-                desc_val_check = str(row_data.get('descripcion') or '').strip()
-                all_row_text_check = ' '.join([w.get('text', '') for w in row_words])
-                if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper() or 'IVA SOBRE COMISIONES E INTERESES' in all_row_text_check.upper():
-                    fecha_val = str(row_data.get('fecha') or '').strip()
-
-            # Determine if this row starts a new movement (contains a date)
-            # If columns_config is empty, check all words for dates
-            if not columns_config:
-                # Check all words in the row for dates
-                all_text = ' '.join([w.get('text', '') for w in row_words])
-                has_date = bool(date_pattern.search(all_text))
-                if has_date:
-                    # Create a basic row_data structure
-                    row_data = {'raw': all_text, '_amounts': row_data.get('_amounts', [])}
-            else:
-                # A new movement begins when the 'fecha' column contains a date token.
-                fecha_val = str(row_data.get('fecha') or '')
-                # For Banregio, use match() instead of search() since we want to verify the entire string is the date
-                if bank_config['name'] == 'Banregio':
-                    has_date = bool(date_pattern.match(fecha_val))
-                elif bank_config['name'] == 'Clara':
-                    # For Clara, check if fecha contains a valid date pattern (e.g., "01 ENE" or "01 E N E")
-                    clara_date_pattern = re.compile(r'\d{1,2}\s+[A-Z]{3}|\d{1,2}\s+[A-Z]\s+[A-Z]\s+[A-Z]', re.I)
-                    has_date = bool(clara_date_pattern.search(fecha_val))
-                else:
-                    has_date = bool(date_pattern.search(fecha_val))
-                    # For Konfio, if no date in fecha column, check all words in the row
-                    # But use strict format: must be "DIA MES AÑO" (e.g., "14 mar 2023"), not just "14"
-                    if bank_config['name'] == 'Konfio' and not has_date:
-                        all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                        # Use strict Konfio date pattern: DIA MES AÑO format
-                        konfio_full_date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4}\b', re.I)
-                        has_date = bool(konfio_full_date_pattern.search(all_row_text))
-                        if has_date:
-                            # Extract the date from the row text and assign to fecha
-                            date_match = konfio_full_date_pattern.search(all_row_text)
-                            if date_match:
-                                row_data['fecha'] = date_match.group()
-                    # Debug for Konfio
-                    #if bank_config['name'] == 'Konfio' and not has_date and fecha_val:
-                        #all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                        #print(f"⚠️ Konfio: Fecha no detectada - Valor en columna fecha: '{fecha_val}', Texto completo: '{all_row_text[:100]}', Patrón usado: {date_pattern.pattern}")
-                
-                # Check if row has valid data (date, description, or amounts)
-                has_valid_data = has_date
-                if not has_valid_data:
-                    # Check if row has description or amounts
-                    desc_val = str(row_data.get('descripcion') or '').strip()
-                    has_amounts = len(row_data.get('_amounts', [])) > 0
-                    has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
-                    has_valid_data = bool(desc_val or has_amounts or has_cargos_abonos)
-                    
-                    # Debug for Konfio
-                    #if bank_config['name'] == 'Konfio' and not has_valid_data:
-                        #all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                        #print(f"⚠️ Konfio: Fila rechazada (sin fecha ni datos válidos) - Fecha: '{fecha_val}', Desc: '{desc_val[:60]}', Montos: {has_amounts}, Cargos/Abonos: {has_cargos_abonos}")
-                        #print(f"   Texto completo: {all_row_text[:150]}")
-                
-                # For BanBajío, also accept rows with "SALDO INICIAL" even if they don't have a date
-                if bank_config['name'] == 'Banbajío' and not has_date:
-                    desc_val = str(row_data.get('descripcion') or '').strip()
-                    if re.search(r'SALDO\s+INICIAL', desc_val, re.I):
-                        has_date = True  # Treat "SALDO INICIAL" as a valid row even without date
-                        has_valid_data = True
-
-            if has_date:
-                # Only add rows that have date AND (description OR amounts)
-                # This ensures we don't add incomplete rows
-                desc_val = str(row_data.get('descripcion') or '').strip()
-                has_amounts = len(row_data.get('_amounts', [])) > 0
-                has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
-                has_description_or_amounts = bool(desc_val or has_amounts or has_cargos_abonos)
-                
-                # For Konfio, be more lenient - if we have a date, add the row even if description/amounts are in continuation rows
-                if bank_config['name'] == 'Konfio':
-                    # Verify the date is a valid Konfio date format (DIA MES AÑO), not just a number like "14"
-                    fecha_val_check = str(row_data.get('fecha') or '').strip()
-                    konfio_full_date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4}\b', re.I)
-                    if fecha_val_check and not konfio_full_date_pattern.search(fecha_val_check):
-                        # Date is not in valid Konfio format (e.g., "14" instead of "14 mar 2023"), skip this row
-                        continue
-                    
-                    # Check if this is a sub-row pattern (like "SBO 020902DX1 - 02 abr 2023 4316 FÍSICA")
-                    # These should be rejected as they are continuation lines, not main movement rows
+                # For Banbajío, Banregio, Inbursa, and Scotiabank, skip the header line if it appears on subsequent pages
+                if bank_config['name'] == 'Banbajío' and banbajio_header_pattern:
                     all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                    konfio_sub_row_pattern = re.compile(r'^[A-Z]{2,4}\s*[A-Z0-9]{8,15}\s*-\s*\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4}', re.I)
-                    # If the row starts with this pattern, it's a sub-row and should be skipped
-                    if konfio_sub_row_pattern.match(all_row_text.strip()):
-                        # This is a sub-row, skip it (it will be handled as continuation if needed)
-                        continue
-                    # Add row if it has date, even if description/amounts are empty (they'll be added in continuation rows)
-                    movement_rows.append(row_data)
-                elif has_description_or_amounts:
-                    # For Banregio, only include rows where description starts with "TRA" or "DOC"
+                    if banbajio_header_pattern.search(all_row_text):
+                        continue  # Skip the header line
+                
+                if bank_config['name'] == 'Banregio' and banregio_header_pattern:
+                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    if banregio_header_pattern.search(all_row_text):
+                        continue  # Skip the header line
+                
+                if bank_config['name'] == 'Inbursa' and inbursa_header_pattern:
+                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    if inbursa_header_pattern.search(all_row_text):
+                        continue  # Skip the header line
+                
+                # For Scotiabank, skip the header line if it appears during coordinate-based extraction
+                if bank_config['name'] == 'Scotiabank' and scotiabank_header_pattern:
+                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    if scotiabank_header_pattern.search(all_row_text):
+                        continue  # Skip the header line
+                
+                # For Base, skip the start pattern line if it appears during coordinate-based extraction
+                if bank_config['name'] == 'Base' and base_start_pattern:
+                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    if base_start_pattern.search(all_row_text):
+                        continue  # Skip the start pattern line
+                
+                # For Clara, skip the "Movimientos" header line if it appears during coordinate-based extraction
+                if bank_config['name'] == 'Clara' and clara_start_pattern:
+                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    if clara_start_pattern.search(all_row_text):
+                        continue  # Skip the header line
+                    
+                # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
+                if bank_config['name'] == 'Banregio':
+                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    if re.search(r'^del\s+01\s+al', all_row_text, re.I):
+                        continue  # Skip irrelevant information rows
+
+                # Check for end pattern (for Banamex, Santander, Banregio, Scotiabank, Konfio, Clara, etc.)
+                if movement_end_pattern:
+                    all_text = ' '.join([w.get('text', '') for w in row_words])
+                    match_found = False
+                    
+                    # For Scotiabank, try multiple flexible patterns to handle variations in spacing and formatting
+                    if bank_config['name'] == 'Scotiabank':
+                        # Try multiple flexible patterns
+                        scotiabank_end_patterns = [
+                            re.compile(r'LAS\s+TASAS\s+DE\s+INTERES\s+ESTAN\s+EXPRESADAS\s+EN\s+TERMINOS\s+ANUALES\s+SIMPLES\.?', re.I),
+                            re.compile(r'LAS\s+TASAS\s+DE\s+INTERES.*?ESTAN.*?EXPRESADAS.*?EN.*?TERMINOS.*?ANUALES.*?SIMPLES\.?', re.I),
+                            re.compile(r'LAS.*?TASAS.*?DE.*?INTERES.*?ESTAN.*?EXPRESADAS.*?EN.*?TERMINOS.*?ANUALES.*?SIMPLES', re.I),
+                        ]
+                        for pattern in scotiabank_end_patterns:
+                            if pattern.search(all_text):
+                                match_found = True
+                                break
+                    elif bank_config['name'] == 'Clara':
+                        # For Clara, check for "Total" followed by 2 amounts
+                        # Try multiple flexible patterns
+                        clara_end_patterns = [
+                            re.compile(r'\bTotal\b\s+MXN\s+[\d,\.]+\s+MXN\s+[\d,\.]+', re.I),  # "Total MXN ... MXN ..."
+                            re.compile(r'\bTotal\b\s+[\d,\.]+\s+[\d,\.]+', re.I),  # "Total" followed by two amounts
+                            re.compile(r'^Total\b\s+[\d,\.]+\s+[\d,\.]+', re.I),  # "Total" at start of line
+                        ]
+                        for pattern in clara_end_patterns:
+                            if pattern.search(all_text):
+                                match_found = True
+                                break
+                    else:
+                        # For other banks (Banregio, Banamex, Santander, Banorte, Konfio, Banbajío), use the standard pattern
+                        if movement_end_pattern.search(all_text):
+                            match_found = True
+                            #if bank_config['name'] == 'Banbajío':
+                                #print(f"🛑 BanBajío: Fin de extracción detectado en página {page_num}, fila {row_idx+1}: {all_row_text[:100]}")
+                    
+                    if match_found:
+                        #print(f"🛑 Fin de tabla de movimientos detectado en página {page_num}")
+                        extraction_stopped = True
+                        break
+
+                # Extract structured row using coordinates
+                # Pass bank_name and date_pattern to enable date/description separation
+                row_data = extract_movement_row(row_words, columns_config, bank_config['name'], date_pattern)
+                
+                # Debug for Konfio: print row data after extraction (only first 3 pages)
+                if bank_config['name'] == 'Konfio' and page_num <= 3:
+                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    fecha_val = str(row_data.get('fecha') or '').strip()
+                    desc_val = str(row_data.get('descripcion') or '').strip()
+                    cargos_val = str(row_data.get('cargos') or '').strip()
+                    abonos_val = str(row_data.get('abonos') or '').strip()
+                    #print(f"🔍 Konfio: Fila extraída (página {page_num}, fila {row_idx+1}) - Fecha: '{fecha_val}', Desc: '{desc_val[:60]}', Cargos: '{cargos_val}', Abonos: '{abonos_val}'")
+                    #print(f"   Texto completo: {all_row_text[:150]}")
+                
+                # Special debug for "IVA SOBRE COMISIONES E INTERESES" row
+                if bank_config['name'] == 'Konfio':
+                    desc_val_check = str(row_data.get('descripcion') or '').strip()
+                    all_row_text_check = ' '.join([w.get('text', '') for w in row_words])
+                    if 'IVA SOBRE COMISIONES E INTERESES' in desc_val_check.upper() or 'IVA SOBRE COMISIONES E INTERESES' in all_row_text_check.upper():
+                        fecha_val = str(row_data.get('fecha') or '').strip()
+
+                # Determine if this row starts a new movement (contains a date)
+                # If columns_config is empty, check all words for dates
+                if not columns_config:
+                    # Check all words in the row for dates
+                    all_text = ' '.join([w.get('text', '') for w in row_words])
+                    has_date = bool(date_pattern.search(all_text))
+                    if has_date:
+                        # Create a basic row_data structure
+                        row_data = {'raw': all_text, '_amounts': row_data.get('_amounts', [])}
+                else:
+                    # A new movement begins when the 'fecha' column contains a date token.
+                    fecha_val = str(row_data.get('fecha') or '')
+                    # For Banregio, use match() instead of search() since we want to verify the entire string is the date
                     if bank_config['name'] == 'Banregio':
-                        desc_val_check = str(row_data.get('descripcion') or '').strip()
-                        if not (desc_val_check.startswith('TRA') or desc_val_check.startswith('DOC') or desc_val_check.startswith('INT') or desc_val_check.startswith('EFE')):
-                            # Skip this row - doesn't start with TRA or DOC or INT or EFE
-                            continue
-                    #row_data['page'] = page_num
-                    movement_rows.append(row_data)
-            elif has_valid_data and bank_config['name'] == 'Banbajío':
-                # For BanBajío, also add rows without date if they contain "SALDO INICIAL"
-                desc_val = str(row_data.get('descripcion') or '').strip()
-                if re.search(r'SALDO\s+INICIAL', desc_val, re.I):
+                        has_date = bool(date_pattern.match(fecha_val))
+                    elif bank_config['name'] == 'Clara':
+                        # For Clara, check if fecha contains a valid date pattern (e.g., "01 ENE" or "01 E N E")
+                        clara_date_pattern = re.compile(r'\d{1,2}\s+[A-Z]{3}|\d{1,2}\s+[A-Z]\s+[A-Z]\s+[A-Z]', re.I)
+                        has_date = bool(clara_date_pattern.search(fecha_val))
+                    else:
+                        has_date = bool(date_pattern.search(fecha_val))
+                        # For Konfio, if no date in fecha column, check all words in the row
+                        # But use strict format: must be "DIA MES AÑO" (e.g., "14 mar 2023"), not just "14"
+                        if bank_config['name'] == 'Konfio' and not has_date:
+                            all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                            # Use strict Konfio date pattern: DIA MES AÑO format
+                            konfio_full_date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4}\b', re.I)
+                            has_date = bool(konfio_full_date_pattern.search(all_row_text))
+                            if has_date:
+                                # Extract the date from the row text and assign to fecha
+                                date_match = konfio_full_date_pattern.search(all_row_text)
+                                if date_match:
+                                    row_data['fecha'] = date_match.group()
+                        # Debug for Konfio
+                        #if bank_config['name'] == 'Konfio' and not has_date and fecha_val:
+                            #all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                            #print(f"⚠️ Konfio: Fecha no detectada - Valor en columna fecha: '{fecha_val}', Texto completo: '{all_row_text[:100]}', Patrón usado: {date_pattern.pattern}")
+                    
+                    # Check if row has valid data (date, description, or amounts)
+                    has_valid_data = has_date
+                    if not has_valid_data:
+                        # Check if row has description or amounts
+                        desc_val = str(row_data.get('descripcion') or '').strip()
+                        has_amounts = len(row_data.get('_amounts', [])) > 0
+                        has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
+                        has_valid_data = bool(desc_val or has_amounts or has_cargos_abonos)
+                        
+                        # Debug for Konfio
+                        #if bank_config['name'] == 'Konfio' and not has_valid_data:
+                            #all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                            #print(f"⚠️ Konfio: Fila rechazada (sin fecha ni datos válidos) - Fecha: '{fecha_val}', Desc: '{desc_val[:60]}', Montos: {has_amounts}, Cargos/Abonos: {has_cargos_abonos}")
+                            #print(f"   Texto completo: {all_row_text[:150]}")
+                    
+                    # For BanBajío, also accept rows with "SALDO INICIAL" even if they don't have a date
+                    if bank_config['name'] == 'Banbajío' and not has_date:
+                        desc_val = str(row_data.get('descripcion') or '').strip()
+                        if re.search(r'SALDO\s+INICIAL', desc_val, re.I):
+                            has_date = True  # Treat "SALDO INICIAL" as a valid row even without date
+                            has_valid_data = True
+
+                if has_date:
+                    # Only add rows that have date AND (description OR amounts)
+                    # This ensures we don't add incomplete rows
+                    desc_val = str(row_data.get('descripcion') or '').strip()
                     has_amounts = len(row_data.get('_amounts', [])) > 0
                     has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
-                    if has_amounts or has_cargos_abonos:
+                    has_description_or_amounts = bool(desc_val or has_amounts or has_cargos_abonos)
+                    
+                    # For Konfio, be more lenient - if we have a date, add the row even if description/amounts are in continuation rows
+                    if bank_config['name'] == 'Konfio':
+                        # Verify the date is a valid Konfio date format (DIA MES AÑO), not just a number like "14"
+                        fecha_val_check = str(row_data.get('fecha') or '').strip()
+                        konfio_full_date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4}\b', re.I)
+                        if fecha_val_check and not konfio_full_date_pattern.search(fecha_val_check):
+                            # Date is not in valid Konfio format (e.g., "14" instead of "14 mar 2023"), skip this row
+                            continue
+                        
+                        # Check if this is a sub-row pattern (like "SBO 020902DX1 - 02 abr 2023 4316 FÍSICA")
+                        # These should be rejected as they are continuation lines, not main movement rows
+                        all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                        konfio_sub_row_pattern = re.compile(r'^[A-Z]{2,4}\s*[A-Z0-9]{8,15}\s*-\s*\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4}', re.I)
+                        # If the row starts with this pattern, it's a sub-row and should be skipped
+                        if konfio_sub_row_pattern.match(all_row_text.strip()):
+                            # This is a sub-row, skip it (it will be handled as continuation if needed)
+                            continue
+                        # Add row if it has date, even if description/amounts are empty (they'll be added in continuation rows)
+                        movement_rows.append(row_data)
+                    elif has_description_or_amounts:
+                        # For Banregio, only include rows where description starts with "TRA" or "DOC"
+                        if bank_config['name'] == 'Banregio':
+                            desc_val_check = str(row_data.get('descripcion') or '').strip()
+                            if not (desc_val_check.startswith('TRA') or desc_val_check.startswith('DOC') or desc_val_check.startswith('INT') or desc_val_check.startswith('EFE')):
+                                # Skip this row - doesn't start with TRA or DOC or INT or EFE
+                                continue
                         #row_data['page'] = page_num
                         movement_rows.append(row_data)
+                elif has_valid_data and bank_config['name'] == 'Banbajío':
+                    # For BanBajío, also add rows without date if they contain "SALDO INICIAL"
+                    desc_val = str(row_data.get('descripcion') or '').strip()
+                    if re.search(r'SALDO\s+INICIAL', desc_val, re.I):
+                        has_amounts = len(row_data.get('_amounts', [])) > 0
+                        has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
+                        if has_amounts or has_cargos_abonos:
+                            #row_data['page'] = page_num
+                            movement_rows.append(row_data)
                     
                     # For Banregio, check if this is a monthly commission (last movement) - stop extraction
                     if bank_config['name'] == 'Banregio':
@@ -4483,21 +4483,21 @@ def main():
                             # We were in commission zone but this row is not a commission - stop extraction
                             extraction_stopped = True
                             break  # Stop extraction - no more monthly commissions
-                
-                # If row has date but no description/amounts, skip it (incomplete row)
-                elif has_valid_data:
-                    # Row has valid data but no date - treat as continuation or standalone row
-                    # For BanBajío, filter out informational rows like "1 DE ENERO AL 31 DE ENERO DE 2024 PERIODO:"
-                    if bank_config['name'] == 'Banbajío':
-                        all_row_text_check = ' '.join([w.get('text', '') for w in row_words])
-                        all_row_text_check = all_row_text_check.strip()
-                        # Check if row contains period information (e.g., "1 DE ENERO AL 31 DE ENERO DE 2024 PERIODO:")
-                        if re.search(r'\bPERIODO\s*:?\s*$', all_row_text_check, re.I) or re.search(r'\d+\s+DE\s+[A-Z]+\s+AL\s+\d+\s+DE\s+[A-Z]+', all_row_text_check, re.I):
-                            # Skip this row - it's period information, not a movement
-                            continue
-                    # For Banregio, if we're in commission zone, check for irrelevant rows and stop extraction
-                    if bank_config['name'] == 'Banregio' and in_comision_zone:
-                            # Collect all text from the row to check for irrelevant content
+                    
+                    # If row has date but no description/amounts, skip it (incomplete row)
+                    elif has_valid_data:
+                        # Row has valid data but no date - treat as continuation or standalone row
+                        # For BanBajío, filter out informational rows like "1 DE ENERO AL 31 DE ENERO DE 2024 PERIODO:"
+                        if bank_config['name'] == 'Banbajío':
+                            all_row_text_check = ' '.join([w.get('text', '') for w in row_words])
+                            all_row_text_check = all_row_text_check.strip()
+                            # Check if row contains period information (e.g., "1 DE ENERO AL 31 DE ENERO DE 2024 PERIODO:")
+                            if re.search(r'\bPERIODO\s*:?\s*$', all_row_text_check, re.I) or re.search(r'\d+\s+DE\s+[A-Z]+\s+AL\s+\d+\s+DE\s+[A-Z]+', all_row_text_check, re.I):
+                                # Skip this row - it's period information, not a movement
+                                continue
+                        # For Banregio, if we're in commission zone, check for irrelevant rows and stop extraction
+                        if bank_config['name'] == 'Banregio' and in_comision_zone:
+                                # Collect all text from the row to check for irrelevant content
                             all_row_text_check = ' '.join([w.get('text', '') for w in row_words])
                             all_row_text_check = all_row_text_check.strip()
                             
@@ -4528,228 +4528,227 @@ def main():
                             # If none of the above, stop extraction anyway (we're past commissions)
                             extraction_stopped = True
                             break  # Stop extraction - no more monthly commissions
-                    
-                    if movement_rows:
-                        # Continuation row: append description-like text and amounts to previous movement
-                        prev = movement_rows[-1]
                         
-                        # First, capture amounts from continuation row and assign to appropriate columns
-                        cont_amounts = row_data.get('_amounts', [])
-                        if cont_amounts and columns_config:
-                            # Get description range to exclude amounts from it
-                            descripcion_range = None
-                            if 'descripcion' in columns_config:
-                                x0, x1 = columns_config['descripcion']
-                                descripcion_range = (x0, x1)
-                            
-                            # Get column ranges for numeric columns
-                            col_ranges = {}
-                            for col in ('cargos', 'abonos', 'saldo'):
-                                if col in columns_config:
-                                    x0, x1 = columns_config[col]
-                                    col_ranges[col] = (x0, x1)
-                            
-                            # Assign amounts from continuation row
-                            tolerance = 10
-                            for amt_text, center in cont_amounts:
-                                # Skip if amount is within description range
-                                if descripcion_range and descripcion_range[0] <= center <= descripcion_range[1]:
-                                    continue
-                                
-                                # Find which numeric column this amount belongs to
-                                assigned = False
-                                for col in ('cargos', 'abonos', 'saldo'):
-                                    if col in col_ranges:
-                                        x0, x1 = col_ranges[col]
-                                        if (x0 - tolerance) <= center <= (x1 + tolerance):
-                                            # Only assign if the column is empty or if this is a better match
-                                            existing = prev.get(col) or ''
-                                            if not existing or amt_text not in existing:
-                                                if existing:
-                                                    prev[col] = (existing + ' ' + amt_text).strip()
-                                                else:
-                                                    prev[col] = amt_text
-                                            assigned = True
-                                            break
-                                
-                                # If not assigned by range, use proximity as fallback
-                                if not assigned and col_ranges:
-                                    valid_cols = {}
-                                    for col in col_ranges.keys():
-                                        x0, x1 = col_ranges[col]
-                                        if center >= (x0 - 20) and center <= (x1 + 20):
-                                            col_center = (x0 + x1) / 2
-                                            valid_cols[col] = abs(center - col_center)
-                                    
-                                    if valid_cols:
-                                        nearest = min(valid_cols.keys(), key=lambda c: valid_cols[c])
-                                        if not descripcion_range or not (descripcion_range[0] <= center <= descripcion_range[1]):
-                                            existing = prev.get(nearest) or ''
-                                            if not existing or amt_text not in existing:
-                                                if existing:
-                                                    prev[nearest] = (existing + ' ' + amt_text).strip()
-                                                else:
-                                                    prev[nearest] = amt_text
-                        
-                        # Also merge amounts list for later processing
-                        prev_amounts = prev.get('_amounts', [])
-                        prev['_amounts'] = prev_amounts + cont_amounts
-                        
-                        # Collect possible text pieces from this row (prefer descripcion, then liq, then any other text)
-                        cont_parts = []
-                        for k in ('descripcion', 'fecha'):
-                            v = row_data.get(k)
-                            if v:
-                                cont_parts.append(str(v))
-                        # Also capture any stray text in other columns
-                        for k, v in row_data.items():
-                            if k in ('descripcion', 'fecha', 'cargos', 'abonos', 'saldo', 'page', '_amounts'):
-                                continue
-                            if v:
-                                cont_parts.append(str(v))
-
-                        cont_text = ' '.join(cont_parts)
-                        # Remove decimal amounts (they belong to cargos/abonos/saldo)
-                        cont_text = dec_amount_re.sub('', cont_text)
-                        cont_text = ' '.join(cont_text.split()).strip()
-
-                        if cont_text:
-                            # append to previous 'descripcion' field
-                            if prev.get('descripcion'):
-                                prev['descripcion'] = (prev.get('descripcion') or '') + ' ' + cont_text
-                            else:
-                                prev['descripcion'] = cont_text
-                else:
-                    # No previous movement and no date - skip this row
-                    # Only rows with dates should be added to movements
-                    # Rows without dates are only used as continuation of previous rows
-                    # For Konfio, also try to append rows with text to previous movement if exists
-                    if bank_config['name'] == 'Konfio' and movement_rows:
-                        all_row_text = ' '.join([w.get('text', '') for w in row_words]).strip()
-                        # If row has any text, treat it as continuation
-                        if all_row_text:
+                        if movement_rows:
+                            # Continuation row: append description-like text and amounts to previous movement
                             prev = movement_rows[-1]
                             
-                            # Check if this is a sub-row pattern (like "SBO 020902DX1 - 02 abr 2023 4316 FÍSICA")
-                            # These should be completely skipped, not added as continuation
-                            konfio_sub_row_pattern = re.compile(r'^[A-Z]{2,4}\s*[A-Z0-9]{8,15}\s*-\s*\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4}', re.I)
-                            if konfio_sub_row_pattern.match(all_row_text.strip()):
-                                # This is a sub-row, skip it completely (don't add to description)
-                                continue
-                            
-                            # Check if this row might contain a date (could be a new movement)
-                            # If it does, don't treat it as continuation
-                            potential_date = date_pattern.search(all_row_text)
-                            
-                            if not potential_date:
-                                # No date found, treat as continuation
-                                # IMPORTANT: First extract amounts from the continuation row before filtering text
-                                # This ensures amounts like "$2,266.83" are captured even if they're on the same line as "DIGITAL"
+                            # First, capture amounts from continuation row and assign to appropriate columns
+                            cont_amounts = row_data.get('_amounts', [])
+                            if cont_amounts and columns_config:
+                                # Get description range to exclude amounts from it
+                                descripcion_range = None
+                                if 'descripcion' in columns_config:
+                                    x0, x1 = columns_config['descripcion']
+                                    descripcion_range = (x0, x1)
                                 
-                                # IMPORTANT: Always re-scan words directly for amounts to ensure we capture them
-                                # This is critical because amounts might not be detected in extract_movement_row if they're in continuation rows
-                                cont_amounts = []
-                                konfio_amount_pattern = re.compile(r'\$\s*\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})|\d{1,3}(?:[\.,\s]\d{3})*[\.,]\d{2}')
-                                for word in row_words:
-                                    word_text = word.get('text', '').strip()
-                                    word_x0 = word.get('x0', 0)
-                                    word_x1 = word.get('x1', 0)
-                                    word_center = (word_x0 + word_x1) / 2
-                                    amount_match = konfio_amount_pattern.search(word_text)
-                                    if amount_match:
-                                        cont_amounts.append((amount_match.group(), word_center))
+                                # Get column ranges for numeric columns
+                                col_ranges = {}
+                                for col in ('cargos', 'abonos', 'saldo'):
+                                    if col in columns_config:
+                                        x0, x1 = columns_config[col]
+                                        col_ranges[col] = (x0, x1)
                                 
-                                # Also include amounts from row_data if any (in case they were detected earlier)
-                                existing_amounts = row_data.get('_amounts', [])
-                                if existing_amounts:
-                                    # Merge with cont_amounts, avoiding duplicates
-                                    existing_centers = {center for _, center in cont_amounts}
-                                    for amt_text, center in existing_amounts:
-                                        if center not in existing_centers:
-                                            cont_amounts.append((amt_text, center))
-                                
-                                # Now filter text for description (but amounts are already captured above)
-                                cont_text_parts = []
-                                for word in row_words:
-                                    word_text = word.get('text', '').strip()
-                                    # Skip if it's an amount (has $ or decimal format)
-                                    if not re.search(r'\$\s*\d|^\d+[\.,]\d{2}$', word_text):
-                                        cont_text_parts.append(word_text)
-                                
-                                cont_text = ' '.join(cont_text_parts).strip()
-                                
-                                # For Konfio, filter out unwanted text patterns
-                                if cont_text:
-                                    # Remove patterns like "SEB 1108096N7 - 02 abr 2023", "PCS 071026A78 - 02 abr 2023", "CACG551025EK9 - 02 abr 2023", etc.
-                                    # Pattern: 2-4 letters + optional space + alphanumeric code (8-15 chars) + dash + date
-                                    # Examples: "PCS 071026A78 - 02 abr 2023" (with space), "CACG551025EK9 - 02 abr 2023" (without space)
-                                    konfio_second_line_pattern = re.compile(r'[A-Z]{2,4}\s*[A-Z0-9]{8,15}\s*-\s*\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4}', re.I)
-                                    cont_text = konfio_second_line_pattern.sub('', cont_text)
-                                    # Remove "FÍSICA" and "DIGITAL"
-                                    cont_text = re.sub(r'\bFÍSICA\b', '', cont_text, flags=re.I)
-                                    cont_text = re.sub(r'\bDIGITAL\b', '', cont_text, flags=re.I)
-                                    # Normalize whitespace
-                                    cont_text = ' '.join(cont_text.split()).strip()
-                                
-                                if cont_text:
-                                    if prev.get('descripcion'):
-                                        prev['descripcion'] = (prev.get('descripcion') or '') + ' ' + cont_text
-                                    else:
-                                        prev['descripcion'] = cont_text
-                                
-                                # Assign amounts from continuation row to cargos/abonos
-                                if cont_amounts and columns_config:
-                                    # Get column ranges for numeric columns
-                                    col_ranges = {}
-                                    for col in ('cargos', 'abonos', 'saldo'):
-                                        if col in columns_config:
-                                            x0, x1 = columns_config[col]
-                                            col_ranges[col] = (x0, x1)
+                                # Assign amounts from continuation row
+                                tolerance = 10
+                                for amt_text, center in cont_amounts:
+                                    # Skip if amount is within description range
+                                    if descripcion_range and descripcion_range[0] <= center <= descripcion_range[1]:
+                                        continue
                                     
-                                    # Assign amounts from continuation row
-                                    tolerance = 20  # Increased tolerance for Konfio to capture amounts that might be slightly misaligned
-                                    for amt_text, center in cont_amounts:
-                                        assigned = False
-                                        for col in ('cargos', 'abonos', 'saldo'):
-                                            if col in col_ranges:
-                                                x0, x1 = col_ranges[col]
-                                                if (x0 - tolerance) <= center <= (x1 + tolerance):
-                                                    existing = prev.get(col) or ''
-                                                    if not existing or amt_text not in existing:
-                                                        if existing:
-                                                            prev[col] = (existing + ' ' + amt_text).strip()
-                                                        else:
-                                                            prev[col] = amt_text
-                                                    assigned = True
-                                                    break
+                                    # Find which numeric column this amount belongs to
+                                    assigned = False
+                                    for col in ('cargos', 'abonos', 'saldo'):
+                                        if col in col_ranges:
+                                            x0, x1 = col_ranges[col]
+                                            if (x0 - tolerance) <= center <= (x1 + tolerance):
+                                                # Only assign if the column is empty or if this is a better match
+                                                existing = prev.get(col) or ''
+                                                if not existing or amt_text not in existing:
+                                                    if existing:
+                                                        prev[col] = (existing + ' ' + amt_text).strip()
+                                                    else:
+                                                        prev[col] = amt_text
+                                                assigned = True
+                                                break
+                                    
+                                    # If not assigned by range, use proximity as fallback
+                                    if not assigned and col_ranges:
+                                        valid_cols = {}
+                                        for col in col_ranges.keys():
+                                            x0, x1 = col_ranges[col]
+                                            if center >= (x0 - 20) and center <= (x1 + 20):
+                                                col_center = (x0 + x1) / 2
+                                                valid_cols[col] = abs(center - col_center)
                                         
-                                        # If not assigned by range, use proximity as fallback for Konfio
-                                        if not assigned and bank_config['name'] == 'Konfio':
-                                            # Find the nearest column
-                                            nearest_col = None
-                                            min_distance = float('inf')
+                                        if valid_cols:
+                                            nearest = min(valid_cols.keys(), key=lambda c: valid_cols[c])
+                                            if not descripcion_range or not (descripcion_range[0] <= center <= descripcion_range[1]):
+                                                existing = prev.get(nearest) or ''
+                                                if not existing or amt_text not in existing:
+                                                    if existing:
+                                                        prev[nearest] = (existing + ' ' + amt_text).strip()
+                                                    else:
+                                                        prev[nearest] = amt_text
+                            
+                            # Also merge amounts list for later processing
+                            prev_amounts = prev.get('_amounts', [])
+                            prev['_amounts'] = prev_amounts + cont_amounts
+                            
+                            # Collect possible text pieces from this row (prefer descripcion, then liq, then any other text)
+                            cont_parts = []
+                            for k in ('descripcion', 'fecha'):
+                                v = row_data.get(k)
+                                if v:
+                                    cont_parts.append(str(v))
+                            # Also capture any stray text in other columns
+                            for k, v in row_data.items():
+                                if k in ('descripcion', 'fecha', 'cargos', 'abonos', 'saldo', 'page', '_amounts'):
+                                    continue
+                                if v:
+                                    cont_parts.append(str(v))
+
+                            cont_text = ' '.join(cont_parts)
+                            # Remove decimal amounts (they belong to cargos/abonos/saldo)
+                            cont_text = dec_amount_re.sub('', cont_text)
+                            cont_text = ' '.join(cont_text.split()).strip()
+
+                            if cont_text:
+                                # append to previous 'descripcion' field
+                                if prev.get('descripcion'):
+                                    prev['descripcion'] = (prev.get('descripcion') or '') + ' ' + cont_text
+                                else:
+                                    prev['descripcion'] = cont_text
+                    else:
+                        # No previous movement and no date - skip this row
+                        # Only rows with dates should be added to movements
+                        # Rows without dates are only used as continuation of previous rows
+                        # For Konfio, also try to append rows with text to previous movement if exists
+                        if bank_config['name'] == 'Konfio' and movement_rows:
+                            all_row_text = ' '.join([w.get('text', '') for w in row_words]).strip()
+                            # If row has any text, treat it as continuation
+                            if all_row_text:
+                                prev = movement_rows[-1]
+                                
+                                # Check if this is a sub-row pattern (like "SBO 020902DX1 - 02 abr 2023 4316 FÍSICA")
+                                # These should be completely skipped, not added as continuation
+                                konfio_sub_row_pattern = re.compile(r'^[A-Z]{2,4}\s*[A-Z0-9]{8,15}\s*-\s*\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4}', re.I)
+                                if konfio_sub_row_pattern.match(all_row_text.strip()):
+                                    # This is a sub-row, skip it completely (don't add to description)
+                                    continue
+                                
+                                # Check if this row might contain a date (could be a new movement)
+                                # If it does, don't treat it as continuation
+                                potential_date = date_pattern.search(all_row_text)
+                                
+                                if not potential_date:
+                                    # No date found, treat as continuation
+                                    # IMPORTANT: First extract amounts from the continuation row before filtering text
+                                    # This ensures amounts like "$2,266.83" are captured even if they're on the same line as "DIGITAL"
+                                    
+                                    # IMPORTANT: Always re-scan words directly for amounts to ensure we capture them
+                                    # This is critical because amounts might not be detected in extract_movement_row if they're in continuation rows
+                                    cont_amounts = []
+                                    konfio_amount_pattern = re.compile(r'\$\s*\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})|\d{1,3}(?:[\.,\s]\d{3})*[\.,]\d{2}')
+                                    for word in row_words:
+                                        word_text = word.get('text', '').strip()
+                                        word_x0 = word.get('x0', 0)
+                                        word_x1 = word.get('x1', 0)
+                                        word_center = (word_x0 + word_x1) / 2
+                                        amount_match = konfio_amount_pattern.search(word_text)
+                                        if amount_match:
+                                            cont_amounts.append((amount_match.group(), word_center))
+                                    
+                                    # Also include amounts from row_data if any (in case they were detected earlier)
+                                    existing_amounts = row_data.get('_amounts', [])
+                                    if existing_amounts:
+                                        # Merge with cont_amounts, avoiding duplicates
+                                        existing_centers = {center for _, center in cont_amounts}
+                                        for amt_text, center in existing_amounts:
+                                            if center not in existing_centers:
+                                                cont_amounts.append((amt_text, center))
+                                    
+                                    # Now filter text for description (but amounts are already captured above)
+                                    cont_text_parts = []
+                                    for word in row_words:
+                                        word_text = word.get('text', '').strip()
+                                        # Skip if it's an amount (has $ or decimal format)
+                                        if not re.search(r'\$\s*\d|^\d+[\.,]\d{2}$', word_text):
+                                            cont_text_parts.append(word_text)
+                                    
+                                    cont_text = ' '.join(cont_text_parts).strip()
+                                    
+                                    # For Konfio, filter out unwanted text patterns
+                                    if cont_text:
+                                        # Remove patterns like "SEB 1108096N7 - 02 abr 2023", "PCS 071026A78 - 02 abr 2023", "CACG551025EK9 - 02 abr 2023", etc.
+                                        # Pattern: 2-4 letters + optional space + alphanumeric code (8-15 chars) + dash + date
+                                        # Examples: "PCS 071026A78 - 02 abr 2023" (with space), "CACG551025EK9 - 02 abr 2023" (without space)
+                                        konfio_second_line_pattern = re.compile(r'[A-Z]{2,4}\s*[A-Z0-9]{8,15}\s*-\s*\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4}', re.I)
+                                        cont_text = konfio_second_line_pattern.sub('', cont_text)
+                                        # Remove "FÍSICA" and "DIGITAL"
+                                        cont_text = re.sub(r'\bFÍSICA\b', '', cont_text, flags=re.I)
+                                        cont_text = re.sub(r'\bDIGITAL\b', '', cont_text, flags=re.I)
+                                        # Normalize whitespace
+                                        cont_text = ' '.join(cont_text.split()).strip()
+                                    
+                                    if cont_text:
+                                        if prev.get('descripcion'):
+                                            prev['descripcion'] = (prev.get('descripcion') or '') + ' ' + cont_text
+                                        else:
+                                            prev['descripcion'] = cont_text
+                                    
+                                    # Assign amounts from continuation row to cargos/abonos
+                                    if cont_amounts and columns_config:
+                                        # Get column ranges for numeric columns
+                                        col_ranges = {}
+                                        for col in ('cargos', 'abonos', 'saldo'):
+                                            if col in columns_config:
+                                                x0, x1 = columns_config[col]
+                                                col_ranges[col] = (x0, x1)
+                                        
+                                        # Assign amounts from continuation row
+                                        tolerance = 20  # Increased tolerance for Konfio to capture amounts that might be slightly misaligned
+                                        for amt_text, center in cont_amounts:
+                                            assigned = False
                                             for col in ('cargos', 'abonos', 'saldo'):
                                                 if col in col_ranges:
                                                     x0, x1 = col_ranges[col]
-                                                    col_center = (x0 + x1) / 2
-                                                    distance = abs(center - col_center)
-                                                    if distance < min_distance:
-                                                        min_distance = distance
-                                                        nearest_col = col
+                                                    if (x0 - tolerance) <= center <= (x1 + tolerance):
+                                                        existing = prev.get(col) or ''
+                                                        if not existing or amt_text not in existing:
+                                                            if existing:
+                                                                prev[col] = (existing + ' ' + amt_text).strip()
+                                                            else:
+                                                                prev[col] = amt_text
+                                                        assigned = True
+                                                        break
                                             
-                                            # If amount is reasonably close to a column (within 50 pixels), assign it
-                                            if nearest_col and min_distance < 50:
-                                                existing = prev.get(nearest_col) or ''
-                                                if not existing or amt_text not in existing:
-                                                    if existing:
-                                                        prev[nearest_col] = (existing + ' ' + amt_text).strip()
-                                                    else:
-                                                        prev[nearest_col] = amt_text
+                                            # If not assigned by range, use proximity as fallback for Konfio
+                                            if not assigned and bank_config['name'] == 'Konfio':
+                                                # Find the nearest column
+                                                nearest_col = None
+                                                min_distance = float('inf')
+                                                for col in ('cargos', 'abonos', 'saldo'):
+                                                    if col in col_ranges:
+                                                        x0, x1 = col_ranges[col]
+                                                        col_center = (x0 + x1) / 2
+                                                        distance = abs(center - col_center)
+                                                        if distance < min_distance:
+                                                            min_distance = distance
+                                                            nearest_col = col
+                                                
+                                                # If amount is reasonably close to a column (within 50 pixels), assign it
+                                                if nearest_col and min_distance < 50:
+                                                    existing = prev.get(nearest_col) or ''
+                                                    if not existing or amt_text not in existing:
+                                                        if existing:
+                                                            prev[nearest_col] = (existing + ' ' + amt_text).strip()
+                                                        else:
+                                                            prev[nearest_col] = amt_text
                                                     assigned = True
-                                # Merge amounts list
-                                prev_amounts = prev.get('_amounts', [])
-                                prev['_amounts'] = prev_amounts + row_data.get('_amounts', [])
-                    pass
+                                    # Merge amounts list
+                                    prev_amounts = prev.get('_amounts', [])
+                                    prev['_amounts'] = prev_amounts + row_data.get('_amounts', [])
 
     # Process summary lines to format them properly
     def format_summary_line(line):
