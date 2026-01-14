@@ -336,7 +336,6 @@ def find_column_coordinates(pdf_path: str, page_number: int = 1):
             all_text = '\n'.join([p.get('content', '') for p in pages_data[:3]])
             detected_bank = detect_bank_from_text(all_text)
             
-            print(f"🏦 Banco detectado: {detected_bank}")
             print(f"📄 Mostrando coordenadas extraídas con OCR (coordenadas reales)...")
             
             # Filtrar página si es necesario
@@ -485,7 +484,6 @@ def detect_bank_from_text(text: str) -> str:
         for bank_name, keywords in BANK_KEYWORDS.items():
             for keyword_pattern in keywords:
                 if re.search(keyword_pattern, line_clean, re.I):
-                    print(f"🏦 Banco detectado: {bank_name}")
                     return bank_name
         
         # Also check if line contains bank name directly (case insensitive)
@@ -493,7 +491,6 @@ def detect_bank_from_text(text: str) -> str:
         for bank_name in BANK_KEYWORDS.keys():
             # Check for exact bank name match (as whole word)
             if re.search(rf'\b{re.escape(bank_name.upper())}\b', line_upper):
-                print(f"🏦 Banco detectado: {bank_name}")
                 return bank_name
     
     # If no bank detected, return default
@@ -2468,14 +2465,8 @@ def print_validation_summary(pdf_summary: dict, extracted_totals: dict, validati
     if '✓' in overall_status:
         print("✅ VALIDACIÓN: TODO CORRECTO")
     else:
-        print("❌ VALIDACIÓN: HAY DISCREPANCIAS")
+        print("❌ VALIDACIÓN: HAY DIFERENCIAS")
         pass
-    
-    # Print VALIDACIÓN GENERAL
-    for _, row in validation_df.iterrows():
-        if row['Concepto'] == 'VALIDACIÓN GENERAL':
-            print(f"VALIDACIÓN GENERAL")
-            break
     
     # print("\nComparación de Totales:")
     # print("-" * 80)
@@ -3833,9 +3824,11 @@ def main():
         print(f"[INFO] Detectando banco desde texto extraído con OCR...")
         all_text = '\n'.join([p.get('content', '') for p in extracted_data[:3]])  # Primeras 3 páginas
         detected_bank = detect_bank_from_text(all_text)
+        print(f"🏦 Banco detectado: {detected_bank}")
     else:
         # Si no se usó OCR, detectar banco desde PDF (método normal)
         detected_bank = detect_bank_from_pdf(pdf_path)
+        print(f"🏦 Banco detectado: {detected_bank}")
     
     is_hsbc = (detected_bank == "HSBC")
     
@@ -5856,8 +5849,6 @@ def main():
         desired_order = [col for col in desired_order if col in df_mov.columns]
         # Only keep the desired columns, remove all others
         df_mov = df_mov[desired_order]
-
-    print("📊 Exporting to Excel...")
     
     # Filter summary/info rows from Movements for Banamex
     # These should not appear in Movements: "Saldo mínimo requerido", "COMISIONES COBRADAS"
@@ -6076,6 +6067,8 @@ def main():
     #print(f"✅ DataFrame de validación creado con {len(df_validation)} filas")
     #print(f"   Columnas: {list(df_validation.columns)}")
     
+    print("📊 Exporting to Excel...")
+    
     # Print validation summary to console
     print_validation_summary(pdf_summary, extracted_totals, df_validation)
     
@@ -6178,7 +6171,7 @@ def main():
         
         print(f"✅ Excel file created -> {output_excel}")
     except Exception as e:
-        print(f'❌ Error writing Excel: {e}')
+        print(f"❌ Excel file not created -> {output_excel}")
         import traceback
         traceback.print_exc()
 
