@@ -3336,6 +3336,17 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
             if text != original_text:
                 word['text'] = text
 
+        # Check if word is in description range BEFORE detecting amounts
+        # For Banamex: if word is in description range, don't detect amounts within it
+        # This prevents values like "865.60" from "IVA $2865.60" being extracted as separate amounts
+        word_in_description_range = False
+        if bank_name == 'Banamex' and 'descripcion' in columns:
+            desc_x0, desc_x1 = columns['descripcion']
+            if desc_x0 <= center <= desc_x1:
+                word_in_description_range = True
+                if show_detailed_debug:
+                    print(f"[DEBUG BANAMEX extract_movement_row] Palabra '{text}' está en rango de descripción (X={center:.2f}, rango: {desc_x0}-{desc_x1}), NO se detectarán montos dentro de ella")
+        
         # detect amount tokens inside the word
         # For Konfio, only detect amounts that have currency format ($) or decimal format (with .XX or ,XX)
         # This prevents account numbers like "3817" from being detected as amounts
@@ -3347,26 +3358,34 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
             # Para HSBC, buscar todos los montos en la palabra (puede haber múltiples)
             if bank_name == 'HSBC':
                 # Buscar todos los montos (con o sin $) usando findall para capturar múltiples
-                amount_matches = DEC_AMOUNT_RE.findall(text)
-                if amount_matches:
-                    for amt_match in amount_matches:
-                        amounts.append((amt_match, center))
+                # But skip if word is in description range (for Banamex logic, though HSBC doesn't use this)
+                if not word_in_description_range:
+                    amount_matches = DEC_AMOUNT_RE.findall(text)
+                    if amount_matches:
+                        for amt_match in amount_matches:
+                            amounts.append((amt_match, center))
             else:
-                m = DEC_AMOUNT_RE.search(text)
-                if m:
-                    amounts.append((m.group(), center))
-                    # Debug for Banamex: print when amount is detected (only first 5 rows)
+                # For Banamex: don't detect amounts if word is in description range
+                if bank_name == 'Banamex' and word_in_description_range:
+                    # Skip amount detection for words in description range
                     if show_detailed_debug:
-                        print(f"[DEBUG BANAMEX] ✅ Monto detectado en extract_movement_row: '{m.group()}' en coordenada X: {center:.2f}, palabra: '{text}'")
+                        print(f"[DEBUG BANAMEX extract_movement_row] ⚠️ Palabra '{text}' está en descripción, saltando detección de montos")
                 else:
-                    # Debug for Banamex: print when amount is NOT detected but word might contain numbers (only first 5 rows)
-                    if show_detailed_debug and re.search(r'\d', text):
-                        print(f"[DEBUG BANAMEX] ⚠️ Palabra '{text}' contiene números pero NO coincide con patrón DEC_AMOUNT_RE")
-                        print(f"    Patrón DEC_AMOUNT_RE: {DEC_AMOUNT_RE.pattern}")
-                        # Try to see what would match
-                        test_matches = re.findall(r'\d+[\.,]?\d*', text)
-                        if test_matches:
-                            print(f"    Posibles números encontrados: {test_matches}")
+                    m = DEC_AMOUNT_RE.search(text)
+                    if m:
+                        amounts.append((m.group(), center))
+                        # Debug for Banamex: print when amount is detected (only first 5 rows)
+                        if show_detailed_debug:
+                            print(f"[DEBUG BANAMEX] ✅ Monto detectado en extract_movement_row: '{m.group()}' en coordenada X: {center:.2f}, palabra: '{text}'")
+                    else:
+                        # Debug for Banamex: print when amount is NOT detected but word might contain numbers (only first 5 rows)
+                        if show_detailed_debug and re.search(r'\d', text):
+                            print(f"[DEBUG BANAMEX] ⚠️ Palabra '{text}' contiene números pero NO coincide con patrón DEC_AMOUNT_RE")
+                            print(f"    Patrón DEC_AMOUNT_RE: {DEC_AMOUNT_RE.pattern}")
+                            # Try to see what would match
+                            test_matches = re.findall(r'\d+[\.,]?\d*', text)
+                            if test_matches:
+                                print(f"    Posibles números encontrados: {test_matches}")
 
         # Check if word contains a date followed by description text
         # For Banregio: date is only 2 digits at the start, e.g., "04 TRA ..."
@@ -5528,8 +5547,23 @@ def main():
                             continue
 
             # Remove amount tokens from descripcion if present
+            # For Banamex: be more careful - only remove amounts that are standalone, not part of text like "IVA $2865.60"
             if r.get('descripcion'):
-                r['descripcion'] = DEC_AMOUNT_RE.sub('', r.get('descripcion'))
+                if bank_config['name'] == 'Banamex':
+                    # For Banamex, don't remove amounts that are part of descriptive text
+                    # Only remove amounts that appear to be standalone (at the end, with spaces around them)
+                    desc_val = str(r.get('descripcion', '')).strip()
+                    # Pattern to match standalone amounts (at end of string, with space before)
+                    standalone_amount_pattern = re.compile(r'\s+(\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2}))\s*$')
+                    # Only remove if it's a standalone amount at the end
+                    desc_val_cleaned = standalone_amount_pattern.sub('', desc_val)
+                    if desc_val_cleaned != desc_val:
+                        r['descripcion'] = desc_val_cleaned.strip()
+                        if bank_config['name'] == 'Banamex' and row_idx_debug < 5:
+                            print(f"[DEBUG BANAMEX] Monto removido de descripción (standalone): '{desc_val}' -> '{desc_val_cleaned.strip()}'")
+                else:
+                    # For other banks, use the original logic
+                    r['descripcion'] = DEC_AMOUNT_RE.sub('', r.get('descripcion'))
 
             # For Banamex, when there are 2 amounts, ensure correct assignment based on X coordinates
             # IMPORTANT: This runs AFTER the general _amounts processing, so we should only
