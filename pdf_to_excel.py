@@ -14,6 +14,15 @@ except ImportError:
     TESSERACT_AVAILABLE = False
     print("[ADVERTENCIA] Tesseract OCR no disponible. Instala: pip install pytesseract pymupdf pillow")
 
+# Configurar encoding UTF-8 para Windows (mejora compatibilidad con Windows Server)
+if sys.platform == 'win32':
+    import io
+    try:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    except AttributeError:
+        # Si ya está configurado, ignorar
+        pass
 
 # Bank configurations with column coordinate ranges (X-axis)
 # Use find_coordinates.py to get the exact ranges for your PDF
@@ -3805,22 +3814,65 @@ def main():
 
     pdf_path = sys.argv[1]
     
+    # Normalizar ruta del PDF (maneja rutas UNC, espacios, etc.)
+    pdf_path = os.path.normpath(pdf_path)
+    if not os.path.isabs(pdf_path):
+        pdf_path = os.path.abspath(pdf_path)
+    
     # Check for --find mode
     if len(sys.argv) >= 3 and sys.argv[2] == '--find':
         page_num = int(sys.argv[3]) if len(sys.argv) > 3 else 1
         print(f"🔍 Buscando coordenadas en página {page_num}...")
         find_column_coordinates(pdf_path, page_num)
-        return
+        sys.exit(0)
 
     if not os.path.isfile(pdf_path):
-        #print("❌ File not found.")
+        print(f"❌ Error: Archivo no encontrado: {pdf_path}")
         sys.exit(1)
 
     if not pdf_path.lower().endswith(".pdf"):
-        #print("❌ Only PDF files are supported.")
+        print(f"❌ Error: El archivo debe ser un PDF: {pdf_path}")
+        sys.exit(1)
+    
+    # Verificar que el PDF no esté bloqueado/abierto por otro proceso
+    try:
+        with open(pdf_path, 'rb') as test_file:
+            test_file.read(1)  # Intentar leer 1 byte
+    except PermissionError:
+        print(f"❌ Error: El archivo PDF está abierto o bloqueado por otro proceso: {pdf_path}")
+        sys.exit(1)
+    except IOError as e:
+        print(f"❌ Error: No se puede acceder al archivo PDF: {pdf_path}")
+        print(f"   Detalle: {e}")
         sys.exit(1)
 
-    output_excel = os.path.splitext(pdf_path)[0] + ".xlsx"
+    # Normalizar ruta de salida
+    output_excel = os.path.normpath(os.path.splitext(pdf_path)[0] + ".xlsx")
+    
+    # Validar permisos de escritura en el directorio de salida
+    output_dir = os.path.dirname(output_excel) or os.getcwd()
+    if not os.access(output_dir, os.W_OK):
+        print(f"❌ Error: Sin permisos de escritura en el directorio: {output_dir}")
+        sys.exit(1)
+    
+    # Validar espacio en disco disponible (opcional pero recomendado)
+    try:
+        import shutil
+        pdf_size = os.path.getsize(pdf_path)
+        # Estimar tamaño del Excel (PDF size * 2 como margen de seguridad)
+        estimated_excel_size = pdf_size * 2
+        disk_usage = shutil.disk_usage(output_dir)
+        free_space = disk_usage.free
+        
+        if free_space < estimated_excel_size:
+            print(f"❌ Error: Espacio insuficiente en disco. Disponible: {free_space:,} bytes, Necesario: {estimated_excel_size:,} bytes")
+            sys.exit(1)
+    except ImportError:
+        # shutil no disponible, continuar sin validación
+        pass
+    except Exception as e:
+        # Si falla la validación, continuar (no crítico)
+        print(f"[ADVERTENCIA] No se pudo validar espacio en disco: {e}")
 
     print("Reading PDF...")
     
@@ -6127,11 +6179,24 @@ def main():
                     pass
                     # print(f"   ❌ Error al crear pestaña mínima: {e}")
         
-        print(f"✅ Excel file created -> {output_excel}")
+        # Validar que el Excel se creó correctamente
+        if not os.path.isfile(output_excel):
+            print(f"❌ Error: El archivo Excel no se creó: {output_excel}")
+            sys.exit(1)
+        
+        excel_size = os.path.getsize(output_excel)
+        if excel_size == 0:
+            print(f"❌ Error: El archivo Excel está vacío: {output_excel}")
+            sys.exit(1)
+        
+        print(f"✅ Excel file created successfully -> {output_excel} ({excel_size:,} bytes)")
+        sys.exit(0)
     except Exception as e:
         print(f"❌ Excel file not created -> {output_excel}")
+        print(f"   Error: {str(e)}")
         import traceback
         traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
