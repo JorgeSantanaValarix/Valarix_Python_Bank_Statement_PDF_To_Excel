@@ -3125,8 +3125,8 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
     """Extract a structured movement row from grouped words using coordinate-based column assignment."""
     row_data = {col: '' for col in columns.keys()}
     amounts = []
-    # Show detailed debug for Banamex
-    show_detailed_debug = (bank_name == 'Banamex')
+    # Show detailed debug for Banamex (disabled)
+    show_detailed_debug = False
     
     # Pattern to detect dates (for separating date from description)
     if date_pattern is None:
@@ -3146,22 +3146,6 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
     
     # Sort words by X coordinate within the row
     sorted_words = sorted(words, key=lambda w: w.get('x0', 0))
-    
-    # Debug for Banamex: print all words in the row to detect footer
-    if bank_name == 'Banamex':
-        all_words_text = ' '.join([w.get('text', '') for w in sorted_words])
-        # Check if this row contains footer pattern (may be split across words)
-        banamex_footer_pattern = re.compile(r'\d+\.\w+\.OD\.\d+\.\d+', re.I)
-        banamex_footer_partial = re.compile(r'\.OD\.\d+\.\d+', re.I)
-        # Check if any word contains "OD" followed by numbers (part of footer)
-        has_od_pattern = any('OD' in w.get('text', '') and re.search(r'OD[\.\s]*\d+[\.\s]*\d+', w.get('text', ''), re.I) for w in sorted_words)
-        # Check if pattern appears when words are joined (footer may be split)
-        all_words_no_spaces = ''.join([w.get('text', '') for w in sorted_words])
-        
-        if banamex_footer_pattern.search(all_words_text) or banamex_footer_pattern.search(all_words_no_spaces) or banamex_footer_partial.search(all_words_text) or has_od_pattern:
-            print(f"[DEBUG BANAMEX extract_movement_row] ⚠️ FOOTER DETECTADO en fila completa: '{all_words_text[:100]}'")
-            print(f"[DEBUG BANAMEX extract_movement_row]   Palabras individuales: {[w.get('text', '') for w in sorted_words]}")
-            print(f"[DEBUG BANAMEX extract_movement_row]   Texto sin espacios: '{all_words_no_spaces[:100]}'")
     
     # For HSBC, first try to extract date from fecha column range
     if bank_name == 'HSBC' and 'fecha' in columns:
@@ -3324,9 +3308,6 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
         x1 = word.get('x1', 0)
         center = (x0 + x1) / 2
 
-        # Debug for Banamex: print each word being processed (only first 5 rows)
-        if show_detailed_debug:
-            print(f"[DEBUG BANAMEX extract_movement_row] Procesando palabra: '{text}' en X={center:.2f} (rango: {x0:.2f}-{x1:.2f})")
 
         # Aplicar corrección de errores OCR (solo para HSBC)
         if bank_name == 'HSBC' and columns:
@@ -3344,8 +3325,6 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
             desc_x0, desc_x1 = columns['descripcion']
             if desc_x0 <= center <= desc_x1:
                 word_in_description_range = True
-                if show_detailed_debug:
-                    print(f"[DEBUG BANAMEX extract_movement_row] Palabra '{text}' está en rango de descripción (X={center:.2f}, rango: {desc_x0}-{desc_x1}), NO se detectarán montos dentro de ella")
         
         # detect amount tokens inside the word
         # For Konfio, only detect amounts that have currency format ($) or decimal format (with .XX or ,XX)
@@ -3366,26 +3345,10 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
                             amounts.append((amt_match, center))
             else:
                 # For Banamex: don't detect amounts if word is in description range
-                if bank_name == 'Banamex' and word_in_description_range:
-                    # Skip amount detection for words in description range
-                    if show_detailed_debug:
-                        print(f"[DEBUG BANAMEX extract_movement_row] ⚠️ Palabra '{text}' está en descripción, saltando detección de montos")
-                else:
+                if not (bank_name == 'Banamex' and word_in_description_range):
                     m = DEC_AMOUNT_RE.search(text)
                     if m:
                         amounts.append((m.group(), center))
-                        # Debug for Banamex: print when amount is detected (only first 5 rows)
-                        if show_detailed_debug:
-                            print(f"[DEBUG BANAMEX] ✅ Monto detectado en extract_movement_row: '{m.group()}' en coordenada X: {center:.2f}, palabra: '{text}'")
-                    else:
-                        # Debug for Banamex: print when amount is NOT detected but word might contain numbers (only first 5 rows)
-                        if show_detailed_debug and re.search(r'\d', text):
-                            print(f"[DEBUG BANAMEX] ⚠️ Palabra '{text}' contiene números pero NO coincide con patrón DEC_AMOUNT_RE")
-                            print(f"    Patrón DEC_AMOUNT_RE: {DEC_AMOUNT_RE.pattern}")
-                            # Try to see what would match
-                            test_matches = re.findall(r'\d+[\.,]?\d*', text)
-                            if test_matches:
-                                print(f"    Posibles números encontrados: {test_matches}")
 
         # Check if word contains a date followed by description text
         # For Banregio: date is only 2 digits at the start, e.g., "04 TRA ..."
@@ -3505,10 +3468,6 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
         # Normal column assignment
         col_name = assign_word_to_column(x0, x1, columns)
         if col_name:
-            # Debug for Banamex: print column assignment
-            if bank_name == 'Banamex':
-                print(f"[DEBUG BANAMEX extract_movement_row] Palabra '{text}' asignada a columna '{col_name}' (X={center:.2f})")
-            
             # For Banamex, prevent non-amount text from being assigned to cargos/abonos/saldo
             # Only assign to these columns if the word is actually an amount
             if bank_name == 'Banamex' and col_name in ('cargos', 'abonos', 'saldo'):
@@ -3520,8 +3479,6 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
                         row_data['descripcion'] += ' ' + text
                     else:
                         row_data['descripcion'] = text
-                    if show_detailed_debug:
-                        print(f"[DEBUG BANAMEX extract_movement_row] ⚠️ Palabra '{text}' NO es monto, reasignada a 'descripcion'")
                 else:
                     # It's an amount, assign normally
                     if row_data[col_name]:
@@ -3552,9 +3509,6 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
                 else:
                     row_data[col_name] = text
                 
-                # Debug for Banamex: print final value in column after assignment
-                if bank_name == 'Banamex':
-                    print(f"[DEBUG BANAMEX extract_movement_row] Valor final en columna '{col_name}': '{row_data[col_name]}'")
         # For Konfio, if word doesn't match any column but is in description area, add it to description
         elif bank_name == 'Konfio' and 'descripcion' in columns:
             desc_x0, desc_x1 = columns['descripcion']
@@ -3587,20 +3541,6 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
             str(row_data.get('abonos', '')),
             str(row_data.get('saldo', ''))
         ])
-        if banamex_footer_pattern.search(all_row_text):
-            print(f"[DEBUG BANAMEX extract_movement_row] ⚠️⚠️⚠️ FOOTER ENCONTRADO EN ESTADO FINAL:")
-            print(f"  Fecha: '{row_data.get('fecha', '')}'")
-            print(f"  Descripción: '{row_data.get('descripcion', '')}'")
-            print(f"  Cargos: '{row_data.get('cargos', '')}'")
-            print(f"  Abonos: '{row_data.get('abonos', '')}'")
-            print(f"  Saldo: '{row_data.get('saldo', '')}'")
-            print(f"  Texto completo: '{all_row_text[:150]}'")
-        
-        print(f"[DEBUG BANAMEX extract_movement_row] ESTADO FINAL antes de retornar:")
-        print(f"  Cargos: '{row_data.get('cargos', '')}'")
-        print(f"  Abonos: '{row_data.get('abonos', '')}'")
-        print(f"  Saldo: '{row_data.get('saldo', '')}'")
-        print(f"  _amounts: {len(amounts)} montos - {[(amt, f'X:{x:.1f}') for amt, x in amounts]}")
     
     return row_data
 
@@ -4440,16 +4380,6 @@ def main():
                         continue  # Skip irrelevant information rows
 
                 # Debug for Banamex: print all words in the row before processing
-                if bank_config['name'] == 'Banamex':
-                    all_words_text = ' '.join([w.get('text', '') for w in row_words])
-                    print(f"\n[DEBUG BANAMEX] ===== PROCESANDO FILA {row_idx} =====")
-                    print(f"[DEBUG BANAMEX] Texto completo de la fila: '{all_words_text[:150]}'")
-                    print(f"[DEBUG BANAMEX] Palabras individuales: {[w.get('text', '') for w in row_words]}")
-                    # Check if footer pattern is in the row
-                    banamex_footer_pattern = re.compile(r'\d+\.\w+\.OD\.\d+\.\d+', re.I)
-                    if banamex_footer_pattern.search(all_words_text):
-                        print(f"[DEBUG BANAMEX] ⚠️⚠️⚠️ FOOTER DETECTADO EN FILA {row_idx} ANTES DE extract_movement_row")
-
                 # Check for end pattern (for Banamex, Santander, Banregio, Scotiabank, Konfio, Clara, etc.)
                 if movement_end_pattern:
                     all_text = ' '.join([w.get('text', '') for w in row_words])
@@ -4494,39 +4424,7 @@ def main():
                 # Extract structured row using coordinates
                 # Pass bank_name and date_pattern to enable date/description separation
                 
-                # Debug for Banamex: print words before extraction
-                if bank_config['name'] == 'Banamex' and detalle_found:
-                    all_words_text = ' '.join([w.get('text', '') for w in row_words])
-                    print(f"[DEBUG BANAMEX] ANTES de extract_movement_row (página {page_num}, fila {row_idx+1}):")
-                    print(f"  Texto completo de todas las palabras: '{all_words_text}'")
-                    print(f"  Número de palabras: {len(row_words)}")
-                    for i, word in enumerate(row_words):
-                        text = word.get('text', '')
-                        x0 = word.get('x0', 0)
-                        x1 = word.get('x1', 0)
-                        center = (x0 + x1) / 2
-                        print(f"    Palabra {i+1}: '{text}' en X={center:.2f} (rango: {x0:.2f}-{x1:.2f})")
-                
                 row_data = extract_movement_row(row_words, columns_config, bank_config['name'], date_pattern)
-                
-                # Debug for Banamex: print row data after extraction
-                if bank_config['name'] == 'Banamex' and detalle_found:
-                    fecha_val = str(row_data.get('fecha') or '').strip()
-                    desc_val = str(row_data.get('descripcion') or '').strip()[:60]
-                    cargos_val = str(row_data.get('cargos') or '').strip()
-                    abonos_val = str(row_data.get('abonos') or '').strip()
-                    saldo_val = str(row_data.get('saldo') or '').strip()
-                    amounts_detected = row_data.get('_amounts', [])
-                    print(f"[DEBUG BANAMEX] Después de extract_movement_row (página {page_num}, fila {row_idx+1}):")
-                    print(f"  Fecha: '{fecha_val}', Desc: '{desc_val}'")
-                    print(f"  Cargos: '{cargos_val}', Abonos: '{abonos_val}', Saldo: '{saldo_val}'")
-                    print(f"  Montos detectados (_amounts): {len(amounts_detected)} - {[(amt, f'X:{x:.1f}') for amt, x in amounts_detected]}")
-                    
-                    # Check if this row has amounts but will be skipped
-                    if (cargos_val or abonos_val or saldo_val) and not fecha_val:
-                        print(f"[DEBUG BANAMEX] ⚠️⚠️⚠️ FILA CON MONTOS PERO SIN FECHA - ESTA FILA SE PERDERÁ ⚠️⚠️⚠️")
-                        print(f"  Esta fila tiene montos pero no tiene fecha, por lo que NO se agregará a movement_rows")
-                        print(f"  Cargos: '{cargos_val}', Abonos: '{abonos_val}', Saldo: '{saldo_val}'")
                 
                 # Debug for Konfio: print row data after extraction (only first 3 pages)
                 if bank_config['name'] == 'Konfio' and page_num <= 3:
@@ -4596,17 +4494,6 @@ def main():
                         has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
                         has_valid_data = bool(desc_val or has_amounts or has_cargos_abonos)
                         
-                        # Debug for Banamex: print has_valid_data calculation
-                        if bank_config['name'] == 'Banamex' and (has_cargos_abonos or has_amounts):
-                            print(f"[DEBUG BANAMEX] 🔍 Cálculo de has_valid_data (sin fecha):")
-                            print(f"  desc_val: '{desc_val[:60]}'")
-                            print(f"  has_amounts: {has_amounts} (cantidad: {len(row_data.get('_amounts', []))})")
-                            print(f"  has_cargos_abonos: {has_cargos_abonos}")
-                            print(f"    cargos: '{row_data.get('cargos', '')}'")
-                            print(f"    abonos: '{row_data.get('abonos', '')}'")
-                            print(f"    saldo: '{row_data.get('saldo', '')}'")
-                            print(f"  has_valid_data: {has_valid_data}")
-                        
                         # Debug for Konfio
                         #if bank_config['name'] == 'Konfio' and not has_valid_data:
                             #all_row_text = ' '.join([w.get('text', '') for w in row_words])
@@ -4620,17 +4507,6 @@ def main():
                             has_date = True  # Treat "SALDO INICIAL" as a valid row even without date
                             has_valid_data = True
                     
-                    # Debug for Banamex: print has_valid_data after all calculations
-                    if bank_config['name'] == 'Banamex' and not has_date:
-                        cargos_val = str(row_data.get('cargos') or '').strip()
-                        abonos_val = str(row_data.get('abonos') or '').strip()
-                        saldo_val = str(row_data.get('saldo') or '').strip()
-                        if cargos_val or abonos_val or saldo_val:
-                            print(f"[DEBUG BANAMEX] 🔍 DESPUÉS de calcular has_valid_data (sin fecha pero con montos):")
-                            print(f"  has_date: {has_date}")
-                            print(f"  has_valid_data: {has_valid_data}")
-                            print(f"  cargos: '{cargos_val}', abonos: '{abonos_val}', saldo: '{saldo_val}'")
-                            print(f"  _amounts: {len(row_data.get('_amounts', []))} montos")
 
                 if has_date:
                     # Only add rows that have date AND (description OR amounts)
@@ -4640,17 +4516,6 @@ def main():
                     has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
                     has_description_or_amounts = bool(desc_val or has_amounts or has_cargos_abonos)
                     
-                    # Debug for Banamex: print validation checks
-                    if bank_config['name'] == 'Banamex':
-                        print(f"[DEBUG BANAMEX] Validación antes de agregar a movement_rows:")
-                        print(f"  has_date: {has_date}")
-                        print(f"  desc_val: '{desc_val[:60]}'")
-                        print(f"  has_amounts: {has_amounts} (cantidad: {len(row_data.get('_amounts', []))})")
-                        print(f"  has_cargos_abonos: {has_cargos_abonos}")
-                        print(f"    cargos: '{row_data.get('cargos', '')}'")
-                        print(f"    abonos: '{row_data.get('abonos', '')}'")
-                        print(f"    saldo: '{row_data.get('saldo', '')}'")
-                        print(f"  has_description_or_amounts: {has_description_or_amounts}")
                     
                     # For Konfio, be more lenient - if we have a date, add the row even if description/amounts are in continuation rows
                     if bank_config['name'] == 'Konfio':
@@ -4685,20 +4550,9 @@ def main():
                         banamex_footer_pattern = re.compile(r'\d+\.\w+\.OD\.\d+\.\d+', re.I)
                         if banamex_footer_pattern.search(all_row_text):
                             # This is footer information, skip it
-                            if bank_config['name'] == 'Banamex':
-                                print(f"[DEBUG BANAMEX] ❌ FILA OMITIDA (footer): '{all_row_text[:60]}'")
                             continue
                         
                         #row_data['page'] = page_num
-                        
-                        # Debug for Banamex: print before appending
-                        print(f"[DEBUG BANAMEX] ✅ AGREGANDO fila a movement_rows (con fecha, inicio de movimiento):")
-                        print(f"  Fecha: '{row_data.get('fecha', '')}'")
-                        print(f"  Desc: '{str(row_data.get('descripcion', ''))[:60]}'")
-                        print(f"  Cargos: '{row_data.get('cargos', '')}'")
-                        print(f"  Abonos: '{row_data.get('abonos', '')}'")
-                        print(f"  Saldo: '{row_data.get('saldo', '')}'")
-                        print(f"  _amounts: {len(row_data.get('_amounts', []))} montos")
                         
                         movement_rows.append(row_data)
                     elif has_description_or_amounts:
@@ -4719,26 +4573,11 @@ def main():
                             banamex_footer_pattern = re.compile(r'\d+\.\w+\.OD\.\d+\.\d+', re.I)
                             if banamex_footer_pattern.search(all_row_text):
                                 # This is footer information, skip it
-                                print(f"[DEBUG BANAMEX] ❌ FILA OMITIDA (footer): '{all_row_text[:60]}'")
                                 continue
                         
                         #row_data['page'] = page_num
                         
-                        # Debug for Banamex: print before appending
-                        if bank_config['name'] == 'Banamex':
-                            print(f"[DEBUG BANAMEX] ✅ AGREGANDO fila a movement_rows:")
-                            print(f"  Fecha: '{row_data.get('fecha', '')}'")
-                            print(f"  Desc: '{str(row_data.get('descripcion', ''))[:60]}'")
-                            print(f"  Cargos: '{row_data.get('cargos', '')}'")
-                            print(f"  Abonos: '{row_data.get('abonos', '')}'")
-                            print(f"  Saldo: '{row_data.get('saldo', '')}'")
-                            print(f"  _amounts: {len(row_data.get('_amounts', []))} montos")
-                        
                         movement_rows.append(row_data)
-                    else:
-                        # Debug for Banamex: print why row was NOT added
-                        if bank_config['name'] == 'Banamex':
-                            print(f"[DEBUG BANAMEX] ❌ NO se agregó fila: has_description_or_amounts=False")
                 elif has_valid_data and bank_config['name'] == 'Banbajío':
                     # For BanBajío, also add rows without date if they contain "SALDO INICIAL"
                     desc_val = str(row_data.get('descripcion') or '').strip()
@@ -4779,7 +4618,6 @@ def main():
                         # For continuation rows, must have description AND it must not contain footer pattern
                         if not desc_val_check:
                             # No description - skip this continuation row
-                            print(f"[DEBUG BANAMEX] ❌ FILA DE CONTINUACIÓN OMITIDA (sin descripción): cargos='{cargos_val_check}', abonos='{abonos_val_check}', saldo='{saldo_val_check}'")
                             continue
                         
                         # Check footer pattern in description and all row text (including amounts)
@@ -4796,10 +4634,6 @@ def main():
                         
                         if banamex_footer_pattern.search(all_row_text) or banamex_footer_pattern.search(all_row_text_with_values) or banamex_footer_partial.search(all_row_text) or has_od_pattern:
                             # This is footer information, skip it
-                            print(f"[DEBUG BANAMEX] ❌ FILA DE CONTINUACIÓN OMITIDA (footer detectado):")
-                            print(f"  Desc: '{desc_val_check[:60]}'")
-                            print(f"  Cargos: '{cargos_val_check}', Abonos: '{abonos_val_check}', Saldo: '{saldo_val_check}'")
-                            print(f"  Texto completo: '{all_row_text[:100]}'")
                             continue
                         
                         # Additional check: if saldo contains a value that looks like part of footer (e.g., "131.01")
@@ -4807,34 +4641,7 @@ def main():
                         if saldo_val_check and re.match(r'^\d+\.\d{2}$', saldo_val_check) and len(desc_val_check) < 10:
                             # Check if this value appears near footer-related words
                             if any('OD' in w.get('text', '') or re.search(r'\d+\.\w+', w.get('text', ''), re.I) for w in row_words):
-                                print(f"[DEBUG BANAMEX] ❌ FILA DE CONTINUACIÓN OMITIDA (saldo sospechoso de footer): saldo='{saldo_val_check}', desc='{desc_val_check[:60]}'")
                                 continue
-                    
-                    # Debug for Banamex: print continuation row detection
-                    if bank_config['name'] == 'Banamex':
-                        print(f"[DEBUG BANAMEX] 🔍 LLEGÓ A LÓGICA DE CONTINUACIÓN:")
-                        print(f"  has_date: {has_date}")
-                        print(f"  has_valid_data: {has_valid_data}")
-                        print(f"  cargos: '{row_data.get('cargos', '')}'")
-                        print(f"  abonos: '{row_data.get('abonos', '')}'")
-                        print(f"  saldo: '{row_data.get('saldo', '')}'")
-                        print(f"  _amounts: {len(row_data.get('_amounts', []))} montos")
-                        print(f"  movement_rows tiene {len(movement_rows)} filas")
-                    
-                    if bank_config['name'] == 'Banamex':
-                        cargos_val = str(row_data.get('cargos') or '').strip()
-                        abonos_val = str(row_data.get('abonos') or '').strip()
-                        saldo_val = str(row_data.get('saldo') or '').strip()
-                        amounts_val = len(row_data.get('_amounts', []))
-                        print(f"[DEBUG BANAMEX] 🔄 FILA DE CONTINUACIÓN detectada (sin fecha pero con datos):")
-                        print(f"  Cargos: '{cargos_val}', Abonos: '{abonos_val}', Saldo: '{saldo_val}'")
-                        print(f"  _amounts: {amounts_val} montos")
-                        print(f"  movement_rows tiene {len(movement_rows)} filas")
-                        if movement_rows:
-                            prev_fecha = str(movement_rows[-1].get('fecha') or '').strip()
-                            prev_desc = str(movement_rows[-1].get('descripcion') or '').strip()[:60]
-                            print(f"  Fila anterior: Fecha='{prev_fecha}', Desc='{prev_desc}'")
-                    
                     # For BanBajío, filter out informational rows like "1 DE ENERO AL 31 DE ENERO DE 2024 PERIODO:"
                     if bank_config['name'] == 'Banbajío':
                         all_row_text_check = ' '.join([w.get('text', '') for w in row_words])
@@ -4884,7 +4691,6 @@ def main():
                             desc_val_check = str(row_data.get('descripcion') or '').strip()
                             # Must have description to merge continuation row
                             if not desc_val_check:
-                                print(f"[DEBUG BANAMEX] ❌ NO SE UNE fila de continuación (sin descripción): cargos='{row_data.get('cargos', '')}', abonos='{row_data.get('abonos', '')}', saldo='{row_data.get('saldo', '')}'")
                                 continue
                             
                             # Check if description contains footer pattern
@@ -4894,17 +4700,10 @@ def main():
                             has_od_pattern = any('OD' in w.get('text', '') and re.search(r'OD[\.\s]*\d+[\.\s]*\d+', w.get('text', ''), re.I) for w in row_words)
                             
                             if banamex_footer_pattern.search(desc_val_check) or banamex_footer_pattern.search(all_row_text) or banamex_footer_partial.search(desc_val_check) or has_od_pattern:
-                                print(f"[DEBUG BANAMEX] ❌ NO SE UNE fila de continuación (footer en descripción): desc='{desc_val_check[:60]}'")
                                 continue
                         
                         # Continuation row: append description-like text and amounts to previous movement
                         prev = movement_rows[-1]
-                        
-                        # Debug for Banamex: print before merging continuation row
-                        if bank_config['name'] == 'Banamex':
-                            print(f"[DEBUG BANAMEX] 🔄 UNIENDO fila de continuación a fila anterior:")
-                            print(f"  Fila anterior ANTES: Cargos='{prev.get('cargos', '')}', Abonos='{prev.get('abonos', '')}', Saldo='{prev.get('saldo', '')}'")
-                            print(f"  Fila continuación: Cargos='{row_data.get('cargos', '')}', Abonos='{row_data.get('abonos', '')}', Saldo='{row_data.get('saldo', '')}'")
                         
                         # IMPORTANT: First, copy amounts that are already assigned to columns (cargos, abonos, saldo)
                         # These might not be in _amounts if they were assigned directly in extract_movement_row
@@ -4915,16 +4714,10 @@ def main():
                         # If amounts are already assigned to columns, copy them directly to previous row
                         if cont_cargos and not prev.get('cargos'):
                             prev['cargos'] = cont_cargos
-                            if bank_config['name'] == 'Banamex':
-                                print(f"[DEBUG BANAMEX]   ✅ Cargos '{cont_cargos}' copiado desde fila de continuación")
                         if cont_abonos and not prev.get('abonos'):
                             prev['abonos'] = cont_abonos
-                            if bank_config['name'] == 'Banamex':
-                                print(f"[DEBUG BANAMEX]   ✅ Abonos '{cont_abonos}' copiado desde fila de continuación")
                         if cont_saldo and not prev.get('saldo'):
                             prev['saldo'] = cont_saldo
-                            if bank_config['name'] == 'Banamex':
-                                print(f"[DEBUG BANAMEX]   ✅ Saldo '{cont_saldo}' copiado desde fila de continuación")
                         
                         # First, capture amounts from continuation row and assign to appropriate columns
                         cont_amounts = row_data.get('_amounts', [])
@@ -5013,9 +4806,6 @@ def main():
                             else:
                                 prev['descripcion'] = cont_text
                         
-                        # Debug for Banamex: print after merging continuation row
-                        if bank_config['name'] == 'Banamex':
-                            print(f"[DEBUG BANAMEX]   Fila anterior DESPUÉS de unir: Cargos='{prev.get('cargos', '')}', Abonos='{prev.get('abonos', '')}', Saldo='{prev.get('saldo', '')}'")
                     else:
                         # No previous movement and no date - skip this row
                         # Only rows with dates should be added to movements
@@ -5330,16 +5120,7 @@ def main():
                 fecha_val = str(r.get('fecha') or '').strip()
                 desc_val = str(r.get('descripcion') or '').strip()[:60]
                 cargos_val = str(r.get('cargos') or '').strip()
-                abonos_val = str(r.get('abonos') or '').strip()
-                saldo_val = str(r.get('saldo') or '').strip()
-                print(f"[DEBUG BANAMEX] Antes de procesar _amounts:")
-                print(f"  Fecha: '{fecha_val}', Desc: '{desc_val}'")
-                print(f"  Cargos: '{cargos_val}', Abonos: '{abonos_val}', Saldo: '{saldo_val}'")
-                print(f"  _amounts disponibles: {len(amounts)} - {[(amt, f'X:{x:.1f}') for amt, x in amounts] if amounts else 'NINGUNO'}")
-            
             if not amounts:
-                if bank_config['name'] == 'Banamex' and row_idx_debug < 5:
-                    print(f"[DEBUG BANAMEX] ⚠️ No hay _amounts para procesar, saltando fila")
                 continue
 
             # For Konfio, filter out account numbers (like "3817") from amounts list
@@ -5370,9 +5151,6 @@ def main():
             # We'll assign each detected amount to the appropriate numeric column
             # ONLY if it's within the column's coordinate range
             for amt_text, center in amounts:
-                # Debug for Banamex: print each amount being processed (only first 5 rows)
-                if bank_config['name'] == 'Banamex' and row_idx_debug < 5:
-                    print(f"[DEBUG BANAMEX] Procesando monto: '{amt_text}' en X={center:.2f}")
                 # Find which numeric column this amount belongs to based on coordinate range
                 # Use a small tolerance for edge cases (amounts near column boundaries)
                 # For Konfio, use larger tolerance to capture amounts that might be slightly misaligned
@@ -5399,14 +5177,8 @@ def main():
                             # Amount is within this column's range (with tolerance)
                             existing = r.get(col, '').strip()
                             
-                            # Debug for Banamex (only first 5 rows)
-                            if bank_config['name'] == 'Banamex' and row_idx_debug < 5:
-                                print(f"[DEBUG BANAMEX]   Monto '{amt_text}' está en rango de {col} ({x0}-{x1}), valor existente: '{existing}'")
-                            
                             # Check if this amount is already in the column (to avoid duplicates)
                             if existing and amt_text in existing:
-                                if bank_config['name'] == 'Banamex' and row_idx_debug < 5:
-                                    print(f"[DEBUG BANAMEX]   ⚠️ Monto ya está en {col}, saltando")
                                 assigned = True
                                 break
                             # Only assign if column is empty or if this amount is not already there
@@ -5414,8 +5186,6 @@ def main():
                             if not existing:
                                 # Column is empty, assign the amount
                                 r[col] = amt_text
-                                if bank_config['name'] == 'Banamex' and row_idx_debug < 5:
-                                    print(f"[DEBUG BANAMEX]   ✅ Monto '{amt_text}' asignado a {col} (columna vacía)")
                                 assigned = True
                                 break
                             elif amt_text not in existing:
@@ -5425,15 +5195,11 @@ def main():
                                     # Existing looks like a valid amount - preserve it
                                     # Don't overwrite or append, just keep the existing value
                                     # This preserves values extracted during initial coordinate-based extraction
-                                    if bank_config['name'] == 'Banamex' and row_idx_debug < 5:
-                                        print(f"[DEBUG BANAMEX]   ⚠️ {col} ya tiene valor válido '{existing}', preservando (no sobrescribir)")
                                     assigned = True
                                     break
                                 else:
                                     # Existing doesn't look like an amount, replace it
                                     r[col] = amt_text
-                                    if bank_config['name'] == 'Banamex' and row_idx_debug < 5:
-                                        print(f"[DEBUG BANAMEX]   ✅ Monto '{amt_text}' reemplazó valor no-válido en {col}")
                                     assigned = True
                                     break
                             else:
@@ -5559,8 +5325,6 @@ def main():
                     desc_val_cleaned = standalone_amount_pattern.sub('', desc_val)
                     if desc_val_cleaned != desc_val:
                         r['descripcion'] = desc_val_cleaned.strip()
-                        if bank_config['name'] == 'Banamex' and row_idx_debug < 5:
-                            print(f"[DEBUG BANAMEX] Monto removido de descripción (standalone): '{desc_val}' -> '{desc_val_cleaned.strip()}'")
                 else:
                     # For other banks, use the original logic
                     r['descripcion'] = DEC_AMOUNT_RE.sub('', r.get('descripcion'))
@@ -5577,37 +5341,22 @@ def main():
                 existing_abonos = r.get('abonos', '').strip()
                 existing_saldo = r.get('saldo', '').strip()
                 
-                print(f"[DEBUG BANAMEX] Lógica específica para 2 montos: cantidad de _amounts = {len(amounts)}")
-                print(f"[DEBUG BANAMEX] Valores existentes ANTES de lógica específica: Cargos='{existing_cargos}', Abonos='{existing_abonos}', Saldo='{existing_saldo}'")
-                
                 # If all values are already assigned correctly, skip reassignment completely
                 # This preserves values from extract_movement_row which uses coordinate-based assignment
-                if (existing_cargos or existing_abonos) and existing_saldo:
-                    print(f"[DEBUG BANAMEX] ✅ Valores ya asignados correctamente (Cargos/Abonos='{existing_cargos or existing_abonos}' y Saldo='{existing_saldo}'), SALTANDO lógica específica")
-                    # Skip the entire Banamex-specific logic since values are already correct
-                    pass
-                elif len(amounts) == 2:
+                if not ((existing_cargos or existing_abonos) and existing_saldo) and len(amounts) == 2:
                     # Only execute if values are missing - this is a fallback
-                    print(f"[DEBUG BANAMEX] ⚠️ Valores faltantes, ejecutando lógica de fallback para 2 montos")
                     
                     # Get X coordinates for each amount
                     first_amt_text, first_amt_center = amounts[0]
                     second_amt_text, second_amt_center = amounts[1]
                     
-                    print(f"[DEBUG BANAMEX] Primer monto: '{first_amt_text}' en X={first_amt_center:.2f}")
-                    print(f"[DEBUG BANAMEX] Segundo monto: '{second_amt_text}' en X={second_amt_center:.2f}")
-                    
                     # Assign second amount to saldo if in saldo range and saldo is empty
                     if not existing_saldo and 'saldo' in columns_config:
                         saldo_x0, saldo_x1 = columns_config['saldo']
                         tolerance = 10
-                        print(f"[DEBUG BANAMEX] Verificando segundo monto para Saldo: rango=({saldo_x0}, {saldo_x1}), centro={second_amt_center:.2f}, tolerancia={tolerance}")
                         if (saldo_x0 - tolerance) <= second_amt_center <= (saldo_x1 + tolerance):
                             r['saldo'] = second_amt_text
                             existing_saldo = second_amt_text
-                            print(f"[DEBUG BANAMEX] ✅ Segundo monto '{second_amt_text}' asignado a Saldo")
-                        else:
-                            print(f"[DEBUG BANAMEX] ❌ Segundo monto NO está en rango de Saldo")
                     
                     # Assign first amount based on X coordinate if not already assigned
                     if not existing_cargos and not existing_abonos and 'cargos' in columns_config and 'abonos' in columns_config:
@@ -5615,18 +5364,12 @@ def main():
                         abonos_x0, abonos_x1 = columns_config['abonos']
                         tolerance = 10
                         
-                        print(f"[DEBUG BANAMEX] Verificando primer monto:")
-                        print(f"  Rango Cargos: ({cargos_x0}, {cargos_x1}), centro={first_amt_center:.2f}")
-                        print(f"  Rango Abonos: ({abonos_x0}, {abonos_x1}), centro={first_amt_center:.2f}")
-                        
                         # Check if first amount is in cargos range
                         if (cargos_x0 - tolerance) <= first_amt_center <= (cargos_x1 + tolerance):
                             r['cargos'] = first_amt_text
-                            print(f"[DEBUG BANAMEX] ✅ Primer monto '{first_amt_text}' asignado a Cargos (en rango)")
                         # Check if first amount is in abonos range
                         elif (abonos_x0 - tolerance) <= first_amt_center <= (abonos_x1 + tolerance):
                             r['abonos'] = first_amt_text
-                            print(f"[DEBUG BANAMEX] ✅ Primer monto '{first_amt_text}' asignado a Abonos (en rango)")
                         else:
                             # Fallback: use proximity to determine
                             cargos_center = (cargos_x0 + cargos_x1) / 2
@@ -5634,33 +5377,13 @@ def main():
                             dist_cargos = abs(first_amt_center - cargos_center)
                             dist_abonos = abs(first_amt_center - abonos_center)
                             
-                            print(f"[DEBUG BANAMEX] Usando fallback por proximidad:")
-                            print(f"  Distancia a Cargos: {dist_cargos:.2f}, Distancia a Abonos: {dist_abonos:.2f}")
-                            
                             if dist_cargos < dist_abonos:
                                 r['cargos'] = first_amt_text
-                                print(f"[DEBUG BANAMEX] ✅ Primer monto '{first_amt_text}' asignado a Cargos (por proximidad)")
                             else:
                                 r['abonos'] = first_amt_text
-                                print(f"[DEBUG BANAMEX] ✅ Primer monto '{first_amt_text}' asignado a Abonos (por proximidad)")
-                    else:
-                        print(f"[DEBUG BANAMEX] ⚠️ Primer monto NO asignado: Cargos ya tiene '{existing_cargos}' o Abonos ya tiene '{existing_abonos}'")
-                elif len(amounts) != 2:
-                    print(f"[DEBUG BANAMEX] ⚠️ Cantidad de montos diferente a 2: {len(amounts)}")
 
             # cleanup helper key
             if '_amounts' in r:
-                # Debug for Banamex: print final values before deleting _amounts
-                if bank_config['name'] == 'Banamex':
-                    fecha_val = str(r.get('fecha') or '').strip()
-                    desc_val = str(r.get('descripcion') or '').strip()[:60]
-                    cargos_val = str(r.get('cargos') or '').strip()
-                    abonos_val = str(r.get('abonos') or '').strip()
-                    saldo_val = str(r.get('saldo') or '').strip()
-                    print(f"[DEBUG BANAMEX] Valores FINALES después de procesar _amounts (fila {row_idx_debug}):")
-                    print(f"  Fecha: '{fecha_val}', Desc: '{desc_val}'")
-                    print(f"  Cargos: '{cargos_val}', Abonos: '{abonos_val}', Saldo: '{saldo_val}'")
-                    print(f"  {'✅' if cargos_val or abonos_val or saldo_val else '❌ NO HAY MONTOS ASIGNADOS'}")
                 del r['_amounts']
 
             # Debug: Print row data for BBVA to see what's happening with cargos
@@ -5711,37 +5434,7 @@ def main():
 
         # Create df_mov from movement_rows if not already created
         if df_mov is None:
-            # Debug for Banamex: print summary before creating DataFrame (only first 5 rows)
-            if bank_config['name'] == 'Banamex':
-                print(f"[DEBUG BANAMEX] ===== RESUMEN ANTES DE CREAR DATAFRAME (primeras 5 filas) =====")
-                print(f"  Total de filas: {len(movement_rows)}")
-                rows_with_amounts = 0
-                rows_shown = 0
-                for idx, r in enumerate(movement_rows):
-                    cargos = str(r.get('cargos', '')).strip()
-                    abonos = str(r.get('abonos', '')).strip()
-                    saldo = str(r.get('saldo', '')).strip()
-                    fecha = str(r.get('fecha', '')).strip()
-                    if cargos or abonos or saldo:
-                        rows_with_amounts += 1
-                        if rows_shown < 5:
-                            print(f"  Fila {idx+1}: Fecha='{fecha}', Cargos='{cargos}', Abonos='{abonos}', Saldo='{saldo}'")
-                            rows_shown += 1
-                print(f"  Filas con montos: {rows_with_amounts}/{len(movement_rows)} (mostrando primeras 5)")
-                print(f"[DEBUG BANAMEX] ============================================")
-            
-            df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
-            
-            # Debug for Banamex: print DataFrame info after creation
-            if bank_config['name'] == 'Banamex':
-                print(f"\n[DEBUG BANAMEX] DataFrame creado:")
-                print(f"  Total de filas: {len(df_mov)}")
-                print(f"  Columnas: {list(df_mov.columns)}")
-                if len(df_mov) > 0:
-                    print(f"  Primeras 3 filas:")
-                    for idx in range(min(3, len(df_mov))):
-                        row = df_mov.iloc[idx]
-                        print(f"    Fila {idx}: Fecha='{row.get('fecha', '')}', Cargos='{row.get('cargos', '')}', Abonos='{row.get('abonos', '')}', Saldo='{row.get('saldo', '')}'")
+            df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])                
     else:
         # No coordinate-based extraction available, use raw text extraction
         movement_entries = group_entries_from_lines(movements_lines)
@@ -6038,16 +5731,6 @@ def main():
         df_mov = df_mov.drop(columns=drop_cols)
 
 
-    # Debug for Banamex: print before renaming columns
-    if bank_config['name'] == 'Banamex':
-        print(f"\n[DEBUG BANAMEX] ANTES de renombrar columnas:")
-        print(f"  Columnas: {list(df_mov.columns)}")
-        if len(df_mov) > 0:
-            print(f"  Primeras 3 filas:")
-            for idx in range(min(3, len(df_mov))):
-                row = df_mov.iloc[idx]
-                print(f"    Fila {idx}: Cargos='{row.get('cargos', '')}', Abonos='{row.get('abonos', '')}', Saldo='{row.get('saldo', '')}'")
-    
     # Rename columns to match desired format
     column_rename = {}
     if bank_config['name'] == 'BBVA':
@@ -6080,16 +5763,6 @@ def main():
     if column_rename:
         df_mov = df_mov.rename(columns=column_rename)
         
-        # Debug for Banamex: print after renaming columns
-        if bank_config['name'] == 'Banamex':
-            print(f"\n[DEBUG BANAMEX] DESPUÉS de renombrar columnas:")
-            print(f"  Columnas: {list(df_mov.columns)}")
-            if len(df_mov) > 0:
-                print(f"  Primeras 3 filas:")
-                for idx in range(min(3, len(df_mov))):
-                    row = df_mov.iloc[idx]
-                    print(f"    Fila {idx}: Cargos='{row.get('Cargos', row.get('cargos', ''))}', Abonos='{row.get('Abonos', row.get('abonos', ''))}', Saldo='{row.get('Saldo', row.get('saldo', ''))}'")
-    
     # For HSBC, remove 'raw' column if it still exists (after renaming)
     if bank_config['name'] == 'HSBC' and 'raw' in df_mov.columns:
         df_mov = df_mov.drop(columns=['raw'])
@@ -6421,17 +6094,6 @@ def main():
         if df_digitem is not None and not df_digitem.empty:
             sheet_names += ", DIGITEM"
         #print(f"📝 Escribiendo Excel con {num_sheets} pestañas: {sheet_names}")
-        # Debug for Banamex: print final state before writing to Excel
-        if bank_config['name'] == 'Banamex':
-            print(f"\n[DEBUG BANAMEX] ESTADO FINAL antes de escribir a Excel:")
-            print(f"  Total de filas: {len(df_mov)}")
-            print(f"  Columnas: {list(df_mov.columns)}")
-            if len(df_mov) > 0:
-                print(f"  Primeras 5 filas:")
-                for idx in range(min(5, len(df_mov))):
-                    row = df_mov.iloc[idx]
-                    print(f"    Fila {idx}: Fecha='{row.get('Fecha', '')}', Cargos='{row.get('Cargos', '')}', Abonos='{row.get('Abonos', '')}', Saldo='{row.get('Saldo', '')}'")
-        
         # Clean amount columns for Banamex: extract only numeric amounts from mixed text
         if bank_config['name'] == 'Banamex':
             for col in ['Cargos', 'Abonos', 'Saldo']:
@@ -6459,7 +6121,6 @@ def main():
                     
                     # Apply cleaning to the column
                     df_mov[col] = df_mov[col].apply(extract_amount)
-                    print(f"[DEBUG BANAMEX] Limpieza aplicada a columna '{col}'")
         
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
             #print("   - Escribiendo pestaña 'Summary'...")
@@ -6467,19 +6128,6 @@ def main():
             
             # Special debug for "IVA SOBRE COMISIONES E INTERESES" row before exporting to Excel
             #print("   - Escribiendo pestaña 'Movements'...")
-            # Debug for Banamex: print exact values being written to Excel
-            if bank_config['name'] == 'Banamex':
-                print(f"\n[DEBUG BANAMEX] VALORES EXACTOS que se escribirán al Excel:")
-                print(f"  Columnas en df_mov: {list(df_mov.columns)}")
-                if len(df_mov) > 0:
-                    print(f"  Primeras 3 filas (valores exactos):")
-                    for idx in range(min(3, len(df_mov))):
-                        row = df_mov.iloc[idx]
-                        print(f"    Fila {idx}:")
-                        for col in ['Fecha', 'Descripción', 'Cargos', 'Abonos', 'Saldo']:
-                            if col in df_mov.columns:
-                                val = row.get(col, '')
-                                print(f"      {col}: '{val}' (tipo: {type(val).__name__})")
             df_mov.to_excel(writer, sheet_name='Movements', index=False)
             
             # Write Transferencias sheet if available
