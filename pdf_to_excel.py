@@ -6071,6 +6071,9 @@ def main():
                     df_mov[col] = df_mov[col].apply(extract_amount)
         
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
+            # Establecer autor en propiedades del Excel
+            writer.book.properties.creator = "CONTAAYUDA"
+            
             #print("   - Escribiendo pestaña 'Summary'...")
             df_summary.to_excel(writer, sheet_name='Summary', index=False)
             
