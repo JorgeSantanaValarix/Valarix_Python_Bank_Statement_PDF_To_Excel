@@ -118,6 +118,8 @@ if not errorlevel 1 (
         :: Actualizar PATH en esta sesión
         call refreshenv >nul 2>&1
         set TESSERACT_OK=1
+        :: Descargar idiomas después de instalar
+        call :download_tesseract_languages
         goto :verify_tesseract
     )
 )
@@ -164,6 +166,11 @@ if errorlevel 1 (
 ) else (
     echo [OK] Tesseract encontrado en PATH
     set TESSERACT_OK=1
+)
+
+:: Descargar idiomas si Tesseract está instalado
+if %TESSERACT_OK%==1 (
+    call :download_tesseract_languages
 )
 
 :: PASO 5: Verificación final
@@ -251,6 +258,112 @@ set VERIFY_RESULT=%ERRORLEVEL%
 
 :: Limpiar archivo temporal
 del verify_installation.py >nul 2>&1
+
+goto :end
+
+:: Función para descargar archivos de idioma de Tesseract
+:download_tesseract_languages
+echo.
+echo [INFO] Verificando idiomas de Tesseract...
+
+:: Determinar ruta de tessdata
+set TESSDATA_DIR=
+if exist "%TESSERACT_DEFAULT_PATH%" (
+    set TESSDATA_DIR=C:\Program Files\Tesseract-OCR\tessdata
+)
+if exist "%TESSERACT_X86_PATH%" (
+    set TESSDATA_DIR=C:\Program Files (x86)\Tesseract-OCR\tessdata
+)
+
+:: Si no se encontró, intentar desde PATH
+if "%TESSDATA_DIR%"=="" (
+    for /f "tokens=*" %%i in ('where tesseract 2^>nul') do (
+        set TESSERACT_EXE=%%i
+        for %%j in ("%%~dpi..") do set TESSDATA_DIR=%%~fj\tessdata
+    )
+)
+
+if "%TESSDATA_DIR%"=="" (
+    echo [ADVERTENCIA] No se pudo determinar la ruta de tessdata
+    goto :end_language_check
+)
+
+:: Verificar si los idiomas ya están instalados
+set NEED_ENG=1
+set NEED_SPA=1
+
+if exist "%TESSDATA_DIR%\eng.traineddata" (
+    echo [OK] Ingles ^(eng^) ya esta instalado
+    set NEED_ENG=0
+)
+
+if exist "%TESSDATA_DIR%\spa.traineddata" (
+    echo [OK] Espanol ^(spa^) ya esta instalado
+    set NEED_SPA=0
+)
+
+if %NEED_ENG%==0 if %NEED_SPA%==0 (
+    echo [OK] Todos los idiomas necesarios estan instalados
+    goto :end_language_check
+)
+
+:: Verificar si PowerShell está disponible para descargar
+where powershell >nul 2>&1
+if errorlevel 1 (
+    echo [ADVERTENCIA] PowerShell no encontrado, no se pueden descargar idiomas automaticamente
+    goto :manual_language_instructions
+)
+
+:: Crear carpeta tessdata si no existe
+if not exist "%TESSDATA_DIR%" (
+    echo [INFO] Creando carpeta tessdata...
+    mkdir "%TESSDATA_DIR%" >nul 2>&1
+    if errorlevel 1 (
+        echo [ADVERTENCIA] No se pudo crear la carpeta tessdata, se requieren permisos de administrador
+        goto :manual_language_instructions
+    )
+)
+
+:: Descargar inglés si es necesario
+if %NEED_ENG%==1 (
+    echo [INFO] Descargando ingles ^(eng^)...
+    powershell -Command "try { Invoke-WebRequest -Uri 'https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata' -OutFile '%TESSDATA_DIR%\eng.traineddata' -ErrorAction Stop; Write-Host 'OK' } catch { Write-Host 'ERROR' }" >nul 2>&1
+    if exist "%TESSDATA_DIR%\eng.traineddata" (
+        echo [OK] Ingles ^(eng^) descargado e instalado
+    ) else (
+        echo [ERROR] Error descargando ingles ^(eng^)
+        goto :manual_language_instructions
+    )
+)
+
+:: Descargar español si es necesario
+if %NEED_SPA%==1 (
+    echo [INFO] Descargando espanol ^(spa^)...
+    powershell -Command "try { Invoke-WebRequest -Uri 'https://github.com/tesseract-ocr/tessdata/raw/main/spa.traineddata' -OutFile '%TESSDATA_DIR%\spa.traineddata' -ErrorAction Stop; Write-Host 'OK' } catch { Write-Host 'ERROR' }" >nul 2>&1
+    if exist "%TESSDATA_DIR%\spa.traineddata" (
+        echo [OK] Espanol ^(spa^) descargado e instalado
+    ) else (
+        echo [ERROR] Error descargando espanol ^(spa^)
+        goto :manual_language_instructions
+    )
+)
+
+goto :end_language_check
+
+:manual_language_instructions
+echo.
+echo [ADVERTENCIA] No se pudieron descargar los idiomas automaticamente
+echo.
+echo Para instalar los idiomas manualmente:
+echo 1. Ve a: https://github.com/tesseract-ocr/tessdata
+echo 2. Descarga los archivos:
+echo    - eng.traineddata ^(para ingles^)
+echo    - spa.traineddata ^(para espanol^)
+echo 3. Copia los archivos a: %TESSDATA_DIR%
+echo.
+
+:end_language_check
+goto :eof
 
 :end
 echo.
