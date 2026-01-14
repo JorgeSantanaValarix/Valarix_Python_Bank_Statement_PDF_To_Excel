@@ -6088,7 +6088,7 @@ def main():
     
     # write sheets: summary, movements, validation, and optionally Transferencias and DIGITEM
     try:
-        sheet_names = "Summary, Movements, Data Validation"
+        sheet_names = "Summary, Bank Statement Report, Data Validation"
         if df_transferencias is not None and not df_transferencias.empty:
             sheet_names += ", Transferencias"
         if df_digitem is not None and not df_digitem.empty:
@@ -6128,7 +6128,7 @@ def main():
             
             # Special debug for "IVA SOBRE COMISIONES E INTERESES" row before exporting to Excel
             #print("   - Escribiendo pestaña 'Movements'...")
-            df_mov.to_excel(writer, sheet_name='Movements', index=False)
+            df_mov.to_excel(writer, sheet_name='Bank Statement Report', index=False)
             
             # Write Transferencias sheet if available
             if df_transferencias is not None and not df_transferencias.empty:
