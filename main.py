@@ -5813,21 +5813,21 @@ def main():
 
     # Reorder columns according to bank type
     if bank_config['name'] == 'BBVA':
-        # For BBVA: Fecha Oper, Fecha Liq., Descripción, Cargos, Abonos, Operación, Liquidación
-        desired_order = ['Fecha Oper', 'Fecha Liq.', 'Descripción', 'Cargos', 'Abonos', 'Operación', 'Liquidación']
+        # For BBVA: Fecha Oper, Fecha Liq., Descripción, Abonos, Cargos, Operación, Liquidación
+        desired_order = ['Fecha Oper', 'Fecha Liq.', 'Descripción', 'Abonos', 'Cargos', 'Operación', 'Liquidación']
         # Filter to only include columns that exist in the dataframe
         desired_order = [col for col in desired_order if col in df_mov.columns]
         # Add any remaining columns that are not in desired_order
         other_cols = [c for c in df_mov.columns if c not in desired_order]
         df_mov = df_mov[desired_order + other_cols]
     elif bank_config['name'] == 'HSBC':
-        # For HSBC: ONLY Fecha, Descripción, Cargos, Abonos, Saldo
+        # For HSBC: ONLY Fecha, Descripción, Abonos, Cargos, Saldo
         # Ensure 'Fecha' column exists (should already exist from earlier processing)
         if 'Fecha' not in df_mov.columns and 'fecha' in df_mov.columns:
             df_mov['Fecha'] = df_mov['fecha']
             df_mov = df_mov.drop(columns=['fecha'])
         
-        desired_order = ['Fecha', 'Descripción', 'Cargos', 'Abonos', 'Saldo']
+        desired_order = ['Fecha', 'Descripción', 'Abonos', 'Cargos', 'Saldo']
         # Filter to only include columns that exist in the dataframe
         desired_order = [col for col in desired_order if col in df_mov.columns]
         # Remove ALL other columns that are not in desired_order
@@ -5838,9 +5838,9 @@ def main():
         if desired_order:  # Only reorder if we have columns
             df_mov = df_mov[desired_order]
     else:
-        # For other banks: Fecha, Descripción, Cargos, Abonos, Saldo (if available)
+        # For other banks: Fecha, Descripción, Abonos, Cargos, Saldo (if available)
         # Build desired_order based on what columns are configured for this bank
-        desired_order = ['Fecha', 'Descripción', 'Cargos', 'Abonos']
+        desired_order = ['Fecha', 'Descripción', 'Abonos', 'Cargos']
         
         # For other banks, only include Saldo if it's in the bank's column configuration
         if 'saldo' in columns_config:
