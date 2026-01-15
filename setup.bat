@@ -225,15 +225,16 @@ echo         print^(f"OK Tesseract encontrado: version {version}"^)
 echo.
 echo         try:
 echo             langs = pytesseract.get_languages^(^)
-echo             print^(f"OK Idiomas disponibles: {len^(langs^)}"^)
+echo             num_langs = len^(langs^)
+echo             print^(f"OK Idiomas disponibles: {num_langs}"^)
 echo             if 'spa' in langs:
-echo                 print^("OK Espanol ^(spa^) disponible"^)
+echo                 print^("OK Espanol (spa) disponible"^)
 echo             else:
-echo                 print^("ADVERTENCIA Espanol ^(spa^) NO disponible"^)
+echo                 print^("ADVERTENCIA Espanol (spa) NO disponible"^)
 echo             if 'eng' in langs:
-echo                 print^("OK Ingles ^(eng^) disponible"^)
+echo                 print^("OK Ingles (eng) disponible"^)
 echo             else:
-echo                 print^("ADVERTENCIA Ingles ^(eng^) NO disponible"^)
+echo                 print^("ADVERTENCIA Ingles (eng) NO disponible"^)
 echo         except Exception as e:
 echo             print^(f"ADVERTENCIA Error verificando idiomas: {e}"^)
 echo     except Exception as e:
@@ -267,23 +268,31 @@ echo.
 echo [INFO] Verificando idiomas de Tesseract...
 
 :: Determinar ruta de tessdata
+:: Usar where tesseract primero (funciona para todas las rutas si están en PATH)
 set TESSDATA_DIR=
-if exist "%TESSERACT_DEFAULT_PATH%" (
-    set TESSDATA_DIR=C:\Program Files\Tesseract-OCR\tessdata
+for /f "tokens=*" %%i in ('where tesseract 2^>nul') do (
+    set TESSERACT_EXE=%%i
+    :: Extraer directorio del ejecutable (%%~dpi ya incluye barra final)
+    set "TEMP_DIR=%%~dpi"
+    :: Construir ruta a tessdata (mismo directorio que tesseract.exe)
+    set "TESSDATA_DIR=!TEMP_DIR!tessdata"
+    goto :found_tessdata_path
 )
-if exist "%TESSERACT_X86_PATH%" (
-    set TESSDATA_DIR=C:\Program Files (x86)\Tesseract-OCR\tessdata
-)
+:found_tessdata_path
 
-:: Si no se encontró, intentar desde PATH
-if "%TESSDATA_DIR%"=="" (
-    for /f "tokens=*" %%i in ('where tesseract 2^>nul') do (
-        set TESSERACT_EXE=%%i
-        for %%j in ("%%~dpi..") do set TESSDATA_DIR=%%~fj\tessdata
+:: Si no se encontró desde PATH, intentar rutas comunes (solo si where falló)
+if "!TESSDATA_DIR!"=="" (
+    if exist "%TESSERACT_DEFAULT_PATH%" (
+        set "TESSDATA_DIR=C:\Program Files\Tesseract-OCR\tessdata"
+    )
+)
+if "!TESSDATA_DIR!"=="" (
+    if exist "%TESSERACT_X86_PATH%" (
+        call :set_x86_tessdata_dir
     )
 )
 
-if "%TESSDATA_DIR%"=="" (
+if "!TESSDATA_DIR!"=="" (
     echo [ADVERTENCIA] No se pudo determinar la ruta de tessdata
     goto :end_language_check
 )
@@ -292,17 +301,17 @@ if "%TESSDATA_DIR%"=="" (
 set NEED_ENG=1
 set NEED_SPA=1
 
-if exist "%TESSDATA_DIR%\eng.traineddata" (
+if exist "!TESSDATA_DIR!\eng.traineddata" (
     echo [OK] Ingles ^(eng^) ya esta instalado
     set NEED_ENG=0
 )
 
-if exist "%TESSDATA_DIR%\spa.traineddata" (
+if exist "!TESSDATA_DIR!\spa.traineddata" (
     echo [OK] Espanol ^(spa^) ya esta instalado
     set NEED_SPA=0
 )
 
-if %NEED_ENG%==0 if %NEED_SPA%==0 (
+if !NEED_ENG!==0 if !NEED_SPA!==0 (
     echo [OK] Todos los idiomas necesarios estan instalados
     goto :end_language_check
 )
@@ -315,9 +324,9 @@ if errorlevel 1 (
 )
 
 :: Crear carpeta tessdata si no existe
-if not exist "%TESSDATA_DIR%" (
+if not exist "!TESSDATA_DIR!" (
     echo [INFO] Creando carpeta tessdata...
-    mkdir "%TESSDATA_DIR%" >nul 2>&1
+    mkdir "!TESSDATA_DIR!" >nul 2>&1
     if errorlevel 1 (
         echo [ADVERTENCIA] No se pudo crear la carpeta tessdata, se requieren permisos de administrador
         goto :manual_language_instructions
@@ -325,10 +334,10 @@ if not exist "%TESSDATA_DIR%" (
 )
 
 :: Descargar inglés si es necesario
-if %NEED_ENG%==1 (
+if !NEED_ENG!==1 (
     echo [INFO] Descargando ingles ^(eng^)...
-    powershell -Command "try { Invoke-WebRequest -Uri 'https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata' -OutFile '%TESSDATA_DIR%\eng.traineddata' -ErrorAction Stop; Write-Host 'OK' } catch { Write-Host 'ERROR' }" >nul 2>&1
-    if exist "%TESSDATA_DIR%\eng.traineddata" (
+    powershell -Command "try { Invoke-WebRequest -Uri 'https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata' -OutFile \"!TESSDATA_DIR!\eng.traineddata\" -ErrorAction Stop; Write-Host 'OK' } catch { Write-Host 'ERROR' }" >nul 2>&1
+    if exist "!TESSDATA_DIR!\eng.traineddata" (
         echo [OK] Ingles ^(eng^) descargado e instalado
     ) else (
         echo [ERROR] Error descargando ingles ^(eng^)
@@ -337,10 +346,10 @@ if %NEED_ENG%==1 (
 )
 
 :: Descargar español si es necesario
-if %NEED_SPA%==1 (
+if !NEED_SPA!==1 (
     echo [INFO] Descargando espanol ^(spa^)...
-    powershell -Command "try { Invoke-WebRequest -Uri 'https://github.com/tesseract-ocr/tessdata/raw/main/spa.traineddata' -OutFile '%TESSDATA_DIR%\spa.traineddata' -ErrorAction Stop; Write-Host 'OK' } catch { Write-Host 'ERROR' }" >nul 2>&1
-    if exist "%TESSDATA_DIR%\spa.traineddata" (
+    powershell -Command "try { Invoke-WebRequest -Uri 'https://github.com/tesseract-ocr/tessdata/raw/main/spa.traineddata' -OutFile \"!TESSDATA_DIR!\spa.traineddata\" -ErrorAction Stop; Write-Host 'OK' } catch { Write-Host 'ERROR' }" >nul 2>&1
+    if exist "!TESSDATA_DIR!\spa.traineddata" (
         echo [OK] Espanol ^(spa^) descargado e instalado
     ) else (
         echo [ERROR] Error descargando espanol ^(spa^)
@@ -349,6 +358,12 @@ if %NEED_SPA%==1 (
 )
 
 goto :end_language_check
+
+:set_x86_tessdata_dir
+:: Función auxiliar para establecer ruta x86 (evita problemas con paréntesis)
+:: Usar PowerShell para construir la ruta de forma segura
+for /f "delims=" %%p in ('powershell -Command "$path='%TESSERACT_X86_PATH%'; $dir=[System.IO.Path]::GetDirectoryName($path); Write-Output ($dir + '\tessdata')"') do set "TESSDATA_DIR=%%p"
+goto :eof
 
 :manual_language_instructions
 echo.
@@ -359,7 +374,7 @@ echo 1. Ve a: https://github.com/tesseract-ocr/tessdata
 echo 2. Descarga los archivos:
 echo    - eng.traineddata ^(para ingles^)
 echo    - spa.traineddata ^(para espanol^)
-echo 3. Copia los archivos a: %TESSDATA_DIR%
+echo 3. Copia los archivos a: !TESSDATA_DIR!
 echo.
 
 :end_language_check
