@@ -1,123 +1,124 @@
-# Configuración e Instalación - PDF to Excel
+# Configuration and Installation - PDF to Excel
 
-Este documento explica cómo configurar e instalar todas las dependencias necesarias para ejecutar `pdf_to_excel.py` en Windows Server.
+This document explains how to configure and install all necessary dependencies to run `pdf_to_excel.py` on Windows Server.
 
-## ¿Qué hace este script?
+## What does this script do?
 
-`pdf_to_excel.py` convierte estados de cuenta bancarios en formato PDF a archivos Excel (.xlsx) con múltiples pestañas organizadas.
+`pdf_to_excel.py` converts bank statements from PDF format to Excel (.xlsx) files with multiple organized sheets.
 
-## Requisitos del Sistema
+## System Requirements
 
-- Windows Server o Windows 10/11
-- Python 3.7 o superior
-- Conexión a Internet (para descargar dependencias)
-- Permisos de administrador (opcional, solo para instalar Tesseract OCR)
+- Windows Server or Windows 10/11
+- Python 3.7 or higher
+- Internet connection (to download dependencies)
+- Administrator permissions (optional, only for installing Tesseract OCR)
 
 ---
 
-## Requisitos Previos
+## Prerequisites
 
 ### Python
 
-- **Versión mínima:** Python 3.7
-- **Descarga:** https://www.python.org/downloads/
-- **IMPORTANTE:** Durante la instalación, marca la opción **"Add Python to PATH"**
+- **Minimum version:** Python 3.7
+- **Download:** https://www.python.org/downloads/
+- **IMPORTANT:** During installation, check the option **"Add Python to PATH"**
 
-### Permisos
+### Permissions
 
-- Permisos de lectura/escritura en la carpeta del proyecto
-- Permisos de administrador (opcional, solo si quieres instalar Tesseract automáticamente con Chocolatey)
+- Read/write permissions in the project folder
+- Administrator permissions (optional, only if you want to install Tesseract automatically with Chocolatey)
 
 ---
 
-## Instalación Rápida (Recomendada)
+## Quick Installation (Recommended)
 
-### Paso 1: Clonar el repositorio
+### Step 1: Clone the repository
 
 ```bash
-git clone <url-del-repositorio>
+git clone <repository-url>
 cd Valarix_Python_Bank_Statement_PDF_To_Excel
 ```
 
-### Paso 2: Ejecutar el script de instalación
+### Step 2: Run the installation script
 
 ```bash
 setup.bat
 ```
 
-El script hará todo automáticamente:
-1. ✅ Verificará que Python esté instalado
-2. ✅ Actualizará pip
-3. ✅ Instalará todas las dependencias Python
-4. ✅ Intentará instalar Tesseract OCR (si Chocolatey está disponible)
-5. ✅ Verificará que todo esté correcto
+The script will do everything automatically:
+1. ✅ Verify that Python is installed
+2. ✅ Update pip
+3. ✅ Install all Python dependencies
+4. ✅ Attempt to install Tesseract OCR (if Chocolatey is available)
+5. ✅ Download English and Spanish language packs for Tesseract
+6. ✅ Verify that everything is correct
 
-**Tiempo estimado:** 5-10 minutos
+**Estimated time:** 5-10 minutes
 
 ---
 
-## Instalación Manual
+## Manual Installation
 
-Si el script automático falla o prefieres instalar manualmente, sigue estos pasos:
+If the automatic script fails or you prefer to install manually, follow these steps:
 
-### Paso 1: Instalar Python
+### Step 1: Install Python
 
-1. Descarga Python desde: https://www.python.org/downloads/
-2. Ejecuta el instalador
-3. **IMPORTANTE:** Marca "Add Python to PATH"
-4. Completa la instalación
-5. Verifica la instalación:
+1. Download Python from: https://www.python.org/downloads/
+2. Run the installer
+3. **IMPORTANT:** Check "Add Python to PATH"
+4. Complete the installation
+5. Verify the installation:
    ```bash
    python --version
    ```
 
-### Paso 2: Instalar Dependencias Python
+### Step 2: Install Python Dependencies
 
 ```bash
-# Actualizar pip
+# Update pip
 python -m pip install --upgrade pip
 
-# Instalar dependencias
+# Install dependencies
 python -m pip install -r requirements.txt
 ```
 
-**Dependencias que se instalarán:**
-- `pdfplumber` - Extracción de texto de PDFs
-- `pandas` - Manipulación de datos
-- `openpyxl` - Escritura de archivos Excel
-- `pymupdf>=1.23.0` - Conversión de PDF a imágenes para OCR
-- `pytesseract>=0.3.10` - Wrapper de Python para Tesseract OCR
-- `Pillow>=10.0.0` - Procesamiento de imágenes
+**Dependencies that will be installed:**
+- `pdfplumber` - PDF text extraction
+- `pandas` - Data manipulation
+- `openpyxl` - Excel file writing
+- `pymupdf>=1.23.0` - PDF to image conversion for OCR
+- `pytesseract>=0.3.10` - Python wrapper for Tesseract OCR
+- `Pillow>=10.0.0` - Image processing
 
-### Paso 3: Instalar Tesseract OCR
+### Step 3: Install Tesseract OCR
 
-#### Opción A: Con Chocolatey (Recomendado)
+#### Option A: With Chocolatey (Recommended)
 
-Si tienes Chocolatey instalado:
+If you have Chocolatey installed:
 
 ```powershell
 choco install tesseract
 ```
 
-#### Opción B: Instalador de Windows
+#### Option B: Windows Installer
 
-1. Ve a: https://github.com/UB-Mannheim/tesseract/wiki
-2. Descarga el instalador más reciente:
+1. Go to: https://github.com/UB-Mannheim/tesseract/wiki
+2. Download the latest installer:
    - **64-bit:** `tesseract-ocr-w64-setup-5.x.x.exe`
    - **32-bit:** `tesseract-ocr-w32-setup-5.x.x.exe`
-3. Ejecuta el instalador
-4. **IMPORTANTE:** Durante la instalación:
-   - ✅ Marca **"Add Tesseract to PATH"**
-   - ✅ Selecciona **"Spanish"** en idiomas adicionales
-   - ✅ Selecciona **"English"** también
-5. Completa la instalación
-6. **CIERRA y REABRE** PowerShell/CMD para que se actualice el PATH
-7. Verifica la instalación:
+3. Run the installer
+4. **IMPORTANT:** During installation:
+   - ✅ Check **"Add Tesseract to PATH"**
+   - ✅ Select **"Spanish"** in additional languages
+   - ✅ Select **"English"** as well
+5. Complete the installation
+6. **CLOSE and REOPEN** PowerShell/CMD so PATH updates
+7. Verify the installation:
    ```bash
    tesseract --version
    ```
 
-Deberías ver algo como:
+You should see something like:
 ```
 tesseract 5.3.0
  leptonica-1.83.0
@@ -125,160 +126,161 @@ tesseract 5.3.0
 
 ---
 
-## Verificación de Instalación
+## Installation Verification
 
-### Verificación Automática
+### Automatic Verification
 
-El script `setup.bat` incluye verificación automática. Si quieres verificar manualmente:
+The `setup.bat` script includes automatic verification. If you want to verify manually:
 
 ```bash
-python -c "import pdfplumber, pandas, openpyxl, fitz, pytesseract, PIL; print('✅ Todas las dependencias instaladas')"
+python -c "import pdfplumber, pandas, openpyxl, fitz, pytesseract, PIL; print('✅ All dependencies installed')"
 ```
 
-### Verificar Tesseract OCR
+### Verify Tesseract OCR
 
 ```bash
 tesseract --version
 ```
 
-### Verificar Idiomas de Tesseract
+### Verify Tesseract Languages
 
 ```python
 import pytesseract
 langs = pytesseract.get_languages()
-print(f"Idiomas disponibles: {langs}")
-print(f"Español disponible: {'spa' in langs}")
-print(f"Inglés disponible: {'eng' in langs}")
+print(f"Available languages: {langs}")
+print(f"Spanish available: {'spa' in langs}")
+print(f"English available: {'eng' in langs}")
 ```
 
 ---
 
-## Uso del Script
+## Script Usage
 
-Una vez completada la instalación, puedes usar el script:
+Once installation is complete, you can use the script:
 
 ```bash
-python pdf_to_excel.py "ruta\al\archivo.pdf"
+python pdf_to_excel.py "path\to\file.pdf"
 ```
 
-El script generará un archivo Excel con el mismo nombre que el PDF pero con extensión `.xlsx`.
+The script will generate an Excel file with the same name as the PDF but with `.xlsx` extension.
 
-### Ejemplo
+### Example
 
 ```bash
 python pdf_to_excel.py "Test\Bank Statement\BBVA.pdf"
 ```
 
-Esto generará: `Test\Bank Statement\BBVA.xlsx`
+This will generate: `Test\Bank Statement\BBVA.xlsx`
 
-### Salida del Script
+### Script Output
 
-El script mostrará:
-- 🏦 Banco detectado: [nombre del banco]
+The script will display:
+- 🏦 Bank detected: [bank name]
 - 📊 Exporting to Excel...
-- ✅ VALIDACIÓN: TODO CORRECTO (o HAY DIFERENCIAS)
-- ✅ Excel file created -> [ruta del archivo]
+- ✅ VALIDATION: ALL CORRECT (or THERE ARE DIFFERENCES)
+- ✅ Excel file created -> [file path]
 
 ---
 
 ## Troubleshooting
 
-### Error: "Python no encontrado"
+### Error: "Python not found"
 
-**Problema:** Python no está instalado o no está en PATH.
+**Problem:** Python is not installed or not in PATH.
 
-**Solución:**
-1. Instala Python desde https://www.python.org/downloads/
-2. Asegúrate de marcar "Add Python to PATH" durante la instalación
-3. Cierra y reabre PowerShell/CMD
-4. Verifica con: `python --version`
+**Solution:**
+1. Install Python from https://www.python.org/downloads/
+2. Make sure to check "Add Python to PATH" during installation
+3. Close and reopen PowerShell/CMD
+4. Verify with: `python --version`
 
-### Error: "pip no encontrado"
+### Error: "pip not found"
 
-**Problema:** pip no está instalado o no está en PATH.
+**Problem:** pip is not installed or not in PATH.
 
-**Solución:**
+**Solution:**
 ```bash
 python -m ensurepip --upgrade
 ```
 
-### Error: "Tesseract no encontrado"
+### Error: "Tesseract not found"
 
-**Problema:** Tesseract OCR no está instalado o no está en PATH.
+**Problem:** Tesseract OCR is not installed or not in PATH.
 
-**Solución:**
-1. Instala Tesseract siguiendo las instrucciones en la sección "Instalación Manual"
-2. Asegúrate de marcar "Add Tesseract to PATH" durante la instalación
-3. **CIERRA y REABRE** PowerShell/CMD
-4. Verifica con: `tesseract --version`
+**Solution:**
+1. Install Tesseract following the instructions in the "Manual Installation" section
+2. Make sure to check "Add Tesseract to PATH" during installation
+3. **CLOSE and REOPEN** PowerShell/CMD
+4. Verify with: `tesseract --version`
 
-### Error: "Español (spa) NO disponible"
+### Error: "Spanish (spa) NOT available"
 
-**Problema:** El idioma español no está instalado en Tesseract.
+**Problem:** The Spanish language is not installed in Tesseract.
 
-**Solución:**
-1. Reinstala Tesseract
-2. Durante la instalación, selecciona "Spanish" en idiomas adicionales
+**Solution:**
+1. Reinstall Tesseract
+2. During installation, select "Spanish" in additional languages
+3. Or run `setup.bat` again - it will automatically download missing language packs
 
-### Error al instalar dependencias Python
+### Error installing Python dependencies
 
-**Problema:** Error de conexión o permisos.
+**Problem:** Connection error or permissions.
 
-**Solución:**
-1. Verifica tu conexión a Internet
-2. Intenta actualizar pip: `python -m pip install --upgrade pip`
-3. Si usas proxy, configura pip:
+**Solution:**
+1. Verify your Internet connection
+2. Try updating pip: `python -m pip install --upgrade pip`
+3. If you use a proxy, configure pip:
    ```bash
    pip config set global.proxy http://proxy:port
    ```
-4. Ejecuta PowerShell/CMD como administrador
+4. Run PowerShell/CMD as administrator
 
-### El script funciona pero sin OCR
+### Script works but without OCR
 
-**Problema:** Tesseract no está instalado o no está en PATH.
+**Problem:** Tesseract is not installed or not in PATH.
 
-**Solución:**
-- El script funcionará pero solo procesará PDFs con texto legible
-- Para soporte OCR completo, instala Tesseract siguiendo las instrucciones
+**Solution:**
+- The script will work but only process PDFs with legible text
+- For full OCR support, install Tesseract following the instructions
 
-### Error: "requirements.txt no encontrado"
+### Error: "requirements.txt not found"
 
-**Problema:** El script se ejecutó desde un directorio incorrecto.
+**Problem:** The script was run from an incorrect directory.
 
-**Solución:**
-1. Asegúrate de ejecutar `setup.bat` desde la raíz del proyecto
-2. Verifica que `requirements.txt` esté en el mismo directorio
+**Solution:**
+1. Make sure to run `setup.bat` from the project root
+2. Verify that `requirements.txt` is in the same directory
 
 ---
 
-## Preguntas Frecuentes
+## Frequently Asked Questions
 
-### ¿Necesito instalar Tesseract OCR?
+### Do I need to install Tesseract OCR?
 
-**Respuesta:** No es estrictamente necesario, pero altamente recomendado. Sin Tesseract:
-- ✅ El script funcionará para PDFs con texto legible
-- ❌ No podrá procesar PDFs con texto escaneado o ilegible
+**Answer:** Not strictly necessary, but highly recommended. Without Tesseract:
+- ✅ The script will work for PDFs with legible text
+- ❌ It will not be able to process PDFs with scanned or illegible text
 
-### ¿Puedo usar el script sin conexión a Internet?
+### Can I use the script without Internet connection?
 
-**Respuesta:** Una vez instaladas todas las dependencias, sí. Pero necesitas Internet para:
-- Instalar dependencias Python (primera vez)
-- Instalar Tesseract OCR (primera vez)
+**Answer:** Once all dependencies are installed, yes. But you need Internet for:
+- Installing Python dependencies (first time)
+- Installing Tesseract OCR (first time)
 
-### ¿Funciona en Windows Server?
+### Does it work on Windows Server?
 
-**Respuesta:** Sí, el script está diseñado para funcionar en Windows Server y Windows normal.
+**Answer:** Yes, the script is designed to work on Windows Server and regular Windows.
 
-### ¿Necesito permisos de administrador?
+### Do I need administrator permissions?
 
-**Respuesta:** 
-- **Para dependencias Python:** No
-- **Para Tesseract OCR con Chocolatey:** Sí
-- **Para Tesseract OCR manual:** No (pero necesitas permisos de instalación)
+**Answer:** 
+- **For Python dependencies:** No
+- **For Tesseract OCR with Chocolatey:** Yes
+- **For manual Tesseract OCR:** No (but you need installation permissions)
 
-### ¿Qué bancos soporta?
+### Which banks are supported?
 
-**Respuesta:** El script soporta múltiples bancos mexicanos:
+**Answer:** The script supports multiple Mexican banks:
 - BBVA
 - Banamex
 - HSBC
@@ -292,59 +294,70 @@ python -m ensurepip --upgrade
 - Banbajío
 - Base
 
-### ¿Puedo ejecutar el script desde Windows Service?
+### Can I run the script from Windows Service?
 
-**Respuesta:** Sí, el script está diseñado para ejecutarse desde línea de comandos:
+**Answer:** Yes, the script is designed to run from command line:
 ```bash
-python pdf_to_excel.py "ruta\al\archivo.pdf"
+python pdf_to_excel.py "path\to\file.pdf"
 ```
 
-Esto lo hace compatible con Windows Services que ejecuten comandos.
+This makes it compatible with Windows Services that execute commands.
 
-### ¿El Excel generado tiene alguna marca?
+**Exit codes:**
+- `0` = Success (Excel created correctly)
+- `1` = Error (check console messages)
 
-**Respuesta:** Sí, el Excel generado tiene "CONTAAYUDA" como autor en las propiedades del archivo. Puedes verlo en:
-- Windows: Propiedades del archivo → Detalles → Autor
-- Excel: Archivo → Información → Propiedades → Autor
+Example for Windows Service:
+```batch
+python pdf_to_excel.py "\\network\path\file.pdf"
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: Processing failed
+)
+```
+
+### Does the generated Excel have any branding?
+
+**Answer:** Yes, the generated Excel has "CONTAAYUDA" as the author in the file properties. You can see it in:
+- Windows: File Properties → Details → Author
+- Excel: File → Info → Properties → Author
 
 ---
 
-## Enlaces Útiles
+## Useful Links
 
 - **Python:** https://www.python.org/downloads/
 - **Tesseract OCR Windows:** https://github.com/UB-Mannheim/tesseract/wiki
 - **Chocolatey:** https://chocolatey.org/
-- **Documentación openpyxl:** https://openpyxl.readthedocs.io/
-- **Documentación pandas:** https://pandas.pydata.org/
+- **openpyxl documentation:** https://openpyxl.readthedocs.io/
+- **pandas documentation:** https://pandas.pydata.org/
 
 ---
 
-## Soporte
+## Support
 
-Si encuentras problemas durante la instalación:
+If you encounter problems during installation:
 
-1. Revisa la sección de **Troubleshooting** arriba
-2. Verifica que todos los requisitos previos estén cumplidos
-3. Asegúrate de haber cerrado y reabierto PowerShell/CMD después de instalar Python o Tesseract
-4. Ejecuta `setup.bat` nuevamente para verificar la instalación
+1. Review the **Troubleshooting** section above
+2. Verify that all prerequisites are met
+3. Make sure you have closed and reopened PowerShell/CMD after installing Python or Tesseract
+4. Run `setup.bat` again to verify the installation
 
 ---
 
-## Próximos Pasos
+## Next Steps
 
-Una vez completada la instalación:
+Once installation is complete:
 
-1. Prueba el script con un PDF de prueba:
+1. Test the script with a test PDF:
    ```bash
    python pdf_to_excel.py "Test\Bank Statement\BBVA.pdf"
    ```
 
-2. Verifica que el Excel se haya generado correctamente
+2. Verify that the Excel was generated correctly
 
-3. Revisa las pestañas del Excel:
+3. Review the Excel sheets:
    - Summary
    - Bank Statement Report
    - Data Validation
 
-¡Listo para usar! 🎉
-
+Ready to use! 🎉
