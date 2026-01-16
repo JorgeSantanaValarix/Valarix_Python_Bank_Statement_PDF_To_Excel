@@ -618,13 +618,15 @@ def extract_text_from_ocr_data(ocr_data: dict) -> str:
     return ' '.join(text_parts)
 
 
-def convert_ocr_data_to_words_format(ocr_data: dict) -> list:
+def convert_ocr_data_to_words_format(ocr_data: dict, zoom_normalization_factor: float = 1.0) -> list:
     """
     Convierte datos OCR de pytesseract.image_to_data() a formato de palabras con coordenadas reales.
     Compatible con el formato esperado por el resto del código.
     
     Args:
         ocr_data: Diccionario con datos de pytesseract.image_to_data()
+        zoom_normalization_factor: Factor para normalizar coordenadas (ej: 3.0/2.0 = 1.5 si se usa zoom 3.0x
+                                   pero los rangos están calibrados para 2.0x). Default: 1.0 (sin normalización)
     
     Returns:
         Lista de diccionarios con formato: 
@@ -645,6 +647,13 @@ def convert_ocr_data_to_words_format(ocr_data: dict) -> list:
             width = float(ocr_data.get('width', [])[i]) if i < len(ocr_data.get('width', [])) else 0
             height = float(ocr_data.get('height', [])[i]) if i < len(ocr_data.get('height', [])) else 0
             line_num = int(ocr_data.get('line_num', [])[i]) if i < len(ocr_data.get('line_num', [])) else 0
+            
+            # Normalizar coordenadas si es necesario (para mantener compatibilidad con rangos calibrados)
+            if zoom_normalization_factor != 1.0:
+                left = left / zoom_normalization_factor
+                top = top / zoom_normalization_factor
+                width = width / zoom_normalization_factor
+                height = height / zoom_normalization_factor
             
             words.append({
                 'text': text.strip(),
@@ -797,7 +806,10 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
             print(f"[INFO] Procesando página {page_num + 1}/{len(doc)} con OCR...")
             
             # Convertir página a imagen (alta resolución)
-            mat = fitz.Matrix(2.0, 2.0)  # Zoom 2x para mejor calidad OCR
+            # Aumentar a 3.0x para mejor precisión en dígitos (8 vs 5, etc.)
+            # Las coordenadas se normalizarán después para mantener compatibilidad con rangos de columnas
+            zoom_factor = 3.0  # Aumentado de 2.0 a 3.0 para mejor precisión OCR
+            mat = fitz.Matrix(zoom_factor, zoom_factor)
             pix = page.get_pixmap(matrix=mat)
             img_data = pix.tobytes("png")
             
@@ -812,7 +824,9 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
             text = extract_text_from_ocr_data(ocr_data)
             
             # Convertir datos OCR a formato de palabras con coordenadas reales
-            words = convert_ocr_data_to_words_format(ocr_data)
+            # IMPORTANTE: Normalizar coordenadas dividiendo por zoom_factor para mantener compatibilidad
+            # con los rangos de columnas calibrados para 2.0x
+            words = convert_ocr_data_to_words_format(ocr_data, zoom_normalization_factor=zoom_factor / 2.0)
             
             extracted_data.append({
                 "page": page_num + 1,
