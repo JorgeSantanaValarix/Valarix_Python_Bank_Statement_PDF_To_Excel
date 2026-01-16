@@ -1020,6 +1020,9 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict 
         if not day_match:
             continue
         
+        # [DEBUG HSBC] Print línea original completa
+        print(f"[DEBUG HSBC] Línea {line_count} ORIGINAL: {line}")
+        
         # Extraer todos los montos en la línea
         # Usar un método más robusto que capture montos completos con espacios internos
         # Buscar todas las posiciones de $ en la línea
@@ -1248,6 +1251,12 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict 
         if len(amounts) >= 2 and not movement.get('saldo'):
             # Si hay 2+ montos y saldo no está asignado, asignar el último monto a saldo
             movement['saldo'] = amounts[-1].strip()
+        
+        # [DEBUG HSBC] Print después de dividir en columnas
+        print(f"[DEBUG HSBC] Línea {line_count} DESPUÉS DE DIVIDIR EN COLUMNAS:")
+        print(f"  fecha='{movement['fecha']}' | descripcion='{movement['descripcion']}' | cargos='{movement['cargos']}' | abonos='{movement['abonos']}' | saldo='{movement['saldo']}'")
+        print(f"  Montos encontrados: {amounts}")
+        print(f"  Asignación de montos: {[(a['amount'], a['column'], a.get('x_center')) for a in amounts_with_columns]}")
         
         if movement['descripcion'] and (movement['cargos'] or movement['abonos'] or movement['saldo']):
             movements.append(movement)
@@ -3095,12 +3104,14 @@ def is_transaction_row(row_data, bank_name=None):
     """Check if a row is an actual bank transaction (not a header or empty row).
     A transaction must have:
     - A date in 'fecha' column
-    - At least one amount in cargos, abonos, or saldo
+    - At least one VALID amount in cargos, abonos, or saldo (must match amount pattern)
+    - A non-empty description (for most banks)
     """
     fecha = (row_data.get('fecha') or '').strip()
     cargos = (row_data.get('cargos') or '').strip()
     abonos = (row_data.get('abonos') or '').strip()
     saldo = (row_data.get('saldo') or '').strip()
+    descripcion = (row_data.get('descripcion') or row_data.get('Descripción') or '').strip()
     
     # Must have a date matching DD/MMM pattern
     # For HSBC: date is only 2 digits (01-31)
@@ -3127,10 +3138,46 @@ def is_transaction_row(row_data, bank_name=None):
         day_re = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:[\/\-\s]\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
         has_date = bool(day_re.search(fecha))
     
-    # Must have at least one numeric amount
-    has_amount = bool(cargos or abonos or saldo)
+    # Must have at least one VALID numeric amount (must match DEC_AMOUNT_RE pattern)
+    # This ensures we don't accept text like "15 de mayo de" or "al 15 de" as amounts
+    has_valid_amount = False
     
-    return has_date and has_amount
+    # Pattern to validate amounts: must match DEC_AMOUNT_RE (digits with optional commas/periods)
+    # Also accept amounts with $ sign at the start
+    amount_validation_pattern = re.compile(r'^[\$]?\s*\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})?$')
+    
+    if cargos:
+        # Check if cargos is a valid amount (not just any text)
+        if amount_validation_pattern.match(cargos.replace(' ', '').replace(',', '').replace('$', '')):
+            has_valid_amount = True
+        elif DEC_AMOUNT_RE.search(cargos):
+            has_valid_amount = True
+    
+    if not has_valid_amount and abonos:
+        # Check if abonos is a valid amount (not just any text)
+        if amount_validation_pattern.match(abonos.replace(' ', '').replace(',', '').replace('$', '')):
+            has_valid_amount = True
+        elif DEC_AMOUNT_RE.search(abonos):
+            has_valid_amount = True
+    
+    if not has_valid_amount and saldo:
+        # Check if saldo is a valid amount (not just any text)
+        if amount_validation_pattern.match(saldo.replace(' ', '').replace(',', '').replace('$', '')):
+            has_valid_amount = True
+        elif DEC_AMOUNT_RE.search(saldo):
+            has_valid_amount = True
+    
+    # For HSBC, also require a non-empty description (to filter out invalid rows)
+    has_valid_description = True
+    if bank_name == 'HSBC':
+        # Description should not be empty and should not be just numbers or dates
+        if not descripcion or len(descripcion.strip()) < 3:
+            has_valid_description = False
+        # Reject if description is just a date or number
+        if re.match(r'^[\d\s\/\-]+$', descripcion):
+            has_valid_description = False
+    
+    return has_date and has_valid_amount and has_valid_description
 
 
 def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
@@ -3330,11 +3377,14 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
                 word['text'] = text
 
         # Check if word is in description range BEFORE detecting amounts
-        # For Banamex: if word is in description range, don't detect amounts within it
-        # This prevents values like "865.60" from "IVA $2865.60" being extracted as separate amounts
+        # For Banamex and HSBC: if word is in description range, don't detect amounts within it
+        # This prevents values like "39.00 MXN" or "del 10 de" from being extracted as separate amounts
         word_in_description_range = False
-        if bank_name == 'Banamex' and 'descripcion' in columns:
+        if 'descripcion' in columns:
             desc_x0, desc_x1 = columns['descripcion']
+            # Validar y corregir rangos invertidos
+            if desc_x0 > desc_x1:
+                desc_x0, desc_x1 = desc_x1, desc_x0
             if desc_x0 <= center <= desc_x1:
                 word_in_description_range = True
         
@@ -3347,9 +3397,10 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
             m = konfio_amount_pattern.search(text)
         else:
             # Para HSBC, buscar todos los montos en la palabra (puede haber múltiples)
+            # IMPORTANTE: No detectar montos si la palabra está en el rango de descripción
             if bank_name == 'HSBC':
                 # Buscar todos los montos (con o sin $) usando findall para capturar múltiples
-                # But skip if word is in description range (for Banamex logic, though HSBC doesn't use this)
+                # Skip if word is in description range (prevents "39.00 MXN" from being detected as amount)
                 if not word_in_description_range:
                     amount_matches = DEC_AMOUNT_RE.findall(text)
                     if amount_matches:
@@ -3480,23 +3531,31 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
         # Normal column assignment
         col_name = assign_word_to_column(x0, x1, columns)
         if col_name:
-            # For Banamex, prevent non-amount text from being assigned to cargos/abonos/saldo
-            # Only assign to these columns if the word is actually an amount
-            if bank_name == 'Banamex' and col_name in ('cargos', 'abonos', 'saldo'):
-                # Check if this is actually an amount (matches DEC_AMOUNT_RE pattern)
-                is_amount = bool(DEC_AMOUNT_RE.search(text))
-                if not is_amount:
-                    # This is not an amount, assign to description instead
+            # For Banamex and HSBC, prevent text from description range being assigned to cargos/abonos/saldo
+            # Only assign to these columns if the word is actually an amount AND not in description range
+            if bank_name in ('Banamex', 'HSBC') and col_name in ('cargos', 'abonos', 'saldo'):
+                # If word is in description range, assign to description instead
+                if word_in_description_range:
+                    # This word is in description range, assign to description instead
                     if row_data.get('descripcion'):
                         row_data['descripcion'] += ' ' + text
                     else:
                         row_data['descripcion'] = text
                 else:
-                    # It's an amount, assign normally
-                    if row_data[col_name]:
-                        row_data[col_name] += ' ' + text
+                    # Word is not in description range, check if it's actually an amount
+                    is_amount = bool(DEC_AMOUNT_RE.search(text))
+                    if not is_amount:
+                        # This is not an amount, assign to description instead
+                        if row_data.get('descripcion'):
+                            row_data['descripcion'] += ' ' + text
+                        else:
+                            row_data['descripcion'] = text
                     else:
-                        row_data[col_name] = text
+                        # It's an amount, assign normally
+                        if row_data[col_name]:
+                            row_data[col_name] += ' ' + text
+                        else:
+                            row_data[col_name] = text
             # For Konfio, prevent account numbers (like "3817") from being assigned to cargos/abonos
             # Account numbers are typically 4-digit numbers without $ or decimal format
             elif bank_name == 'Konfio' and col_name in ('cargos', 'abonos'):
@@ -4230,42 +4289,94 @@ def main():
                 if not row_words:
                     continue
                 
+                # [DEBUG HSBC] Construir línea original desde palabras
+                line_original = ' '.join([w.get('text', '') for w in row_words])
+                print(f"[DEBUG HSBC] Fila {row_idx} ORIGINAL: {line_original}")
+                
                 # Extraer movimiento usando BANK_CONFIGS
                 row_data = extract_movement_row(row_words, columns_config, 'HSBC', date_pattern)
                 
                 # Procesar montos detectados (_amounts) y asignarlos a columnas para HSBC
                 amounts_list = row_data.get('_amounts', [])
+                
+                # Función auxiliar para validar que un valor es un monto válido
+                def is_valid_amount(value):
+                    """Valida que un valor sea un monto válido (no texto como '15 de mayo de')"""
+                    if not value or not isinstance(value, str):
+                        return False
+                    value_clean = value.strip()
+                    if not value_clean:
+                        return False
+                    # Debe contener al menos un patrón de monto válido
+                    if DEC_AMOUNT_RE.search(value_clean):
+                        # Verificar que no sea solo texto sin números significativos
+                        # Rechazar si contiene palabras comunes que no son montos
+                        invalid_patterns = [
+                            r'\b(de|del|al|la|el|en|por|para|con|sin)\b',
+                            r'\b(mayo|enero|febrero|marzo|abril|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b',
+                            r'^\d+\s+(de|del|al)\s+',
+                        ]
+                        for pattern in invalid_patterns:
+                            if re.search(pattern, value_clean, re.I):
+                                return False
+                        return True
+                    return False
+                
                 if amounts_list and len(amounts_list) >= 1:
                     # Si hay montos pero no están asignados a columnas, asignarlos basándose en coordenadas X
                     if not row_data.get('cargos') and not row_data.get('abonos') and not row_data.get('saldo'):
-                        # Asignar montos según coordenadas X
+                        # Asignar montos según coordenadas X (solo si son válidos)
                         for amt_text, center in amounts_list:
-                            col_name = assign_word_to_column(center - 50, center + 50, columns_config)
-                            if col_name and col_name in ('cargos', 'abonos', 'saldo'):
-                                if not row_data.get(col_name):
-                                    row_data[col_name] = amt_text
+                            if is_valid_amount(amt_text):
+                                col_name = assign_word_to_column(center - 50, center + 50, columns_config)
+                                if col_name and col_name in ('cargos', 'abonos', 'saldo'):
+                                    if not row_data.get(col_name):
+                                        row_data[col_name] = amt_text
                     
                     # Asegurar que cuando hay 2 montos, el segundo sea saldo (estructura típica HSBC)
                     if len(amounts_list) == 2:
                         if not row_data.get('saldo'):
-                            # El segundo monto es siempre saldo en HSBC
+                            # El segundo monto es siempre saldo en HSBC (solo si es válido)
                             second_amt = amounts_list[1][0]
-                            row_data['saldo'] = second_amt
+                            if is_valid_amount(second_amt):
+                                row_data['saldo'] = second_amt
                         # Si el primer monto no está asignado, asignarlo a cargos o abonos según coordenadas
                         if not row_data.get('cargos') and not row_data.get('abonos'):
                             first_amt, first_center = amounts_list[0]
-                            col_name = assign_word_to_column(first_center - 50, first_center + 50, columns_config)
-                            if col_name and col_name in ('cargos', 'abonos'):
-                                row_data[col_name] = first_amt
-                            else:
-                                # Por defecto, si no se puede determinar, asignar a cargos
-                                row_data['cargos'] = first_amt
+                            if is_valid_amount(first_amt):
+                                col_name = assign_word_to_column(first_center - 50, first_center + 50, columns_config)
+                                if col_name and col_name in ('cargos', 'abonos'):
+                                    row_data[col_name] = first_amt
+                                else:
+                                    # Por defecto, si no se puede determinar, asignar a cargos
+                                    row_data['cargos'] = first_amt
+                
+                # Limpiar valores inválidos de las columnas de montos
+                # Si se asignó texto no numérico, eliminarlo
+                for col in ['cargos', 'abonos', 'saldo']:
+                    if col in row_data and row_data[col]:
+                        if not is_valid_amount(row_data[col]):
+                            # Si no es un monto válido, limpiar la columna
+                            row_data[col] = ''
+                
+                # [DEBUG HSBC] Print después de dividir en columnas
+                print(f"[DEBUG HSBC] Fila {row_idx} DESPUÉS DE DIVIDIR EN COLUMNAS:")
+                print(f"  fecha='{row_data.get('fecha', '')}' | descripcion='{row_data.get('descripcion', '')}' | cargos='{row_data.get('cargos', '')}' | abonos='{row_data.get('abonos', '')}' | saldo='{row_data.get('saldo', '')}'")
+                print(f"  Montos encontrados: {amounts_list}")
                 
                 # Validar si es una transacción válida
                 is_valid = is_transaction_row(row_data, 'HSBC')
                 
                 if is_valid:
                     movement_rows.append(row_data)
+                else:
+                    # [DEBUG HSBC] Mostrar por qué se rechazó la fila
+                    fecha = row_data.get('fecha', '')
+                    descripcion = row_data.get('descripcion', '')
+                    cargos = row_data.get('cargos', '')
+                    abonos = row_data.get('abonos', '')
+                    saldo = row_data.get('saldo', '')
+                    print(f"[DEBUG HSBC] Fila {row_idx} RECHAZADA - fecha='{fecha}' | descripcion='{descripcion[:50]}' | cargos='{cargos}' | abonos='{abonos}' | saldo='{saldo}'")
         
         df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
         
@@ -6131,6 +6242,22 @@ def main():
             
             # Special debug for "IVA SOBRE COMISIONES E INTERESES" row before exporting to Excel
             #print("   - Escribiendo pestaña 'Movements'...")
+            
+            # [DEBUG HSBC] Print antes de exportar a Excel
+            if bank_config['name'] == 'HSBC' and not df_mov.empty:
+                print(f"[DEBUG HSBC] ANTES DE EXPORTAR A EXCEL - Total filas: {len(df_mov)}")
+                print(f"[DEBUG HSBC] Columnas: {list(df_mov.columns)}")
+                for idx, row in df_mov.head(10).iterrows():
+                    # Usar nombres de columnas flexibles (pueden ser minúsculas o mayúsculas)
+                    fecha = row.get('Fecha', row.get('fecha', ''))
+                    descripcion = row.get('Descripción', row.get('descripcion', ''))
+                    cargos = row.get('Cargos', row.get('cargos', ''))
+                    abonos = row.get('Abonos', row.get('abonos', ''))
+                    saldo = row.get('Saldo', row.get('saldo', ''))
+                    print(f"[DEBUG HSBC] Fila {idx}: fecha='{fecha}' | descripcion='{str(descripcion)[:50]}' | cargos='{cargos}' | abonos='{abonos}' | saldo='{saldo}'")
+                if len(df_mov) > 10:
+                    print(f"[DEBUG HSBC] ... (mostrando solo primeras 10 filas de {len(df_mov)} total)")
+            
             df_mov.to_excel(writer, sheet_name='Bank Statement Report', index=False)
             
             # Write Transferencias sheet if available
