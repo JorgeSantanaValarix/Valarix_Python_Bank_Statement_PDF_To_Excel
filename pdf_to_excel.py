@@ -1410,23 +1410,25 @@ def find_amount_coordinates(amount_text: str, line_text: str, line_y_approx: flo
 
 def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
     """
-    Extrae información de resumen de HSBC desde el texto OCR de la página 1.
+    Extrae información de resumen de HSBC desde el texto OCR de las primeras dos páginas.
     
     Busca:
-    - Total Abonos: "Depósitos/Abonos $X,XXX.XX"
-    - Total Cargos: "Retiros/Cargos $X,XXX.XX"
-    - Saldo Final: "Saldo Final del Periodo $X,XXX.XX"
+    - Total Abonos: "Depósitos/Abonos" seguido de un monto
+    - Total Cargos: "Retiros/Cargos" seguido de un monto
+    - Saldo Final: "Saldo Final del Periodo" seguido de un monto
+    
+    Estos valores normalmente están en la primera o segunda página del PDF, antes del inicio de la sección de movimientos.
     
     Args:
         pages_data: Lista de diccionarios con formato [{"page": int, "content": str, "words": list}, ...]
     
     Returns:
         Diccionario con información de resumen: {
-            'total_abonos': str o None,
-            'total_cargos': str o None,
-            'saldo_final': str o None,
-            'total_depositos': str o None,
-            'total_retiros': str o None
+            'total_abonos': float o None,
+            'total_cargos': float o None,
+            'saldo_final': float o None,
+            'total_depositos': float o None,
+            'total_retiros': float o None
         }
     """
     summary_data = {
@@ -1439,76 +1441,200 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
         'saldo_anterior': None
     }
     
-    # Obtener texto de la página 1 (índice 0)
     if not pages_data or len(pages_data) == 0:
         return summary_data
     
-    page_1_data = pages_data[0]  # Primera página
-    page_1_text = page_1_data.get('content', '')
+    # Buscar en las primeras dos páginas (antes del inicio de movimientos)
+    pages_to_check = min(2, len(pages_data))
     
-    if not page_1_text:
-        return summary_data
+    # Patrones para buscar los valores según especificación del usuario
+    # Patrón 1: "Depósitos/Abonos" seguido de un monto (flexible: permite espacios, $ opcional, variaciones)
+    depositos_abonos_pattern = re.compile(
+        r'Dep[oó]sitos?\s*[/]\s*Abonos?\s+\$?\s*([\d,\.\s]+)',
+        re.IGNORECASE
+    )
+    # Patrón alternativo 1: "Depósitos/" seguido de un monto (ejemplo: "Depósitos/ $ 40,231.59")
+    depositos_slash_pattern = re.compile(
+        r'Dep[oó]sitos?\s*[/]\s+\$?\s*([\d,\.\s]+)',
+        re.IGNORECASE
+    )
+    # Patrón alternativo 2: "Depósitos" seguido de "!" o ">" y luego monto (para compatibilidad)
+    depositos_pattern_alt = re.compile(
+        r'Dep[oó]sitos?\s*[!>]\s*\$?\s*([\d,\.\s]+)',
+        re.IGNORECASE
+    )
     
-    lines = page_1_text.split('\n')
+    # Patrón 2: "Retiros/Cargos" seguido de un monto
+    retiros_cargos_pattern = re.compile(
+        r'Retiros?\s*[/]\s*Cargos?\s+\$?\s*([\d,\.\s]+)',
+        re.IGNORECASE
+    )
     
+    # Patrón 3: "Saldo Final del Periodo" seguido de un monto
+    saldo_final_pattern = re.compile(
+        r'Saldo\s+Final\s+del\s+Periodo\s+\$?\s*([\d,\.\s]+)',
+        re.IGNORECASE
+    )
+    # Patrón alternativo: "Saldo Final del" (sin "Periodo") seguido de monto
+    saldo_final_pattern_alt = re.compile(
+        r'Saldo\s+Final\s+del\s+\$?\s*([\d,\.\s]+)',
+        re.IGNORECASE
+    )
     
-    # Patrones más flexibles para buscar los valores (permitir espacios variables, $ opcional, y caracteres especiales)
-    # Buscar "Depósitos" seguido de "!" o "/Abonos" y luego $ y monto
-    # Ejemplo real: "Depósitos! $ 308,422.54"
-    # El patrón debe buscar "Depósitos" seguido de "!" o ">" y luego el monto
-    depositos_pattern = re.compile(r'Dep[oó]sitos?\s*[!>]\s*\$?\s*([\d,\.]+)', re.IGNORECASE)
+    print(f"[DEBUG HSBC SUMMARY] Iniciando extracción de resumen desde {pages_to_check} página(s)")
+    print(f"[DEBUG HSBC SUMMARY] Patrones configurados:")
+    print(f"  - Depósitos/Abonos: {depositos_abonos_pattern.pattern}")
+    print(f"  - Depósitos/ (nuevo): {depositos_slash_pattern.pattern}")
+    print(f"  - Depósitos alternativo: {depositos_pattern_alt.pattern}")
+    print(f"  - Retiros/Cargos: {retiros_cargos_pattern.pattern}")
+    print(f"  - Saldo Final: {saldo_final_pattern.pattern}")
+    print(f"  - Saldo Final alternativo: {saldo_final_pattern_alt.pattern}")
     
-    # Buscar "Retiros/Cargos" seguido de $ y monto
-    retiros_pattern = re.compile(r'Retiros?/Cargos?\s*\$?\s*([\d,\.]+)', re.IGNORECASE)
-    
-    # Buscar "Saldo Final del" (con o sin "Periodo") seguido de $ y monto
-    # Ejemplo real: "Saldo Final del $ 671,749.84"
-    # El patrón debe permitir texto antes de "Saldo Final del"
-    saldo_final_pattern = re.compile(r'Saldo\s+Final\s+del\s+(?:Periodo\s+)?\$?\s*([\d,\.]+)', re.IGNORECASE)
-    
-    # También buscar variaciones de "Saldo Final" sin "del" (más flexible, permite texto antes)
-    saldo_final_pattern2 = re.compile(r'Saldo\s+Final\s+del\s*\$?\s*([\d,\.]+)', re.IGNORECASE)
-    
-    for i, line in enumerate(lines):
-        line = line.strip()
+    # Buscar en las primeras dos páginas
+    for page_idx in range(pages_to_check):
+        page_data = pages_data[page_idx]
+        page_text = page_data.get('content', '')
         
+        print(f"[DEBUG HSBC SUMMARY] Procesando página {page_idx + 1}")
+        print(f"[DEBUG HSBC SUMMARY] Longitud del texto: {len(page_text)} caracteres")
         
-        # Buscar Depósitos/Abonos - buscar "Depósitos" seguido de "!" o ">" y luego monto
-        # Ejemplo: "Depósitos! $ 308,422.54"
-        if not summary_data['total_abonos']:
-            match = depositos_pattern.search(line)
-            if match:
-                amount_str = match.group(1)
-                # Convertir a número usando normalize_amount_str (igual que extract_summary_from_pdf)
-                amount = normalize_amount_str(amount_str)
-                if amount > 0:
-                    summary_data['total_abonos'] = amount
-                    summary_data['total_depositos'] = amount
+        if not page_text:
+            print(f"[DEBUG HSBC SUMMARY] Página {page_idx + 1} está vacía, saltando...")
+            continue
         
-        # Buscar Retiros/Cargos
-        if not summary_data['total_cargos']:
-            match = retiros_pattern.search(line)
-            if match:
-                amount_str = match.group(1)
-                # Convertir a número usando normalize_amount_str (igual que extract_summary_from_pdf)
-                amount = normalize_amount_str(amount_str)
-                if amount > 0:
-                    summary_data['total_cargos'] = amount
-                    summary_data['total_retiros'] = amount
+        lines = page_text.split('\n')
+        print(f"[DEBUG HSBC SUMMARY] Total de líneas en página {page_idx + 1}: {len(lines)}")
         
-        # Buscar Saldo Final del Periodo (patrón completo)
-        if not summary_data['saldo_final']:
-            match = saldo_final_pattern.search(line)
-            if not match:
-                # Intentar patrón alternativo: "Saldo Final del" sin "Periodo"
-                match = saldo_final_pattern2.search(line)
-            if match:
-                amount_str = match.group(1)
-                # Convertir a número usando normalize_amount_str (igual que extract_summary_from_pdf)
-                amount = normalize_amount_str(amount_str)
-                if amount > 0:
-                    summary_data['saldo_final'] = amount
+        # Mostrar primeras 20 líneas para depuración
+        print(f"[DEBUG HSBC SUMMARY] Primeras 20 líneas de la página {page_idx + 1}:")
+        for i, line in enumerate(lines[:20]):
+            if line.strip():
+                print(f"  Línea {i+1}: {line[:100]}")
+        
+        for line_num, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Buscar Depósitos/Abonos
+            if not summary_data['total_abonos']:
+                match = depositos_abonos_pattern.search(line)
+                if match:
+                    print(f"[DEBUG HSBC SUMMARY] ✓ Coincidencia Depósitos/Abonos en línea {line_num+1}: {line[:100]}")
+                    amount_str = match.group(1).strip()
+                    print(f"[DEBUG HSBC SUMMARY]   Monto capturado (raw): '{amount_str}'")
+                    # Limpiar espacios y normalizar
+                    amount_str = re.sub(r'\s+', '', amount_str)
+                    print(f"[DEBUG HSBC SUMMARY]   Monto después de limpiar espacios: '{amount_str}'")
+                    amount = normalize_amount_str(amount_str)
+                    print(f"[DEBUG HSBC SUMMARY]   Monto normalizado: {amount}")
+                    if amount and amount > 0:
+                        summary_data['total_abonos'] = amount
+                        summary_data['total_depositos'] = amount
+                        print(f"[DEBUG HSBC SUMMARY] ✅ Total Abonos encontrado en página {page_idx + 1}, línea {line_num+1}: {amount:,.2f}")
+                    else:
+                        print(f"[DEBUG HSBC SUMMARY] ⚠️ Monto normalizado es inválido: {amount}")
+                else:
+                    # Intentar patrón "Depósitos/" seguido de monto
+                    match = depositos_slash_pattern.search(line)
+                    if match:
+                        print(f"[DEBUG HSBC SUMMARY] ✓ Coincidencia Depósitos/ en línea {line_num+1}: {line[:100]}")
+                        amount_str = match.group(1).strip()
+                        print(f"[DEBUG HSBC SUMMARY]   Monto capturado (raw): '{amount_str}'")
+                        amount_str = re.sub(r'\s+', '', amount_str)
+                        print(f"[DEBUG HSBC SUMMARY]   Monto después de limpiar espacios: '{amount_str}'")
+                        amount = normalize_amount_str(amount_str)
+                        print(f"[DEBUG HSBC SUMMARY]   Monto normalizado: {amount}")
+                        if amount and amount > 0:
+                            summary_data['total_abonos'] = amount
+                            summary_data['total_depositos'] = amount
+                            print(f"[DEBUG HSBC SUMMARY] ✅ Total Abonos encontrado (Depósitos/) en página {page_idx + 1}, línea {line_num+1}: {amount:,.2f}")
+                        else:
+                            print(f"[DEBUG HSBC SUMMARY] ⚠️ Monto normalizado es inválido: {amount}")
+                    else:
+                        # Intentar patrón alternativo (Depósitos seguido de ! o >)
+                        match = depositos_pattern_alt.search(line)
+                        if match:
+                            print(f"[DEBUG HSBC SUMMARY] ✓ Coincidencia Depósitos (alternativo) en línea {line_num+1}: {line[:100]}")
+                            amount_str = match.group(1).strip()
+                            print(f"[DEBUG HSBC SUMMARY]   Monto capturado (raw): '{amount_str}'")
+                            amount_str = re.sub(r'\s+', '', amount_str)
+                            print(f"[DEBUG HSBC SUMMARY]   Monto después de limpiar espacios: '{amount_str}'")
+                            amount = normalize_amount_str(amount_str)
+                            print(f"[DEBUG HSBC SUMMARY]   Monto normalizado: {amount}")
+                            if amount and amount > 0:
+                                summary_data['total_abonos'] = amount
+                                summary_data['total_depositos'] = amount
+                                print(f"[DEBUG HSBC SUMMARY] ✅ Total Abonos encontrado (alternativo) en página {page_idx + 1}, línea {line_num+1}: {amount:,.2f}")
+                            else:
+                                print(f"[DEBUG HSBC SUMMARY] ⚠️ Monto normalizado es inválido: {amount}")
+                        # Si la línea contiene "Depósito" o "Abono" pero no coincide, mostrar para depuración
+                        elif re.search(r'Dep[oó]sito|Abono', line, re.I):
+                            print(f"[DEBUG HSBC SUMMARY] ⚠️ Línea contiene 'Depósito' o 'Abono' pero no coincide con patrón (línea {line_num+1}): {line[:100]}")
+            
+            # Buscar Retiros/Cargos
+            if not summary_data['total_cargos']:
+                match = retiros_cargos_pattern.search(line)
+                if match:
+                    print(f"[DEBUG HSBC SUMMARY] ✓ Coincidencia Retiros/Cargos en línea {line_num+1}: {line[:100]}")
+                    amount_str = match.group(1).strip()
+                    print(f"[DEBUG HSBC SUMMARY]   Monto capturado (raw): '{amount_str}'")
+                    amount_str = re.sub(r'\s+', '', amount_str)
+                    print(f"[DEBUG HSBC SUMMARY]   Monto después de limpiar espacios: '{amount_str}'")
+                    amount = normalize_amount_str(amount_str)
+                    print(f"[DEBUG HSBC SUMMARY]   Monto normalizado: {amount}")
+                    if amount and amount > 0:
+                        summary_data['total_cargos'] = amount
+                        summary_data['total_retiros'] = amount
+                        print(f"[DEBUG HSBC SUMMARY] ✅ Total Cargos encontrado en página {page_idx + 1}, línea {line_num+1}: {amount:,.2f}")
+                    else:
+                        print(f"[DEBUG HSBC SUMMARY] ⚠️ Monto normalizado es inválido: {amount}")
+                # Si la línea contiene "Retiro" o "Cargo" pero no coincide, mostrar para depuración
+                elif re.search(r'Retiro|Cargo', line, re.I):
+                    print(f"[DEBUG HSBC SUMMARY] ⚠️ Línea contiene 'Retiro' o 'Cargo' pero no coincide con patrón (línea {line_num+1}): {line[:100]}")
+            
+            # Buscar Saldo Final del Periodo
+            if not summary_data['saldo_final']:
+                match = saldo_final_pattern.search(line)
+                if match:
+                    print(f"[DEBUG HSBC SUMMARY] ✓ Coincidencia Saldo Final del Periodo en línea {line_num+1}: {line[:100]}")
+                    amount_str = match.group(1).strip()
+                    print(f"[DEBUG HSBC SUMMARY]   Monto capturado (raw): '{amount_str}'")
+                    amount_str = re.sub(r'\s+', '', amount_str)
+                    print(f"[DEBUG HSBC SUMMARY]   Monto después de limpiar espacios: '{amount_str}'")
+                    amount = normalize_amount_str(amount_str)
+                    print(f"[DEBUG HSBC SUMMARY]   Monto normalizado: {amount}")
+                    if amount and amount > 0:
+                        summary_data['saldo_final'] = amount
+                        print(f"[DEBUG HSBC SUMMARY] ✅ Saldo Final encontrado en página {page_idx + 1}, línea {line_num+1}: {amount:,.2f}")
+                    else:
+                        print(f"[DEBUG HSBC SUMMARY] ⚠️ Monto normalizado es inválido: {amount}")
+                else:
+                    match = saldo_final_pattern_alt.search(line)
+                    if match:
+                        print(f"[DEBUG HSBC SUMMARY] ✓ Coincidencia Saldo Final (alternativo) en línea {line_num+1}: {line[:100]}")
+                        amount_str = match.group(1).strip()
+                        print(f"[DEBUG HSBC SUMMARY]   Monto capturado (raw): '{amount_str}'")
+                        amount_str = re.sub(r'\s+', '', amount_str)
+                        print(f"[DEBUG HSBC SUMMARY]   Monto después de limpiar espacios: '{amount_str}'")
+                        amount = normalize_amount_str(amount_str)
+                        print(f"[DEBUG HSBC SUMMARY]   Monto normalizado: {amount}")
+                        if amount and amount > 0:
+                            summary_data['saldo_final'] = amount
+                            print(f"[DEBUG HSBC SUMMARY] ✅ Saldo Final encontrado (alternativo) en página {page_idx + 1}, línea {line_num+1}: {amount:,.2f}")
+                        else:
+                            print(f"[DEBUG HSBC SUMMARY] ⚠️ Monto normalizado es inválido: {amount}")
+                    # Si la línea contiene "Saldo Final" pero no coincide, mostrar para depuración
+                    elif re.search(r'Saldo\s+Final', line, re.I):
+                        print(f"[DEBUG HSBC SUMMARY] ⚠️ Línea contiene 'Saldo Final' pero no coincide con patrón (línea {line_num+1}): {line[:100]}")
     
+    # Print resumen de lo encontrado
+    print(f"[DEBUG HSBC SUMMARY] ========================================")
+    print(f"[DEBUG HSBC SUMMARY] RESUMEN FINAL EXTRAÍDO:")
+    print(f"  Total Abonos: {summary_data['total_abonos']}")
+    print(f"  Total Cargos: {summary_data['total_cargos']}")
+    print(f"  Saldo Final: {summary_data['saldo_final']}")
+    print(f"[DEBUG HSBC SUMMARY] ========================================")
     
     return summary_data
 
@@ -2413,6 +2539,11 @@ def create_validation_sheet(pdf_summary: dict, extracted_totals: dict, has_saldo
         extracted_totals: Dictionary with totals calculated from extracted movements
         has_saldo_column: Whether the bank has a "Saldo" column in Movements (default: True)
     """
+    print(f"[DEBUG VALIDATION] Creando hoja de validación...")
+    print(f"[DEBUG VALIDATION] pdf_summary recibido: {pdf_summary}")
+    print(f"[DEBUG VALIDATION] extracted_totals recibido: {extracted_totals}")
+    print(f"[DEBUG VALIDATION] has_saldo_column: {has_saldo_column}")
+    
     validation_data = []
     
     # Tolerance for floating point comparison (0.01 for cents)
@@ -2421,10 +2552,20 @@ def create_validation_sheet(pdf_summary: dict, extracted_totals: dict, has_saldo
     # Compare Abonos/Depositos
     pdf_abonos = pdf_summary.get('total_abonos') or pdf_summary.get('total_depositos')
     ext_abonos = extracted_totals.get('total_abonos', 0.0)
+    
+    print(f"[DEBUG VALIDATION] Total Abonos:")
+    print(f"  pdf_summary.get('total_abonos'): {pdf_summary.get('total_abonos')}")
+    print(f"  pdf_summary.get('total_depositos'): {pdf_summary.get('total_depositos')}")
+    print(f"  pdf_abonos (resultado): {pdf_abonos}")
+    print(f"  ext_abonos: {ext_abonos}")
+    
     abonos_match = pdf_abonos is None or abs(pdf_abonos - ext_abonos) < tolerance
+    valor_en_pdf = f"${pdf_abonos:,.2f}" if pdf_abonos else "No encontrado"
+    print(f"[DEBUG VALIDATION] Valor en PDF para Abonos: '{valor_en_pdf}'")
+    
     validation_data.append({
         'Concepto': 'Total Abonos / Depósitos',
-        'Valor en PDF': f"${pdf_abonos:,.2f}" if pdf_abonos else "No encontrado",
+        'Valor en PDF': valor_en_pdf,
         'Valor Extraído': f"${ext_abonos:,.2f}",
         'Diferencia': f"${abs(pdf_abonos - ext_abonos):,.2f}" if pdf_abonos else "N/A",
         'Estado': '✓' if abonos_match else '✗'
@@ -3122,8 +3263,12 @@ def is_transaction_row(row_data, bank_name=None):
     has_date = False
     if bank_name == 'HSBC':
         # For HSBC, date is only 2 digits (01-31)
+        # Limpiar la fecha: quitar puntos, espacios y otros caracteres no numéricos al final
+        fecha_clean = fecha.strip().rstrip('.,;:')
         hsbc_date_re = re.compile(r'^(0[1-9]|[12][0-9]|3[01])$')
-        has_date = bool(hsbc_date_re.match(fecha))
+        has_date = bool(hsbc_date_re.match(fecha_clean))
+        if not has_date:
+            print(f"[DEBUG HSBC VALIDATION] Fecha rechazada: '{fecha}' (limpia: '{fecha_clean}') no coincide con patrón HSBC")
     elif bank_name == 'Banregio':
         # For Banregio, date is only 2 digits (01-31)
         banregio_date_re = re.compile(r'^(0[1-9]|[12][0-9]|3[01])$')
@@ -3148,24 +3293,34 @@ def is_transaction_row(row_data, bank_name=None):
     
     if cargos:
         # Check if cargos is a valid amount (not just any text)
-        if amount_validation_pattern.match(cargos.replace(' ', '').replace(',', '').replace('$', '')):
+        # Limpiar el monto: quitar $, espacios y comas para validación
+        cargos_clean = cargos.replace(' ', '').replace(',', '').replace('$', '').strip()
+        if amount_validation_pattern.match(cargos_clean):
             has_valid_amount = True
         elif DEC_AMOUNT_RE.search(cargos):
             has_valid_amount = True
+        if bank_name == 'HSBC' and not has_valid_amount:
+            print(f"[DEBUG HSBC VALIDATION] Cargos no válido: '{cargos}' (limpio: '{cargos_clean}')")
     
     if not has_valid_amount and abonos:
         # Check if abonos is a valid amount (not just any text)
-        if amount_validation_pattern.match(abonos.replace(' ', '').replace(',', '').replace('$', '')):
+        abonos_clean = abonos.replace(' ', '').replace(',', '').replace('$', '').strip()
+        if amount_validation_pattern.match(abonos_clean):
             has_valid_amount = True
         elif DEC_AMOUNT_RE.search(abonos):
             has_valid_amount = True
+        if bank_name == 'HSBC' and not has_valid_amount and abonos:
+            print(f"[DEBUG HSBC VALIDATION] Abonos no válido: '{abonos}' (limpio: '{abonos_clean}')")
     
     if not has_valid_amount and saldo:
         # Check if saldo is a valid amount (not just any text)
-        if amount_validation_pattern.match(saldo.replace(' ', '').replace(',', '').replace('$', '')):
+        saldo_clean = saldo.replace(' ', '').replace(',', '').replace('$', '').strip()
+        if amount_validation_pattern.match(saldo_clean):
             has_valid_amount = True
         elif DEC_AMOUNT_RE.search(saldo):
             has_valid_amount = True
+        if bank_name == 'HSBC' and not has_valid_amount and saldo:
+            print(f"[DEBUG HSBC VALIDATION] Saldo no válido: '{saldo}' (limpio: '{saldo_clean}')")
     
     # For HSBC, also require a non-empty description (to filter out invalid rows)
     has_valid_description = True
@@ -3173,9 +3328,19 @@ def is_transaction_row(row_data, bank_name=None):
         # Description should not be empty and should not be just numbers or dates
         if not descripcion or len(descripcion.strip()) < 3:
             has_valid_description = False
+            print(f"[DEBUG HSBC VALIDATION] Descripción rechazada: '{descripcion}' (longitud: {len(descripcion.strip()) if descripcion else 0})")
         # Reject if description is just a date or number
         if re.match(r'^[\d\s\/\-]+$', descripcion):
             has_valid_description = False
+            print(f"[DEBUG HSBC VALIDATION] Descripción rechazada (solo números/fechas): '{descripcion}'")
+    
+    # Print resumen de validación para HSBC
+    if bank_name == 'HSBC':
+        print(f"[DEBUG HSBC VALIDATION] Resultado validación:")
+        print(f"  has_date: {has_date} (fecha: '{fecha}')")
+        print(f"  has_valid_amount: {has_valid_amount} (cargos: '{cargos}', abonos: '{abonos}', saldo: '{saldo}')")
+        print(f"  has_valid_description: {has_valid_description} (descripcion: '{descripcion[:50]}')")
+        print(f"  Resultado final: {has_date and has_valid_amount and has_valid_description}")
     
     return has_date and has_valid_amount and has_valid_description
 
@@ -3222,14 +3387,20 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
             # Get all text from fecha words, preserving order
             fecha_texts = [w.get('text', '').strip() for w in fecha_words]
             fecha_text = ' '.join(fecha_texts)
+            print(f"[DEBUG HSBC] Texto de fecha palabras: '{fecha_text}' (palabras: {fecha_texts})")
             
             # For HSBC, date is only 2 digits (01-31)
             hsbc_date_match = date_pattern.search(fecha_text)
             if hsbc_date_match:
                 date_text = hsbc_date_match.group(1)  # Just the 2 digits (01-31)
+                # Limpiar la fecha: quitar puntos, espacios y otros caracteres no numéricos
+                date_text = date_text.strip().rstrip('.,;:')
                 row_data['fecha'] = date_text
+                print(f"[DEBUG HSBC] Fecha extraída: '{fecha_text}' -> '{date_text}' (limpia)")
                 # Remove these words from sorted_words so they're not processed again
                 sorted_words = [w for w in sorted_words if w not in fecha_words]
+            else:
+                print(f"[DEBUG HSBC] ⚠️ No se encontró fecha válida en '{fecha_text}' con patrón {date_pattern.pattern}")
     
     # For Konfio, first try to reconstruct dates that might be split across multiple words
     # Konfio dates can be split like "31" and "mar 2023" in separate words
@@ -3361,6 +3532,70 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
                         # Remove these words from sorted_words so they're not processed again
                         sorted_words = [w for w in sorted_words if w not in fecha_words]
     
+    # Para HSBC, primero intentar reconstruir montos que están divididos en múltiples palabras
+    # Ejemplo: "$", "30", ".40" o "$", "30.40" deben combinarse antes de detectar
+    if bank_name == 'HSBC' and len(sorted_words) > 1:
+        # Crear una lista de palabras con texto combinado para montos
+        combined_words = []
+        i = 0
+        while i < len(sorted_words):
+            current_word = sorted_words[i].copy()
+            current_text = current_word.get('text', '').strip()
+            current_x0 = current_word.get('x0', 0)
+            current_x1 = current_word.get('x1', 0)
+            current_center = (current_x0 + current_x1) / 2
+            
+            # Si la palabra actual es "$" o empieza con "$", intentar combinar con palabras siguientes
+            if current_text == '$' or (current_text.startswith('$') and len(current_text) == 1):
+                # Buscar palabras siguientes que puedan ser parte del monto
+                combined_text = current_text
+                combined_x0 = current_x0
+                combined_x1 = current_x1
+                j = i + 1
+                
+                # Combinar hasta 3 palabras siguientes si forman un monto válido
+                while j < len(sorted_words) and j < i + 4:
+                    next_word = sorted_words[j]
+                    next_text = next_word.get('text', '').strip()
+                    next_x0 = next_word.get('x0', 0)
+                    next_x1 = next_word.get('x1', 0)
+                    next_center = (next_x0 + next_x1) / 2
+                    
+                    # Verificar si están cerca horizontalmente (dentro de 100 píxeles)
+                    if abs(next_center - current_center) < 100:
+                        # Intentar combinar
+                        test_combined = (combined_text + ' ' + next_text).strip()
+                        # Verificar si el texto combinado forma un monto válido
+                        hsbc_amount_test = re.compile(r'\$\s*\d{1,3}(?:[\s,]\d{3})*\.\d{2}|\$\s*\d{1,3}\.\d{2}')
+                        if hsbc_amount_test.search(test_combined):
+                            combined_text = test_combined
+                            combined_x1 = next_x1
+                            combined_center = (combined_x0 + combined_x1) / 2
+                            print(f"[DEBUG HSBC COMBINE] Combinando palabras: '{current_text}' + '{next_text}' -> '{combined_text}'")
+                            j += 1
+                        else:
+                            break
+                    else:
+                        break
+                
+                # Si se combinó algo, actualizar la palabra
+                if combined_text != current_text:
+                    current_word['text'] = combined_text
+                    current_word['x0'] = combined_x0
+                    current_word['x1'] = combined_x1
+                    # Saltar las palabras que se combinaron
+                    i = j
+                else:
+                    i += 1
+            else:
+                i += 1
+            
+            combined_words.append(current_word)
+        
+        # Usar las palabras combinadas en lugar de las originales
+        sorted_words = combined_words
+        print(f"[DEBUG HSBC COMBINE] Palabras después de combinar montos: {[w.get('text', '') for w in sorted_words[:10]]}")
+    
     for word in sorted_words:
         text = word.get('text', '')
         x0 = word.get('x0', 0)
@@ -3399,13 +3634,45 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
             # Para HSBC, buscar todos los montos en la palabra (puede haber múltiples)
             # IMPORTANTE: No detectar montos si la palabra está en el rango de descripción
             if bank_name == 'HSBC':
-                # Buscar todos los montos (con o sin $) usando findall para capturar múltiples
+                # Buscar todos los montos (con o sin $) usando un patrón mejorado que capture montos completos
                 # Skip if word is in description range (prevents "39.00 MXN" from being detected as amount)
                 if not word_in_description_range:
-                    amount_matches = DEC_AMOUNT_RE.findall(text)
+                    # Patrón mejorado para HSBC que captura montos completos incluso con espacios
+                    # Busca: $ seguido opcionalmente de espacios, luego dígitos (1-3), luego grupos de 3 dígitos opcionales, luego .XX
+                    # Ejemplo: "$ 30.40" -> captura "30.40", "$30.40" -> "30.40", "30.40" -> "30.40"
+                    # El patrón debe capturar desde $ hasta el final del monto, incluyendo espacios internos
+                    hsbc_amount_pattern = re.compile(r'\$\s*(\d{1,3}(?:[\s,]\d{3})*\.\d{2}|\d{1,3}(?:[\s,]\d{3})*,\d{2}|\d{1,3}\.\d{2}|\d{1,3},\d{2})')
+                    # También buscar montos sin $ al inicio
+                    hsbc_amount_pattern_no_dollar = re.compile(r'(?<!\$)\b(\d{1,3}(?:[\s,]\d{3})*\.\d{2}|\d{1,3}(?:[\s,]\d{3})*,\d{2}|\d{1,3}\.\d{2}|\d{1,3},\d{2})\b')
+                    
+                    # Primero buscar montos con $
+                    amount_matches = hsbc_amount_pattern.findall(text)
+                    # Si no hay montos con $, buscar sin $
+                    if not amount_matches:
+                        amount_matches = hsbc_amount_pattern_no_dollar.findall(text)
+                    
                     if amount_matches:
                         for amt_match in amount_matches:
-                            amounts.append((amt_match, center))
+                            # Limpiar espacios del monto capturado
+                            amt_clean = re.sub(r'\s+', '', amt_match)
+                            # Normalizar: reemplazar coma por punto si es separador decimal
+                            if ',' in amt_clean and '.' not in amt_clean:
+                                # Verificar si la coma es separador decimal (últimos 2 dígitos después de coma)
+                                parts = amt_clean.split(',')
+                                if len(parts) == 2 and len(parts[1]) == 2:
+                                    amt_clean = parts[0] + '.' + parts[1]
+                                else:
+                                    # Es separador de miles, mantener pero normalizar
+                                    amt_clean = amt_clean.replace(',', '')
+                            elif ',' in amt_clean and '.' in amt_clean:
+                                # Tiene ambos: la coma es separador de miles, el punto es decimal
+                                amt_clean = amt_clean.replace(',', '')
+                            
+                            # Solo agregar si el monto tiene al menos un dígito antes del punto decimal
+                            # Esto evita capturar solo ".40" cuando debería ser "30.40"
+                            if amt_clean and re.match(r'^\d+', amt_clean):
+                                amounts.append((amt_clean, center))
+                                print(f"[DEBUG HSBC AMOUNT] Monto detectado en palabra '{text}': '{amt_clean}' (centro: {center})")
             else:
                 # For Banamex: don't detect amounts if word is in description range
                 if not (bank_name == 'Banamex' and word_in_description_range):
@@ -3428,6 +3695,8 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
                 hsbc_date_match = re.match(r'^(0[1-9]|[12][0-9]|3[01])(\s+.*)?', text)
                 if hsbc_date_match:
                     date_text = hsbc_date_match.group(1)  # Just the 2 digits (01-31)
+                    # Limpiar la fecha: quitar puntos, espacios y otros caracteres no numéricos
+                    date_text = date_text.strip().rstrip('.,;:')
                     description_text = hsbc_date_match.group(2)  # Everything after (with leading space)
                     if description_text:
                         description_text = description_text.strip()  # Remove leading space
@@ -3437,6 +3706,7 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
                     # Assign date to fecha column (only if not already assigned)
                     if not row_data.get('fecha'):
                         row_data['fecha'] = date_text
+                        print(f"[DEBUG HSBC] Fecha extraída desde texto: '{hsbc_date_match.group(1)}' -> '{date_text}' (limpia)")
                     
                     # Assign description to descripcion column
                     if description_text:
@@ -4347,11 +4617,13 @@ def main():
                     
                     # Asegurar que cuando hay 2 montos, el segundo sea saldo (estructura típica HSBC)
                     if len(amounts_list) == 2:
+                        # Primero asignar el saldo (segundo monto)
                         if not row_data.get('saldo'):
                             # El segundo monto es siempre saldo en HSBC (solo si es válido Y no está en descripción)
                             second_amt, second_center = amounts_list[1]
                             if is_valid_amount(second_amt) and not is_in_description_range(second_center):
                                 row_data['saldo'] = second_amt
+                        
                         # Si el primer monto no está asignado, asignarlo a cargos o abonos según coordenadas
                         if not row_data.get('cargos') and not row_data.get('abonos'):
                             first_amt, first_center = amounts_list[0]
@@ -4363,6 +4635,21 @@ def main():
                                 else:
                                     # Por defecto, si no se puede determinar, asignar a cargos
                                     row_data['cargos'] = first_amt
+                        # Si el primer monto ya está asignado pero falta el segundo (saldo), intentar asignarlo
+                        elif not row_data.get('saldo') and len(amounts_list) >= 1:
+                            # Si ya hay cargos/abonos pero falta saldo, el segundo monto debería ser saldo
+                            if len(amounts_list) >= 2:
+                                second_amt, second_center = amounts_list[1]
+                                if is_valid_amount(second_amt) and not is_in_description_range(second_center):
+                                    row_data['saldo'] = second_amt
+                    elif len(amounts_list) == 1:
+                        # Si solo hay un monto, asignarlo según coordenadas
+                        first_amt, first_center = amounts_list[0]
+                        if is_valid_amount(first_amt) and not is_in_description_range(first_center):
+                            col_name = assign_word_to_column(first_center - 50, first_center + 50, columns_config)
+                            if col_name and col_name in ('cargos', 'abonos', 'saldo'):
+                                if not row_data.get(col_name):
+                                    row_data[col_name] = first_amt
                 
                 # Limpiar valores inválidos de las columnas de montos
                 # Si se asignó texto no numérico, eliminarlo
@@ -4371,6 +4658,14 @@ def main():
                         if not is_valid_amount(row_data[col]):
                             # Si no es un monto válido, limpiar la columna
                             row_data[col] = ''
+                
+                # Limpiar la fecha antes de validar (por si acaso tiene puntos o caracteres extra)
+                if 'fecha' in row_data and row_data['fecha']:
+                    fecha_original = row_data['fecha']
+                    fecha_clean = row_data['fecha'].strip().rstrip('.,;:')
+                    if fecha_clean != fecha_original:
+                        print(f"[DEBUG HSBC] Limpiando fecha: '{fecha_original}' -> '{fecha_clean}'")
+                        row_data['fecha'] = fecha_clean
                 
                 # [DEBUG HSBC] Print después de dividir en columnas
                 print(f"[DEBUG HSBC] Fila {row_idx} DESPUÉS DE DIVIDIR EN COLUMNAS:")
@@ -4394,7 +4689,18 @@ def main():
         df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
         
         # Extraer resumen desde texto OCR de la página 1
+        print(f"[DEBUG HSBC] Llamando a extract_hsbc_summary_from_ocr_text...")
+        print(f"[DEBUG HSBC] Número de páginas en extracted_data: {len(extracted_data)}")
+        if extracted_data:
+            for i, page_data in enumerate(extracted_data[:2]):
+                page_content = page_data.get('content', '')
+                print(f"[DEBUG HSBC] Página {i+1} - Longitud del contenido: {len(page_content)} caracteres")
+                if page_content:
+                    print(f"[DEBUG HSBC] Página {i+1} - Primeros 200 caracteres: {page_content[:200]}")
+        
         pdf_summary = extract_hsbc_summary_from_ocr_text(extracted_data)
+        
+        print(f"[DEBUG HSBC] pdf_summary retornado: {pdf_summary}")
     else:
         # Flujo normal: procesar con coordenadas o texto plano
         # regex to detect decimal-like amounts (used to strip amounts from descriptions and detect amounts)
