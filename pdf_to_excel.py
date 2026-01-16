@@ -4322,12 +4322,24 @@ def main():
                         return True
                     return False
                 
+                # Función auxiliar para verificar si un monto está en el rango de descripción
+                def is_in_description_range(center_x):
+                    """Verifica si un monto está en el rango de la columna descripción"""
+                    if 'descripcion' in columns_config:
+                        desc_x0, desc_x1 = columns_config['descripcion']
+                        # Validar y corregir rangos invertidos
+                        if desc_x0 > desc_x1:
+                            desc_x0, desc_x1 = desc_x1, desc_x0
+                        return desc_x0 <= center_x <= desc_x1
+                    return False
+                
                 if amounts_list and len(amounts_list) >= 1:
                     # Si hay montos pero no están asignados a columnas, asignarlos basándose en coordenadas X
                     if not row_data.get('cargos') and not row_data.get('abonos') and not row_data.get('saldo'):
-                        # Asignar montos según coordenadas X (solo si son válidos)
+                        # Asignar montos según coordenadas X (solo si son válidos Y no están en descripción)
                         for amt_text, center in amounts_list:
-                            if is_valid_amount(amt_text):
+                            # Verificar que el monto sea válido y que NO esté en el rango de descripción
+                            if is_valid_amount(amt_text) and not is_in_description_range(center):
                                 col_name = assign_word_to_column(center - 50, center + 50, columns_config)
                                 if col_name and col_name in ('cargos', 'abonos', 'saldo'):
                                     if not row_data.get(col_name):
@@ -4336,14 +4348,15 @@ def main():
                     # Asegurar que cuando hay 2 montos, el segundo sea saldo (estructura típica HSBC)
                     if len(amounts_list) == 2:
                         if not row_data.get('saldo'):
-                            # El segundo monto es siempre saldo en HSBC (solo si es válido)
-                            second_amt = amounts_list[1][0]
-                            if is_valid_amount(second_amt):
+                            # El segundo monto es siempre saldo en HSBC (solo si es válido Y no está en descripción)
+                            second_amt, second_center = amounts_list[1]
+                            if is_valid_amount(second_amt) and not is_in_description_range(second_center):
                                 row_data['saldo'] = second_amt
                         # Si el primer monto no está asignado, asignarlo a cargos o abonos según coordenadas
                         if not row_data.get('cargos') and not row_data.get('abonos'):
                             first_amt, first_center = amounts_list[0]
-                            if is_valid_amount(first_amt):
+                            # Solo asignar si es válido Y no está en descripción
+                            if is_valid_amount(first_amt) and not is_in_description_range(first_center):
                                 col_name = assign_word_to_column(first_center - 50, first_center + 50, columns_config)
                                 if col_name and col_name in ('cargos', 'abonos'):
                                     row_data[col_name] = first_amt
