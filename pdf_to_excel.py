@@ -668,6 +668,72 @@ def convert_ocr_data_to_words_format(ocr_data: dict, zoom_normalization_factor: 
     return words
 
 
+def fix_ocr_date_errors(date_text: str, bank_name: str = None) -> str:
+    """
+    Corrige errores comunes del OCR en fechas, especialmente para HSBC donde las fechas son solo 2 dígitos (01-31).
+    
+    Errores corregidos:
+    - "og" → "09" (0 confundido con o, 9 confundido con g)
+    - "o1" → "01" (0 confundido con o)
+    - "o2" → "02", "o3" → "03", etc.
+    - "1g" → "19" (9 confundido con g)
+    - "2g" → "29", "3g" → "39" (aunque 39 no es válido para días, se corrige por consistencia)
+    
+    Args:
+        date_text: Texto de la fecha extraída por OCR (puede ser solo la fecha o texto con fecha al inicio)
+        bank_name: Nombre del banco (solo aplica para bancos específicos)
+    
+    Returns:
+        Texto corregido o texto original si no necesita corrección
+    """
+    if not date_text:
+        return date_text
+    
+    # Solo aplicar correcciones para HSBC (fechas de 2 dígitos)
+    if bank_name != 'HSBC':
+        return date_text
+    
+    original_text = date_text.strip()
+    
+    # Correcciones comunes de OCR para dígitos en fechas
+    # Buscar y reemplazar patrones comunes al inicio del texto (donde está la fecha)
+    
+    # Patrón 1: "og" al inicio → "09" (muy común, caso específico del usuario)
+    # Puede estar solo "og" o "og " seguido de más texto
+    if original_text.lower().startswith('og'):
+        # Reemplazar "og" al inicio con "09"
+        corrected = re.sub(r'^og\b', '09', original_text, flags=re.IGNORECASE)
+        if corrected != original_text:
+            return corrected
+    
+    # Patrón 2: "o" seguido de dígito al inicio (0 confundido con o)
+    # Ejemplos: "o1" → "01", "o2" → "02", etc.
+    o_digit_pattern = re.compile(r'^o([0-9])(\s|$)', re.IGNORECASE)
+    match = o_digit_pattern.match(original_text)
+    if match:
+        digit = match.group(1)
+        # Solo corregir si el resultado es un día válido (01-09)
+        if 1 <= int(digit) <= 9:
+            return re.sub(r'^o([0-9])', f'0\\1', original_text, flags=re.IGNORECASE)
+    
+    # Patrón 3: Dígito seguido de "g" al inicio (9 confundido con g)
+    # Ejemplos: "1g" → "19", "2g" → "29", etc.
+    digit_g_pattern = re.compile(r'^([0-3])g(\s|$)', re.IGNORECASE)
+    match = digit_g_pattern.match(original_text)
+    if match:
+        digit = match.group(1)
+        # Solo corregir si el resultado es un día válido (19, 29)
+        corrected_day = int(f"{digit}9")
+        if 1 <= corrected_day <= 31:
+            return re.sub(r'^([0-3])g', f'\\19', original_text, flags=re.IGNORECASE)
+    
+    # Si el texto completo es solo "og" o variaciones
+    if original_text.lower() in ['og', 'og.', 'og,', 'og:']:
+        return '09'
+    
+    return date_text
+
+
 def fix_ocr_amount_errors(word_text: str, word_x0: float, columns_config: dict, bank_name: str = None) -> str:
     """
     Corrige errores comunes del OCR en montos, usando coordenadas X para validar.
@@ -3403,6 +3469,12 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
             fecha_text = ' '.join(fecha_texts)
             print(f"[DEBUG HSBC] Texto de fecha palabras: '{fecha_text}' (palabras: {fecha_texts})")
             
+            # Aplicar corrección de errores OCR en fechas antes de buscar el patrón
+            fecha_text_corrected = fix_ocr_date_errors(fecha_text, bank_name)
+            if fecha_text_corrected != fecha_text:
+                print(f"[DEBUG HSBC] Fecha corregida por OCR: '{fecha_text}' -> '{fecha_text_corrected}'")
+                fecha_text = fecha_text_corrected
+            
             # For HSBC, date is only 2 digits (01-31)
             hsbc_date_match = date_pattern.search(fecha_text)
             if hsbc_date_match:
@@ -3704,6 +3776,14 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None):
             date_end_pos = date_match.end()
             # For HSBC, ensure we split the 2-digit date from the rest of the text
             if bank_name == 'HSBC':
+                # Aplicar corrección de errores OCR antes de buscar el patrón
+                text_corrected = fix_ocr_date_errors(text, bank_name)
+                if text_corrected != text:
+                    print(f"[DEBUG HSBC] Texto corregido por OCR antes de extraer fecha: '{text}' -> '{text_corrected}'")
+                    text = text_corrected
+                    # Actualizar el texto en el diccionario word
+                    word['text'] = text
+                
                 # The date should be exactly 2 digits (01-31) at the start
                 # Extract the 2 digits and everything after as description
                 hsbc_date_match = re.match(r'^(0[1-9]|[12][0-9]|3[01])(\s+.*)?', text)
