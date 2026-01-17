@@ -5990,8 +5990,8 @@ def main():
         # Extract first date from 'liq' column for Fecha Liq
         df_mov['Fecha Liq'] = fecha_liq_dates.apply(lambda t: t[0])
         
-        # For BBVA, create 'Fecha' from 'Fecha Oper' and remove both date columns
-        df_mov['Fecha'] = df_mov['Fecha Oper']
+        # For BBVA, create 'Fecha' from 'Fecha Liq' and remove both date columns
+        df_mov['Fecha'] = df_mov['Fecha Liq']
         df_mov = df_mov.drop(columns=['Fecha Oper', 'Fecha Liq'])
         
         # Remove original 'fecha' column (liq will be removed later when building description)
