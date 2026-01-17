@@ -1718,7 +1718,6 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                             if match:
                                 amount = normalize_amount_str(match.group(1))
                                 if amount > 0:
-                                    print(f"✅ BBVA: Encontrado retiros/cargos: ${amount:,.2f} en línea {i+1}: {line[:80]}")
                                     summary_data['total_cargos'] = amount
                                     summary_data['total_retiros'] = amount
                                     break
@@ -1734,7 +1733,6 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                             if match:
                                 amount = normalize_amount_str(match.group(1))
                                 if amount > 0:
-                                    print(f"✅ BBVA: Encontrado saldo final: ${amount:,.2f} en línea {i+1}: {line[:80]}")
                                     summary_data['saldo_final'] = amount
                                     break
             
@@ -2507,36 +2505,17 @@ def create_validation_sheet(pdf_summary: dict, extracted_totals: dict, has_saldo
         extracted_totals: Dictionary with totals calculated from extracted movements
         has_saldo_column: Whether the bank has a "Saldo" column in Movements (default: True)
     """
-    print(f"[DEBUG VALIDATION] Creando hoja de validación...")
-    print(f"[DEBUG VALIDATION] pdf_summary recibido: {pdf_summary}")
-    print(f"[DEBUG VALIDATION] extracted_totals recibido: {extracted_totals}")
-    print(f"[DEBUG VALIDATION] has_saldo_column: {has_saldo_column}")
-    
     validation_data = []
     
     # Tolerance for floating point comparison (0.01 for cents)
     tolerance = 0.01
     
     # Compare Abonos/Depositos
-    print(f"[DEBUG VALIDATION] ========================================")
-    print(f"[DEBUG VALIDATION] PROCESANDO TOTAL ABONOS:")
-    print(f"[DEBUG VALIDATION]   pdf_summary completo: {pdf_summary}")
-    print(f"[DEBUG VALIDATION]   pdf_summary.get('total_abonos'): {pdf_summary.get('total_abonos')}")
-    print(f"[DEBUG VALIDATION]   pdf_summary.get('total_depositos'): {pdf_summary.get('total_depositos')}")
-    
     pdf_abonos = pdf_summary.get('total_abonos') or pdf_summary.get('total_depositos')
     ext_abonos = extracted_totals.get('total_abonos', 0.0)
     
-    print(f"[DEBUG VALIDATION]   pdf_abonos (resultado de OR): {pdf_abonos}")
-    print(f"[DEBUG VALIDATION]   ext_abonos: {ext_abonos}")
-    print(f"[DEBUG VALIDATION]   pdf_abonos es None? {pdf_abonos is None}")
-    print(f"[DEBUG VALIDATION]   pdf_abonos es 0? {pdf_abonos == 0 if pdf_abonos is not None else 'N/A'}")
-    
     abonos_match = pdf_abonos is None or abs(pdf_abonos - ext_abonos) < tolerance
     valor_en_pdf = f"${pdf_abonos:,.2f}" if pdf_abonos else "No encontrado"
-    print(f"[DEBUG VALIDATION]   valor_en_pdf: '{valor_en_pdf}'")
-    print(f"[DEBUG VALIDATION]   abonos_match: {abonos_match}")
-    print(f"[DEBUG VALIDATION] ========================================")
     
     validation_row = {
         'Concepto': 'Total Abonos / Depósitos',
@@ -2545,7 +2524,6 @@ def create_validation_sheet(pdf_summary: dict, extracted_totals: dict, has_saldo
         'Diferencia': f"${abs(pdf_abonos - ext_abonos):,.2f}" if pdf_abonos else "N/A",
         'Estado': '✓' if abonos_match else '✗'
     }
-    print(f"[DEBUG VALIDATION] Fila de validación para Total Abonos: {validation_row}")
     validation_data.append(validation_row)
     
     # Compare Cargos/Retiros
@@ -6078,32 +6056,8 @@ def main():
         df_mov['OPERACIÓN'] = amounts.apply(lambda t: t[1])  # Second amount is OPERACIÓN
         df_mov['LIQUIDACIÓN'] = amounts.apply(lambda t: t[0])  # First amount is LIQUIDACIÓN
         
-        # DEBUG: Print all rows for BBVA to identify saldo issues
-        print(f"[DEBUG BBVA SALDO] ========================================")
-        print(f"[DEBUG BBVA SALDO] Total de filas procesadas: {len(df_mov)}")
-        print(f"[DEBUG BBVA SALDO] ========================================")
-        for idx, row in df_mov.iterrows():
-            saldo_original = row.get('saldo', 'N/A')
-            operacion = row.get('OPERACIÓN', 'N/A')
-            liquidacion = row.get('LIQUIDACIÓN', 'N/A')
-            fecha = row.get('Fecha', 'N/A')
-            descripcion = row.get('Descripcion', row.get('descripcion', 'N/A'))[:50] if row.get('Descripcion') or row.get('descripcion') else 'N/A'
-            cargos = row.get('cargos', row.get('Cargos', 'N/A'))
-            abonos = row.get('abonos', row.get('Abonos', 'N/A'))
-            print(f"[DEBUG BBVA SALDO] Fila {idx+1}:")
-            print(f"  Saldo original: '{saldo_original}'")
-            print(f"  OPERACIÓN extraída: '{operacion}'")
-            print(f"  LIQUIDACIÓN extraída: '{liquidacion}'")
-            print(f"  Fecha: '{fecha}'")
-            print(f"  Descripción: '{descripcion}'")
-            print(f"  Cargos: '{cargos}'")
-            print(f"  Abonos: '{abonos}'")
-            print(f"  ---")
-        
         # For BBVA, create 'Saldo' from 'LIQUIDACIÓN' (first amount) and remove both saldo columns
         df_mov['Saldo'] = df_mov['LIQUIDACIÓN']
-        print(f"[DEBUG BBVA SALDO] Columna 'Saldo' creada desde 'LIQUIDACIÓN' (primer monto)")
-        print(f"[DEBUG BBVA SALDO] Eliminando columnas 'OPERACIÓN' y 'LIQUIDACIÓN'")
         df_mov = df_mov.drop(columns=['OPERACIÓN', 'LIQUIDACIÓN'])
         
         # Remove the original 'saldo' column
