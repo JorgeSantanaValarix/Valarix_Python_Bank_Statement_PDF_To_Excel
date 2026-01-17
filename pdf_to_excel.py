@@ -1548,8 +1548,6 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
         re.IGNORECASE
     )
     
-    print(f"[DEBUG HSBC SUMMARY] Iniciando extracción de resumen desde {pages_to_check} página(s)")
-    
     # Buscar en las primeras dos páginas
     for page_idx in range(pages_to_check):
         page_data = pages_data[page_idx]
@@ -1559,45 +1557,22 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
             continue
         
         lines = page_text.split('\n')
-        print(f"[DEBUG HSBC SUMMARY] Procesando página {page_idx + 1}, total de líneas: {len(lines)}")
         
         for line_num, line in enumerate(lines):
             line = line.strip()
             if not line:
                 continue
             
-            # DEBUG: Mostrar líneas que contienen palabras relacionadas con Depósitos/Abonos
-            if re.search(r'Dep[oó]sito|Abono', line, re.I):
-                print(f"[DEBUG HSBC SUMMARY] Línea {line_num+1} (página {page_idx+1}) contiene 'Depósito' o 'Abono': {line[:200]}")
-            
             # PRIMERO: Buscar Depósitos/ (Total Abonos)
             if not summary_data['total_abonos']:
-                print(f"[DEBUG HSBC TOTAL ABONOS] Línea {line_num+1} (página {page_idx+1}): '{line[:200]}'")
                 match = depositos_slash_pattern.search(line)
                 if match:
-                    print(f"[DEBUG HSBC TOTAL ABONOS] ✓ Coincidencia encontrada en línea {line_num+1}")
                     amount_str = match.group(1).strip()
-                    print(f"[DEBUG HSBC TOTAL ABONOS]   Monto capturado (raw): '{amount_str}'")
                     amount_str = re.sub(r'\s+', '', amount_str)
-                    print(f"[DEBUG HSBC TOTAL ABONOS]   Monto después de limpiar espacios: '{amount_str}'")
                     amount = normalize_amount_str(amount_str)
-                    print(f"[DEBUG HSBC TOTAL ABONOS]   Monto normalizado: {amount}")
                     if amount and amount > 0:
                         summary_data['total_abonos'] = amount
                         summary_data['total_depositos'] = amount
-                        print(f"[DEBUG HSBC SUMMARY] ✅ Total Abonos encontrado en página {page_idx + 1}, línea {line_num+1}: {amount:,.2f}")
-                    else:
-                        print(f"[DEBUG HSBC TOTAL ABONOS] ⚠️ Monto normalizado es inválido o cero: {amount}")
-                else:
-                    # Verificar si la línea contiene "Depósitos" o "Depositos" para debug
-                    if re.search(r'Dep[oó]sitos?', line, re.I):
-                        print(f"[DEBUG HSBC TOTAL ABONOS] ⚠️ Línea contiene 'Depósitos' pero NO coincide con patrón")
-                        print(f"[DEBUG HSBC TOTAL ABONOS]   Patrón buscado: {depositos_slash_pattern.pattern}")
-                        # Intentar ver qué parte de la línea podría estar causando el problema
-                        if '/' in line:
-                            print(f"[DEBUG HSBC TOTAL ABONOS]   La línea contiene '/' pero no coincide con el patrón completo")
-                        else:
-                            print(f"[DEBUG HSBC TOTAL ABONOS]   La línea NO contiene '/' después de 'Depósitos'")
             
             # SEGUNDO: Buscar Retiros/Cargos (Total Cargos)
             if not summary_data['total_cargos']:
@@ -1609,7 +1584,6 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
                     if amount and amount > 0:
                         summary_data['total_cargos'] = amount
                         summary_data['total_retiros'] = amount
-                        print(f"[DEBUG HSBC SUMMARY] ✅ Total Cargos encontrado en página {page_idx + 1}, línea {line_num+1}: {amount:,.2f}")
             
             # TERCERO: Buscar Saldo Final del Periodo
             if not summary_data['saldo_final']:
@@ -1620,7 +1594,6 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
                     amount = normalize_amount_str(amount_str)
                     if amount and amount > 0:
                         summary_data['saldo_final'] = amount
-                        print(f"[DEBUG HSBC SUMMARY] ✅ Saldo Final encontrado en página {page_idx + 1}, línea {line_num+1}: {amount:,.2f}")
                 else:
                     # Intentar patrón alternativo
                     match = saldo_final_pattern_alt.search(line)
@@ -1630,17 +1603,6 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
                         amount = normalize_amount_str(amount_str)
                         if amount and amount > 0:
                             summary_data['saldo_final'] = amount
-                            print(f"[DEBUG HSBC SUMMARY] ✅ Saldo Final encontrado (alternativo) en página {page_idx + 1}, línea {line_num+1}: {amount:,.2f}")
-    
-    # Print resumen de lo encontrado
-    print(f"[DEBUG HSBC SUMMARY] ========================================")
-    print(f"[DEBUG HSBC SUMMARY] RESUMEN FINAL EXTRAÍDO:")
-    print(f"  Total Abonos: {summary_data['total_abonos']}")
-    print(f"  Total Depósitos: {summary_data['total_depositos']}")
-    print(f"  Total Cargos: {summary_data['total_cargos']}")
-    print(f"  Total Retiros: {summary_data['total_retiros']}")
-    print(f"  Saldo Final: {summary_data['saldo_final']}")
-    print(f"[DEBUG HSBC SUMMARY] ========================================")
     
     return summary_data
 
@@ -4734,11 +4696,6 @@ def main():
         # Extraer resumen desde texto OCR de la página 1
         pdf_summary = extract_hsbc_summary_from_ocr_text(extracted_data)
         
-        print(f"[DEBUG HSBC] pdf_summary retornado: {pdf_summary}")
-        print(f"[DEBUG HSBC] ⚠️ VERIFICACIÓN ANTES DE VALIDATION:")
-        print(f"  pdf_summary['total_abonos']: {pdf_summary.get('total_abonos')}")
-        print(f"  pdf_summary['total_depositos']: {pdf_summary.get('total_depositos')}")
-        print(f"  pdf_summary.get('total_abonos') or pdf_summary.get('total_depositos'): {pdf_summary.get('total_abonos') or pdf_summary.get('total_depositos')}")
     else:
         # Flujo normal: procesar con coordenadas o texto plano
         # regex to detect decimal-like amounts (used to strip amounts from descriptions and detect amounts)
