@@ -5990,6 +5990,10 @@ def main():
         # Extract first date from 'liq' column for Fecha Liq
         df_mov['Fecha Liq'] = fecha_liq_dates.apply(lambda t: t[0])
         
+        # For BBVA, create 'Fecha' from 'Fecha Oper' and remove both date columns
+        df_mov['Fecha'] = df_mov['Fecha Oper']
+        df_mov = df_mov.drop(columns=['Fecha Oper', 'Fecha Liq'])
+        
         # Remove original 'fecha' column (liq will be removed later when building description)
         if 'fecha' in df_mov.columns:
             df_mov = df_mov.drop(columns=['fecha'])
@@ -6073,6 +6077,34 @@ def main():
         amounts = df_mov['saldo'].astype(str).apply(_extract_two_amounts)
         df_mov['OPERACIÓN'] = amounts.apply(lambda t: t[1])  # Second amount is OPERACIÓN
         df_mov['LIQUIDACIÓN'] = amounts.apply(lambda t: t[0])  # First amount is LIQUIDACIÓN
+        
+        # DEBUG: Print all rows for BBVA to identify saldo issues
+        print(f"[DEBUG BBVA SALDO] ========================================")
+        print(f"[DEBUG BBVA SALDO] Total de filas procesadas: {len(df_mov)}")
+        print(f"[DEBUG BBVA SALDO] ========================================")
+        for idx, row in df_mov.iterrows():
+            saldo_original = row.get('saldo', 'N/A')
+            operacion = row.get('OPERACIÓN', 'N/A')
+            liquidacion = row.get('LIQUIDACIÓN', 'N/A')
+            fecha = row.get('Fecha', 'N/A')
+            descripcion = row.get('Descripcion', row.get('descripcion', 'N/A'))[:50] if row.get('Descripcion') or row.get('descripcion') else 'N/A'
+            cargos = row.get('cargos', row.get('Cargos', 'N/A'))
+            abonos = row.get('abonos', row.get('Abonos', 'N/A'))
+            print(f"[DEBUG BBVA SALDO] Fila {idx+1}:")
+            print(f"  Saldo original: '{saldo_original}'")
+            print(f"  OPERACIÓN extraída: '{operacion}'")
+            print(f"  LIQUIDACIÓN extraída: '{liquidacion}'")
+            print(f"  Fecha: '{fecha}'")
+            print(f"  Descripción: '{descripcion}'")
+            print(f"  Cargos: '{cargos}'")
+            print(f"  Abonos: '{abonos}'")
+            print(f"  ---")
+        
+        # For BBVA, create 'Saldo' from 'LIQUIDACIÓN' (first amount) and remove both saldo columns
+        df_mov['Saldo'] = df_mov['LIQUIDACIÓN']
+        print(f"[DEBUG BBVA SALDO] Columna 'Saldo' creada desde 'LIQUIDACIÓN' (primer monto)")
+        print(f"[DEBUG BBVA SALDO] Eliminando columnas 'OPERACIÓN' y 'LIQUIDACIÓN'")
+        df_mov = df_mov.drop(columns=['OPERACIÓN', 'LIQUIDACIÓN'])
         
         # Remove the original 'saldo' column
         df_mov = df_mov.drop(columns=['saldo'])
@@ -6165,10 +6197,7 @@ def main():
             column_rename['cargos'] = 'Cargos'
         if 'abonos' in df_mov.columns:
             column_rename['abonos'] = 'Abonos'
-        if 'OPERACIÓN' in df_mov.columns:
-            column_rename['OPERACIÓN'] = 'Operación'
-        if 'LIQUIDACIÓN' in df_mov.columns:
-            column_rename['LIQUIDACIÓN'] = 'Liquidación'
+        # For BBVA, OPERACIÓN and LIQUIDACIÓN are already converted to 'Saldo' above, so skip renaming
     else:
         # For HSBC and other banks, rename columns
         # For HSBC, 'fecha' was already converted to 'Fecha' earlier, so skip if 'Fecha' already exists
@@ -6238,8 +6267,8 @@ def main():
 
     # Reorder columns according to bank type
     if bank_config['name'] == 'BBVA':
-        # For BBVA: Fecha Oper, Fecha Liq., Descripción, Abonos, Cargos, Operación, Liquidación
-        desired_order = ['Fecha Oper', 'Fecha Liq.', 'Descripción', 'Abonos', 'Cargos', 'Operación', 'Liquidación']
+        # For BBVA: Fecha, Descripción, Abonos, Cargos, Saldo
+        desired_order = ['Fecha', 'Descripción', 'Abonos', 'Cargos', 'Saldo']
         # Filter to only include columns that exist in the dataframe
         desired_order = [col for col in desired_order if col in df_mov.columns]
         # Add any remaining columns that are not in desired_order
