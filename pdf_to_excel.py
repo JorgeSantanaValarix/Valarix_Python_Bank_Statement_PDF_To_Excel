@@ -4,24 +4,24 @@ import re
 import pdfplumber
 import pandas as pd
 
-# NUEVOS IMPORTS para Tesseract OCR (mínimos):
+# NEW IMPORTS for Tesseract OCR (minimal):
 try:
     import pytesseract
-    import fitz  # PyMuPDF - para convertir PDF a imágenes
+    import fitz  # PyMuPDF - to convert PDF to images
     from PIL import Image
     TESSERACT_AVAILABLE = True
 except ImportError:
     TESSERACT_AVAILABLE = False
-    print("[ADVERTENCIA] Tesseract OCR no disponible. Instala: pip install pytesseract pymupdf pillow")
+    print("[WARNING] Tesseract OCR not available. Install: pip install pytesseract pymupdf pillow")
 
-# Configurar encoding UTF-8 para Windows (mejora compatibilidad con Windows Server)
+# Configure UTF-8 encoding for Windows (improves compatibility with Windows Server)
 if sys.platform == 'win32':
     import io
     try:
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
     except AttributeError:
-        # Si ya está configurado, ignorar
+        # If already configured, ignore
         pass
 
 # Bank configurations with column coordinate ranges (X-axis)
@@ -30,8 +30,8 @@ if sys.platform == 'win32':
 
 def configure_tesseract():
     """
-    Configura la ruta a Tesseract OCR si no está en PATH.
-    Detecta automáticamente la ubicación común en Windows.
+    Configure the path to Tesseract OCR if it's not in PATH.
+    Automatically detects common location on Windows.
     """
     if not TESSERACT_AVAILABLE:
         return False
@@ -46,7 +46,7 @@ def configure_tesseract():
             pytesseract.pytesseract.tesseract_cmd = path
             return True
     
-    # Si no se encuentra, intentar usar el que está en PATH
+    # If not found, try to use the one in PATH
     try:
         pytesseract.get_tesseract_version()
         return True
@@ -57,12 +57,12 @@ BANK_CONFIGS = {
     "BBVA": {
         "name": "BBVA",
         "columns": {
-            "fecha": (9, 38),              # Columna Fecha de Operación
-            "liq": (52, 81),                # Columna LIQ (Liquidación)
-            "descripcion": (86, 322),     # Columna Descripción
-            "cargos": (360, 398),          # Columna Cargos
-            "abonos": (422, 458),          # Columna Abonos
-            "saldo": (539, 593),           # Columna Saldo
+            "fecha": (9, 38),              # Operation Date column
+            "liq": (52, 81),                # LIQ (Liquidation) column
+            "descripcion": (86, 322),     # Description column
+            "cargos": (360, 398),          # Charges column
+            "abonos": (422, 458),          # Credits column
+            "saldo": (539, 593),           # Balance column
         }
     },
     
@@ -70,11 +70,11 @@ BANK_CONFIGS = {
         "name": "Santander",
         "movements_end": "TOTAL",
         "columns": {
-            "fecha": (18, 52),             # Columna Fecha de Operación
-            "descripcion": (107, 149),     # Columna Descripción
-            "cargos": (465, 492),          # Columna Cargos
-            "abonos": (377, 411),          # Columna Abonos
-            "saldo": (554, 573),           # Columna Saldo
+            "fecha": (18, 52),             # Operation Date column
+            "descripcion": (107, 149),     # Description column
+            "cargos": (465, 492),          # Charges column
+            "abonos": (377, 411),          # Credits column
+            "saldo": (554, 573),           # Balance column
         }
     },
 
@@ -82,11 +82,11 @@ BANK_CONFIGS = {
         "name": "Scotiabank",
         "movements_end": "LAS TASAS DE INTERES ESTAN EXPRESADAS EN TERMINOS ANUALES SIMPLES",
         "columns": {
-            "fecha": (56, 81),             # Columna Fecha de Operación
-            "descripcion": (92, 240),     # Columna Descripción
-            "cargos": (465, 509),          # Columna Cargos
-            "abonos": (385, 437),          # Columna Abonos
-            "saldo": (532, 584),           # Columna Saldo
+            "fecha": (56, 81),             # Operation Date column
+            "descripcion": (92, 240),     # Description column
+            "cargos": (465, 509),          # Charges column
+            "abonos": (385, 437),          # Credits column
+            "saldo": (532, 584),           # Balance column
         }
     },
 
@@ -94,11 +94,11 @@ BANK_CONFIGS = {
         "name": "Inbursa",
         "movements_end": "Si desea recibir pagos a través de transferencias bancarias electrónicas",
         "columns": {
-            "fecha": (11, 40),             # Columna Fecha de Operación
-            "descripcion": (145, 369),     # Columna Descripción
-            "cargos": (400, 441),          # Columna Cargos
-            "abonos": (475, 510),          # Columna Abonos
-            "saldo": (525, 563),           # Columna Saldo
+            "fecha": (11, 40),             # Operation Date column
+            "descripcion": (145, 369),     # Description column
+            "cargos": (400, 441),          # Charges column
+            "abonos": (475, 510),          # Credits column
+            "saldo": (525, 563),           # Balance column
         }
     },
 
@@ -107,10 +107,10 @@ BANK_CONFIGS = {
         "movements_start": "Historial de movimientos del titular",
         "movements_end": "Subtotal",
         "columns": {
-            "fecha": (48, 102),             # Columna Fecha de Operación
-            "descripcion": (120, 240),     # Columna Descripción
-            "cargos": (340, 435),          # Columna Cargos
-            "abonos": (510, 565),          # Columna Abonos
+            "fecha": (48, 102),             # Operation Date column
+            "descripcion": (120, 240),     # Description column
+            "cargos": (340, 435),          # Charges column
+            "abonos": (510, 565),          # Credits column
         }
     },
 
@@ -119,10 +119,10 @@ BANK_CONFIGS = {
         "movements_start": "Movimientos",
         "movements_end": "Total MXN",
         "columns": {
-            "fecha": (35, 60),             # Columna Fecha de Operación
-            "descripcion": (60, 450),       # Columna Descripción (ampliado para capturar todas las palabras de descripción)
-            "cargos": (450, 480),          # Columna Cargos
-            "abonos": (520, 576),          # Columna Abonos
+            "fecha": (35, 60),             # Operation Date column
+            "descripcion": (60, 450),       # Description column (expanded to capture all description words)
+            "cargos": (450, 480),          # Charges column
+            "abonos": (520, 576),          # Credits column
         }
     },
 
@@ -130,11 +130,11 @@ BANK_CONFIGS = {
         "name": "Banregio",
         "movements_end": "Total",
         "columns": {
-            "fecha": (35, 42),             # Columna Fecha de Operación
-            "descripcion": (53, 310),     # Columna Descripción
-            "cargos": (380, 418),          # Columna Cargos
-            "abonos": (460, 498),          # Columna Abonos
-            "saldo": (530, 573),           # Columna Saldo
+            "fecha": (35, 42),             # Operation Date column
+            "descripcion": (53, 310),     # Description column
+            "cargos": (380, 418),          # Charges column
+            "abonos": (460, 498),          # Credits column
+            "saldo": (530, 573),           # Balance column
         }
     },
     
@@ -142,11 +142,11 @@ BANK_CONFIGS = {
         "name": "Banorte",
         "movements_end": "INVERSION ENLACE NEGOCIOS",
         "columns": {
-            "fecha": (54, 85),             # Columna Fecha de Operación
-            "descripcion": (87, 167),     # Columna Descripción
-            "cargos": (450, 489),          # Columna Cargos
-            "abonos": (380, 420),          # Columna Abonos
-            "saldo": (533, 560),           # Columna Saldo
+            "fecha": (54, 85),             # Operation Date column
+            "descripcion": (87, 167),     # Description column
+            "cargos": (450, 489),          # Charges column
+            "abonos": (380, 420),          # Credits column
+            "saldo": (533, 560),           # Balance column
         }
     },
 
@@ -154,37 +154,37 @@ BANK_CONFIGS = {
         "name": "Banbajío",
         "movements_end": "SALDO TOTAL",
         "columns": {
-            "fecha": (21, 41),             # Columna Fecha de Operación
-            "descripcion": (87, 362),     # Columna Descripción
-            "cargos": (490, 525),          # Columna Cargos
-            "abonos": (415, 451),          # Columna Abonos
-            "saldo": (550, 585),           # Columna Saldo
+            "fecha": (21, 41),             # Operation Date column
+            "descripcion": (87, 362),     # Description column
+            "cargos": (490, 525),          # Charges column
+            "abonos": (415, 451),          # Credits column
+            "saldo": (550, 585),           # Balance column
         }
     },
     
     "Banamex": {
         "name": "Banamex",
-        "movements_start": "DETALLE DE OPERACIONES",  # String que marca el inicio de la sección de movimientos
-        "movements_end": "SALDO MINIMO REQUERIDO",    # String que marca el fin de la sección de movimientos
+        "movements_start": "DETALLE DE OPERACIONES",  # String that marks the start of the movements section
+        "movements_end": "SALDO MINIMO REQUERIDO",    # String that marks the end of the movements section
         "columns": {
-            "fecha": (17, 45),             # Columna Fecha de Operación
-            "descripcion": (55, 260),      # Columna Descripción (ampliado para capturar mejor)
-            "cargos": (275, 316),          # Columna Cargos (ampliado ligeramente)
-            "abonos": (345, 395),          # Columna Abonos (ampliado ligeramente)
-            "saldo": (425, 472),           # Columna Saldo (ampliado ligeramente)
+            "fecha": (17, 45),             # Operation Date column
+            "descripcion": (55, 260),      # Description column (expanded to capture better)
+            "cargos": (275, 316),          # Charges column (slightly expanded)
+            "abonos": (345, 395),          # Credits column (slightly expanded)
+            "saldo": (425, 472),           # Balance column (slightly expanded)
         }
     },
 
     "HSBC": {
         "name": "HSBC",
-        "movements_start": "Día",  # String que marca el inicio de la sección de movimientos (encabezado de la tabla)
-        "movements_end": "CoDi",                      # String que marca el fin de la sección de movimientos
+        "movements_start": "Día",  # String that marks the start of the movements section (table header)
+        "movements_end": "CoDi",                      # String that marks the end of the movements section
         "columns": {
-            "fecha": (87, 103),             # Columna Fecha de Operación
-            "descripcion": (124, 505),      # Columna Descripción (ampliado para capturar mejor)
-            "cargos": (710, 800),          # Columna Cargos (ampliado ligeramente)
-            "abonos": (865, 950),          # Columna Abonos (ampliado ligeramente)
-            "saldo": (1050, 1130),           # Columna Saldo (ampliado ligeramente)
+            "fecha": (87, 103),             # Operation Date column
+            "descripcion": (124, 505),      # Description column (expanded to capture better)
+            "cargos": (710, 800),          # Charges column (slightly expanded)
+            "abonos": (865, 950),          # Credits column (slightly expanded)
+            "saldo": (1050, 1130),           # Balance column (slightly expanded)
         }
     },
     "Base": {
@@ -192,11 +192,11 @@ BANK_CONFIGS = {
         "movements_start": "DETALLE DE OPERACIONES",
         "movements_end": "[SALDO INICIAL DE",
         "columns": {
-            "fecha": (41, 78),             # Columna Fecha de Operación
-            "descripcion": (108, 342),      # Columna Descripción (ampliado para capturar mejor)
-            "cargos": (375, 415),          # Columna Cargos (ampliado ligeramente)
-            "abonos": (440, 485),          # Columna Abonos (ampliado ligeramente)
-            "saldo": (520, 560),           # Columna Saldo (ampliado ligeramente)
+            "fecha": (41, 78),             # Operation Date column
+            "descripcion": (108, 342),      # Description column (expanded to capture better)
+            "cargos": (375, 415),          # Charges column (slightly expanded)
+            "abonos": (440, 485),          # Credits column (slightly expanded)
+            "saldo": (520, 560),           # Balance column (slightly expanded)
         }
     },
 
@@ -216,7 +216,7 @@ BANK_KEYWORDS = {
         r"BBVA\s+ADELANTE",
     ],
     "Banamex": [
-        r"\bDIGITEM\b",  # Palabra muy específica de Banamex
+        r"\bDIGITEM\b",  # Very specific word for Banamex
         r"\bBANAMEX\b",
         r"\bCITIBANAMEX\b",
         r"\bCITI\s+BANAMEX\b",
@@ -340,36 +340,36 @@ def fix_duplicated_chars(text_str):
 def find_column_coordinates(pdf_path: str, page_number: int = 1):
     """Extract all words from a page and show their coordinates.
     Helps user find exact X ranges for columns.
-    Detecta automáticamente si debe usar OCR para PDFs ilegibles.
+    Automatically detects if OCR should be used for illegible PDFs.
     """
     try:
-        # PASO 1: Detectar si el PDF es ilegible
+        # STEP 1: Detect if PDF is illegible
         is_illegible, cid_ratio, ascii_ratio = is_pdf_text_illegible(pdf_path)
         
         if is_illegible and TESSERACT_AVAILABLE:
-            print(f"[INFO] PDF detectado como ilegible (CID ratio: {cid_ratio:.2%}, ASCII ratio: {ascii_ratio:.2%})")
-            print(f"[INFO] Usando OCR para analizar coordenadas...")
+            print(f"[INFO] PDF detected as illegible (CID ratio: {cid_ratio:.2%}, ASCII ratio: {ascii_ratio:.2%})")
+            print(f"[INFO] Using OCR to analyze coordinates...")
             
-            # Extraer con OCR (ahora usa image_to_data() con coordenadas reales)
+            # Extract with OCR (now uses image_to_data() with real coordinates)
             pages_data = extract_text_with_tesseract_ocr(pdf_path)
             
-            # Detectar banco desde texto OCR
+            # Detect bank from OCR text
             all_text = '\n'.join([p.get('content', '') for p in pages_data[:3]])
             detected_bank = detect_bank_from_text(all_text)
             
-            print(f"📄 Mostrando coordenadas extraídas con OCR (coordenadas reales)...")
+            print(f"📄 Showing coordinates extracted with OCR (real coordinates)...")
             
-            # Filtrar página si es necesario
+            # Filter page if necessary
             if page_number:
                 pages_data = [p for p in pages_data if p['page'] == page_number]
             
-            # Mostrar palabras con coordenadas reales del OCR
-            print(f"\n📄 Página {page_number} del PDF (OCR): {pdf_path}")
+            # Show words with real OCR coordinates
+            print(f"\n📄 Page {page_number} of PDF (OCR): {pdf_path}")
             print("=" * 120)
-            print(f"{'Y (top)':<8} {'X0':<8} {'X1':<8} {'X_center':<10} {'Conf':<6} {'Texto':<40}")
+            print(f"{'Y (top)':<8} {'X0':<8} {'X1':<8} {'X_center':<10} {'Conf':<6} {'Text':<40}")
             print("-" * 120)
             
-            # Agrupar palabras por Y (filas)
+            # Group words by Y (rows)
             rows = {}
             for page_data in pages_data:
                 words = page_data.get('words', [])
@@ -391,7 +391,7 @@ def find_column_coordinates(pdf_path: str, page_number: int = 1):
                     print(f"{top:<8} {x0:<8.1f} {x1:<8.1f} {x_center:<10.1f} {conf:<6.1f} {text:<40}")
             
             print("\n" + "=" * 120)
-            print("\nRangos aproximados de columnas (X0 a X1) - Coordenadas reales del OCR:")
+            print("\nApproximate column ranges (X0 to X1) - Real OCR coordinates:")
             print("-" * 120)
             
             # Find column boundaries
@@ -401,28 +401,28 @@ def find_column_coordinates(pdf_path: str, page_number: int = 1):
             if all_x0 and all_x1:
                 min_x = min(all_x0)
                 max_x = max(all_x1)
-                print(f"Rango X total: {min_x:.1f} a {max_x:.1f}")
-                print("\nAnaliza la salida anterior y proporciona estos valores en BANK_CONFIGS:")
+                print(f"Total X range: {min_x:.1f} to {max_x:.1f}")
+                print("\nAnalyze the output above and provide these values in BANK_CONFIGS:")
             else:
-                print("⚠️  No se encontraron palabras con coordenadas en esta página")
+                print("⚠️  No words with coordinates found on this page")
             
             return
         
-        # PASO 2: PDF legible - comportamiento normal (pdfplumber)
+        # STEP 2: Legible PDF - normal behavior (pdfplumber)
         # Detect bank to apply Konfio-specific fixes
         detected_bank = detect_bank_from_pdf(pdf_path)
         is_konfio = (detected_bank == "Konfio")
         
         with pdfplumber.open(pdf_path) as pdf:
             if page_number > len(pdf.pages):
-                # print(f"❌ El PDF solo tiene {len(pdf.pages)} páginas")
+                # print(f"❌ PDF only has {len(pdf.pages)} pages")
                 return
             
             page = pdf.pages[page_number - 1]
             words = page.extract_words(x_tolerance=3, y_tolerance=3)
             
             if not words:
-                # print("❌ No se encontraron palabras en la página")
+                # print("❌ No words found on page")
                 return
             
             # For Konfio, fix duplicated characters in word texts
@@ -439,9 +439,9 @@ def find_column_coordinates(pdf_path: str, page_number: int = 1):
                     rows[top] = []
                 rows[top].append(word)
             
-            print(f"\n📄 Página {page_number} del PDF: {pdf_path}")
+            print(f"\n📄 Page {page_number} of PDF: {pdf_path}")
             print("=" * 120)
-            print(f"{'Y (top)':<8} {'X0':<8} {'X1':<8} {'X_center':<10} {'Texto':<40}")
+            print(f"{'Y (top)':<8} {'X0':<8} {'X1':<8} {'X_center':<10} {'Text':<40}")
             print("-" * 120)
             
             # Print words sorted by Y then X
@@ -452,7 +452,7 @@ def find_column_coordinates(pdf_path: str, page_number: int = 1):
                     print(f"{top:<8} {word['x0']:<8.1f} {word['x1']:<8.1f} {x_center:<10.1f} {word['text']:<40}")
             
             print("\n" + "=" * 120)
-            print("\nRangos aproximados de columnas (X0 a X1):")
+            print("\nApproximate column ranges (X0 to X1):")
             print("-" * 120)
             
             # Find column boundaries
@@ -462,8 +462,8 @@ def find_column_coordinates(pdf_path: str, page_number: int = 1):
             min_x = min(all_x0)
             max_x = max(all_x1)
             
-            print(f"Rango X total: {min_x:.1f} a {max_x:.1f}")
-            print("\nAnaliza la salida anterior y proporciona estos valores en BANK_CONFIGS:")
+            print(f"Total X range: {min_x:.1f} to {max_x:.1f}")
+            print("\nAnalyze the output above and provide these values in BANK_CONFIGS:")
             # print("""
             # Ejemplo:
             # BANK_CONFIGS = {
@@ -549,11 +549,11 @@ def detect_bank_from_pdf(pdf_path: str) -> str:
 
 def is_pdf_text_illegible(pdf_path: str, cid_threshold: float = 0.05) -> tuple:
     """
-    Detecta si un PDF tiene texto ilegible (caracteres CID).
+    Detects if a PDF has illegible text (CID characters).
     
     Args:
-        pdf_path: Ruta al archivo PDF
-        cid_threshold: Ratio mínimo de caracteres CID para considerar ilegible (default: 5%)
+        pdf_path: Path to PDF file
+        cid_threshold: Minimum ratio of CID characters to consider illegible (default: 5%)
     
     Returns:
         Tuple: (is_illegible: bool, cid_ratio: float, ascii_ratio: float)
@@ -563,45 +563,45 @@ def is_pdf_text_illegible(pdf_path: str, cid_threshold: float = 0.05) -> tuple:
             if len(pdf.pages) == 0:
                 return False, 0.0, 0.0
             
-            # Analizar primera página (suficiente para detectar problema)
+            # Analyze first page (sufficient to detect problem)
             first_page = pdf.pages[0]
             text = first_page.extract_text() or ""
             
             if not text or len(text) < 50:
-                # Si no hay texto o es muy corto, puede ser ilegible
+                # If no text or very short, may be illegible
                 return True, 1.0, 0.0
             
-            # Contar caracteres CID
+            # Count CID characters
             cid_count = text.count('(cid:')
             total_chars = len(text)
             cid_ratio = cid_count / total_chars if total_chars > 0 else 0.0
             
-            # Contar caracteres ASCII
+            # Count ASCII characters
             ascii_count = sum(1 for c in text if ord(c) < 128)
             ascii_ratio = ascii_count / total_chars if total_chars > 0 else 0.0
             
-            # Considerar ilegible si:
-            # - Ratio CID > threshold, O
-            # - Ratio ASCII < 0.7 (menos del 70% es ASCII)
+            # Consider illegible if:
+            # - CID ratio > threshold, OR
+            # - ASCII ratio < 0.7 (less than 70% is ASCII)
             is_illegible = (cid_ratio > cid_threshold) or (ascii_ratio < 0.7)
             
             return is_illegible, cid_ratio, ascii_ratio
             
     except Exception as e:
-        # Si hay error leyendo con pdfplumber, asumir que puede ser ilegible
-        print(f"[ADVERTENCIA] Error analizando PDF: {e}")
+        # If error reading with pdfplumber, assume it may be illegible
+        print(f"[WARNING] Error analyzing PDF: {e}")
         return True, 1.0, 0.0
 
 
 def extract_text_from_ocr_data(ocr_data: dict) -> str:
     """
-    Extrae texto plano de los datos OCR para mantener compatibilidad con 'content'.
+    Extracts plain text from OCR data to maintain compatibility with 'content'.
     
     Args:
         ocr_data: Diccionario con datos de pytesseract.image_to_data()
     
     Returns:
-        Texto plano extraído del OCR
+        Plain text extracted from OCR
     """
     text_parts = []
     n_items = len(ocr_data.get('text', []))
@@ -796,8 +796,8 @@ def convert_ocr_text_to_words_format(ocr_text: str, page_number: int = 1) -> lis
     Esta función está deprecada. Usar convert_ocr_data_to_words_format() en su lugar.
     
     Args:
-        ocr_text: Texto extraído por OCR
-        page_number: Número de página
+        ocr_text: Text extracted by OCR
+        page_number: Page number
     
     Returns:
         Lista de diccionarios con formato: 
@@ -855,28 +855,28 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
         Exception: Si Tesseract no está disponible o hay error
     """
     if not TESSERACT_AVAILABLE:
-        raise Exception("Tesseract OCR no está disponible. Instala: pip install pytesseract pymupdf pillow")
+        raise Exception("Tesseract OCR is not available. Install: pip install pytesseract pymupdf pillow")
     
-    # Configurar Tesseract si es necesario
+    # Configure Tesseract if necessary
     if not configure_tesseract():
-        raise Exception("Tesseract OCR no encontrado. Instala Tesseract desde: https://github.com/UB-Mannheim/tesseract/wiki")
+        raise Exception("Tesseract OCR not found. Install Tesseract from: https://github.com/UB-Mannheim/tesseract/wiki")
     
-    print("[INFO] Extrayendo texto con Tesseract OCR local (100% privado)...")
+    print("[INFO] Extracting text with local Tesseract OCR (100% private)...")
     
     extracted_data = []
     
     try:
-        # Usar PyMuPDF para convertir PDF a imágenes (no requiere Poppler)
+        # Use PyMuPDF to convert PDF to images (does not require Poppler)
         doc = fitz.open(pdf_path)
         
         for page_num in range(len(doc)):
             page = doc[page_num]
-            print(f"[INFO] Procesando página {page_num + 1}/{len(doc)} con OCR...")
+            print(f"[INFO] Processing page {page_num + 1}/{len(doc)} with OCR...")
             
-            # Convertir página a imagen (alta resolución)
-            # Aumentar a 3.0x para mejor precisión en dígitos (8 vs 5, etc.)
-            # Las coordenadas se normalizarán después para mantener compatibilidad con rangos de columnas
-            zoom_factor = 3.0  # Aumentado de 2.0 a 3.0 para mejor precisión OCR
+            # Convert page to image (high resolution)
+            # Increased to 3.0x for better precision in digits (8 vs 5, etc.)
+            # Coordinates will be normalized later to maintain compatibility with column ranges
+            zoom_factor = 3.0  # Increased from 2.0 to 3.0 for better OCR precision
             mat = fitz.Matrix(zoom_factor, zoom_factor)
             pix = page.get_pixmap(matrix=mat)
             img_data = pix.tobytes("png")
@@ -888,12 +888,12 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
             # Hacer OCR con coordenadas reales
             ocr_data = pytesseract.image_to_data(img, lang=lang, output_type=pytesseract.Output.DICT)
             
-            # Extraer texto plano para mantener compatibilidad con 'content'
+            # Extract plain text to maintain compatibility with 'content'
             text = extract_text_from_ocr_data(ocr_data)
             
-            # Convertir datos OCR a formato de palabras con coordenadas reales
-            # IMPORTANTE: Normalizar coordenadas dividiendo por zoom_factor para mantener compatibilidad
-            # con los rangos de columnas calibrados para 2.0x
+            # Convert OCR data to word format with real coordinates
+            # IMPORTANT: Normalize coordinates by dividing by zoom_factor to maintain compatibility
+            # with column ranges calibrated for 2.0x
             words = convert_ocr_data_to_words_format(ocr_data, zoom_normalization_factor=zoom_factor / 2.0)
             
             extracted_data.append({
@@ -904,7 +904,7 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
         
         doc.close()
         
-        print(f"[OK] OCR completado. Páginas procesadas: {len(extracted_data)}")
+        print(f"[OK] OCR completed. Pages processed: {len(extracted_data)}")
         return extracted_data
         
     except Exception as e:
@@ -918,12 +918,12 @@ def filter_hsbc_movements_section(pages_data: list, start_string: str, end_strin
     que forman el string de inicio.
     
     Args:
-        pages_data: Lista de diccionarios con formato [{"page": int, "words": list}, ...]
-        start_string: String que marca el inicio de la sección (ej: "DETALLE MOVIMIENTOS HSBC")
-        end_string: String que marca el fin de la sección (ej: "CoDi")
+        pages_data: List of dictionaries with format [{"page": int, "words": list}, ...]
+        start_string: String that marks the start of the section (e.g.: "DETALLE MOVIMIENTOS HSBC")
+        end_string: String that marks the end of the section (e.g.: "CoDi")
     
     Returns:
-        Lista de palabras filtradas que están en la sección de movimientos
+        List of filtered words that are in the movements section
     """
     filtered_words = []
     in_section = False
@@ -1017,63 +1017,63 @@ def filter_hsbc_movements_section(pages_data: list, start_string: str, end_strin
 
 def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict = None) -> list:
     """
-    Extrae movimientos de HSBC del texto OCR usando coordenadas X reales.
-    Asigna montos a columnas (Cargos/Abonos/Saldo) basándose en posición X, no en palabras clave.
+    Extracts HSBC movements from OCR text using real X coordinates.
+    Assigns amounts to columns (Charges/Credits/Balance) based on X position, not keywords.
     
-    IMPORTANTE: Solo extrae información después de "ISR Retenido en el año" y antes de "CoDi"
+    IMPORTANT: Only extracts information after "ISR Retenido en el año" and before "CoDi"
     
     Args:
-        pages_data: Lista de diccionarios con formato [{"page": int, "content": str, "words": list}, ...]
-        columns_config: Diccionario con rangos X de columnas desde BANK_CONFIGS.
-                       Formato: {"cargos": (x_min, x_max), "abonos": (x_min, x_max), "saldo": (x_min, x_max), ...}
+        pages_data: List of dictionaries with format [{"page": int, "content": str, "words": list}, ...]
+        columns_config: Dictionary with X ranges for columns from BANK_CONFIGS.
+                       Format: {"cargos": (x_min, x_max), "abonos": (x_min, x_max), "saldo": (x_min, x_max), ...}
     
     Returns:
-        Lista de diccionarios con movimientos: [{"fecha": str, "descripcion": str, "cargos": str, "abonos": str, "saldo": str}, ...]
-        - fecha: Solo el día (ej: "03", "13")
-        - descripcion: Descripción completa del movimiento
-        - cargos: Monto si es retiro/cargo (ej: "$9,500.00") o vacío
-        - abonos: Monto si es depósito/abono (ej: "$278,400.00") o vacío
-        - saldo: Saldo después del movimiento (ej: "$466,722.66")
+        List of dictionaries with movements: [{"fecha": str, "descripcion": str, "cargos": str, "abonos": str, "saldo": str}, ...]
+        - fecha: Only the day (e.g.: "03", "13")
+        - descripcion: Complete movement description
+        - cargos: Amount if withdrawal/charge (e.g.: "$9,500.00") or empty
+        - abonos: Amount if deposit/credit (e.g.: "$278,400.00") or empty
+        - saldo: Balance after movement (e.g.: "$466,722.66")
     """
     movements = []
     all_text = '\n'.join([p.get('content', '') for p in pages_data])
     lines = all_text.split('\n')
     
-    # Buscar sección de movimientos después de "ISR Retenido en el año" y antes de "CoDi"
+    # Search for movements section after "ISR Retenido en el año" and before "CoDi"
     in_movements_section = False
     start_found = False
     
-    # Patrón para detectar inicio de sección de movimientos
+    # Pattern to detect start of movements section
     start_pattern = re.compile(r'ISR\s+Retenido\s+en\s+el\s+a[ñn]o', re.IGNORECASE)
     
-    # Patrón para detectar fin de sección de movimientos
+    # Pattern to detect end of movements section
     end_pattern = re.compile(r'\bCoDi\b', re.IGNORECASE)
     
-    # Patrón para detectar día al inicio de línea (01-31)
+    # Pattern to detect day at start of line (01-31)
     day_pattern = re.compile(r'^(\d{1,2})\s+')
     
-    # Patrón para detectar montos ($X,XXX.XX) - incluye el símbolo $ en el resultado
-    # Mejorado para capturar montos con espacios internos (ej: "$721 588.28" -> "$721,588.28")
-    # Captura montos completos incluyendo espacios internos: $ seguido de dígitos con espacios/comas, y opcionalmente .XX
-    # El patrón captura: "$721 588.28", "$721,588.28", "$ 278,400.00", etc.
-    # Usa un patrón que captura desde $ hasta encontrar un espacio seguido de texto no numérico o fin de línea
-    # Patrón mejorado que captura montos completos con espacios internos
-    # Captura: $ seguido de dígitos con espacios/comas entre grupos, y opcionalmente .XX
-    # El patrón debe capturar "$721 588.28" completo, no solo "$721"
-    # Usa un patrón más flexible que captura desde $ hasta encontrar un espacio seguido de texto no numérico
-    # o hasta el fin de línea, pero incluyendo espacios internos entre dígitos
+    # Pattern to detect amounts ($X,XXX.XX) - includes $ symbol in result
+    # Improved to capture amounts with internal spaces (e.g.: "$721 588.28" -> "$721,588.28")
+    # Captures complete amounts including internal spaces: $ followed by digits with spaces/commas, and optionally .XX
+    # Pattern captures: "$721 588.28", "$721,588.28", "$ 278,400.00", etc.
+    # Uses a pattern that captures from $ until finding a space followed by non-numeric text or end of line
+    # Improved pattern that captures complete amounts with internal spaces
+    # Captures: $ followed by digits with spaces/commas between groups, and optionally .XX
+    # Pattern must capture "$721 588.28" completely, not just "$721"
+    # Uses a more flexible pattern that captures from $ until finding a space followed by non-numeric text
+    # or until end of line, but including internal spaces between digits
     amount_pattern = re.compile(r'(\$\s*\d{1,3}(?:[,\s]\d{3})*(?:\s+\d{3})*(?:\.\d{2})?)')
     
-    # Validar que columns_config tenga los rangos necesarios
+    # Validate that columns_config has required ranges
     if not columns_config:
-        raise ValueError("columns_config es requerido. Debe contener rangos X para 'cargos', 'abonos' y 'saldo'.")
+        raise ValueError("columns_config is required. Must contain X ranges for 'cargos', 'abonos' and 'saldo'.")
     
     required_columns = ['cargos', 'abonos', 'saldo']
     missing_columns = [col for col in required_columns if col not in columns_config]
     if missing_columns:
-        raise ValueError(f"columns_config debe contener rangos para: {missing_columns}")
+        raise ValueError(f"columns_config must contain ranges for: {missing_columns}")
     
-    # Obtener rangos X de columnas
+    # Get X ranges for columns
     cargos_range = columns_config.get('cargos')
     abonos_range = columns_config.get('abonos')
     saldo_range = columns_config.get('saldo')
@@ -1083,36 +1083,36 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict 
         line_count += 1
         line = line.strip()
         
-        # Detectar inicio de sección de movimientos
+        # Detect start of movements section
         if not start_found:
             if start_pattern.search(line):
                 start_found = True
                 in_movements_section = True
                 continue
         
-        # Detectar fin de sección de movimientos
+        # Detect end of movements section
         if in_movements_section and end_pattern.search(line):
-            break  # Detener completamente la extracción
+            break  # Stop extraction completely
         
         if not in_movements_section:
             continue
         
-        # Buscar línea que empieza con día (01-31)
+        # Search for line starting with day (01-31)
         day_match = day_pattern.match(line)
         if not day_match:
             continue
         
-        # Solo imprimir debug si la línea contiene "I.V.A." o "IVA"
+        # Only print debug if line contains "I.V.A." or "IVA"
         contains_iva = 'I.V.A.' in line or 'IVA' in line or '1VA' in line
         
-        # Extraer todos los montos en la línea
-        # Usar un método más robusto que capture montos completos con espacios internos
-        # Buscar todas las posiciones de $ en la línea
+        # Extract all amounts in the line
+        # Use a more robust method that captures complete amounts with internal spaces
+        # Find all $ positions in the line
         dollar_positions = [i for i, char in enumerate(line) if char == '$']
         amounts_raw = []
         
         for pos in dollar_positions:
-            # Capturar desde $ hasta el siguiente $ o hasta espacio seguido de letra (no dígito)
+            # Capture from $ until next $ or until space followed by letter (not digit)
             remaining = line[pos:]
             # Buscar el monto completo: desde $ hasta encontrar espacio seguido de letra o siguiente $
             # Patrón: $ seguido de dígitos, espacios, comas, puntos
@@ -1337,41 +1337,41 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict 
         
         if movement['descripcion'] and (movement['cargos'] or movement['abonos'] or movement['saldo']):
             movements.append(movement)
-    print(f"    Total de líneas procesadas: {line_count}")
-    print(f"    Sección de movimientos encontrada: {start_found}")
-    print(f"    Total de movimientos extraídos: {len(movements)}")
+    print(f"    Total lines processed: {line_count}")
+    print(f"    Movements section found: {start_found}")
+    print(f"    Total movements extracted: {len(movements)}")
     if movements:
-        print(f"    Primer movimiento: fecha='{movements[0]['fecha']}', descripcion='{movements[0]['descripcion'][:50]}'")
-        print(f"    Último movimiento: fecha='{movements[-1]['fecha']}', descripcion='{movements[-1]['descripcion'][:50]}'")
+        print(f"    First movement: fecha='{movements[0]['fecha']}', descripcion='{movements[0]['descripcion'][:50]}'")
+        print(f"    Last movement: fecha='{movements[-1]['fecha']}', descripcion='{movements[-1]['descripcion'][:50]}'")
     else:
-        print(f"    ⚠️  NO SE EXTRAJERON MOVIMIENTOS")
+        print(f"    ⚠️  NO MOVEMENTS EXTRACTED")
     
     return movements
 
 
 def find_amount_coordinates(amount_text: str, line_text: str, line_y_approx: float, pages_data: list, y_tolerance: float = 15) -> tuple:
     """
-    Encuentra las coordenadas X reales de un monto en pages_data['words'] usando coordenadas reales del OCR.
+    Finds the real X coordinates of an amount in pages_data['words'] using real OCR coordinates.
     
     Args:
-        amount_text: Texto del monto (ej: "$30,022.54")
-        line_text: Texto completo de la línea donde aparece el monto
-        line_y_approx: Posición Y aproximada de la línea (para filtrar palabras)
-        pages_data: Lista de diccionarios con palabras y coordenadas
-        y_tolerance: Tolerancia en píxeles para buscar en la misma línea Y (reducida a 15 para coordenadas reales)
+        amount_text: Amount text (e.g.: "$30,022.54")
+        line_text: Complete text of the line where the amount appears
+        line_y_approx: Approximate Y position of the line (to filter words)
+        pages_data: List of dictionaries with words and coordinates
+        y_tolerance: Tolerance in pixels to search on the same Y line (reduced to 15 for real coordinates)
     
     Returns:
-        Tupla (x0, x1) con coordenadas X del monto, o (None, None) si no se encuentra
+        Tuple (x0, x1) with X coordinates of the amount, or (None, None) if not found
     """
-    # Normalizar amount_text para comparación (quitar espacios, normalizar formato)
+    # Normalize amount_text for comparison (remove spaces, normalize format)
     amount_normalized = amount_text.replace(' ', '').replace(',', '').replace('$', '')
     
-    # Debug: mostrar información de búsqueda
-    print(f"    [DEBUG find_amount_coordinates] Buscando monto: '{amount_text}' (normalizado: '{amount_normalized}')")
-    print(f"    [DEBUG find_amount_coordinates] Línea Y aproximada: {line_y_approx:.1f}, tolerancia: {y_tolerance}")
-    print(f"    [DEBUG find_amount_coordinates] Línea completa: '{line_text[:100]}'")
+    # Debug: show search information
+    print(f"    [DEBUG find_amount_coordinates] Searching for amount: '{amount_text}' (normalized: '{amount_normalized}')")
+    print(f"    [DEBUG find_amount_coordinates] Approximate Y line: {line_y_approx:.1f}, tolerance: {y_tolerance}")
+    print(f"    [DEBUG find_amount_coordinates] Complete line: '{line_text[:100]}'")
     
-    # Buscar en todas las páginas
+    # Search in all pages
     words_checked = 0
     words_in_y_range = 0
     for page_data in pages_data:
@@ -1411,7 +1411,7 @@ def find_amount_coordinates(amount_text: str, line_text: str, line_y_approx: flo
             
             # Buscar si el monto está contenido en esta palabra o en palabras adyacentes
             if amount_normalized in word_normalized or word_normalized in amount_normalized:
-                print(f"    [DEBUG find_amount_coordinates] ✓ Encontrado en palabra: '{word_text}' (Y: {word_y:.1f}, X: {word_x0:.1f}-{word_x1:.1f}, conf: {word_conf:.1f})")
+                print(f"    [DEBUG find_amount_coordinates] ✓ Found in word: '{word_text}' (Y: {word_y:.1f}, X: {word_x0:.1f}-{word_x1:.1f}, conf: {word_conf:.1f})")
                 return (word_x0, word_x1)
             
             # También buscar si el monto aparece como parte de la línea
@@ -1440,7 +1440,7 @@ def find_amount_coordinates(amount_text: str, line_text: str, line_y_approx: flo
                             # Normalizar y comparar
                             combined_normalized = combined_text.replace(' ', '').replace(',', '').replace('$', '')
                             if amount_normalized in combined_normalized:
-                                print(f"    [DEBUG find_amount_coordinates] ✓ Encontrado en palabras combinadas (line_num={word_line_num}): '{combined_text}' (X: {combined_x0:.1f}-{combined_x1:.1f})")
+                                print(f"    [DEBUG find_amount_coordinates] ✓ Found in combined words (line_num={word_line_num}): '{combined_text}' (X: {combined_x0:.1f}-{combined_x1:.1f})")
                                 return (combined_x0, combined_x1)
                             
                             # Si ya tenemos suficientes caracteres, detener
@@ -1468,7 +1468,7 @@ def find_amount_coordinates(amount_text: str, line_text: str, line_y_approx: flo
                         # Normalizar y comparar
                         combined_normalized = combined_text.replace(' ', '').replace(',', '').replace('$', '')
                         if amount_normalized in combined_normalized:
-                            print(f"    [DEBUG find_amount_coordinates] ✓ Encontrado en palabras combinadas: '{combined_text}' (X: {combined_x0:.1f}-{combined_x1:.1f})")
+                            print(f"    [DEBUG find_amount_coordinates] ✓ Found in combined words: '{combined_text}' (X: {combined_x0:.1f}-{combined_x1:.1f})")
                             return (combined_x0, combined_x1)
                         
                         # Si ya tenemos suficientes caracteres, detener
@@ -1476,7 +1476,7 @@ def find_amount_coordinates(amount_text: str, line_text: str, line_y_approx: flo
                             break
     
     # Debug: mostrar estadísticas si no se encontró
-    print(f"    [DEBUG find_amount_coordinates] ✗ NO encontrado. Palabras revisadas: {words_checked}, en rango Y: {words_in_y_range}")
+    print(f"    [DEBUG find_amount_coordinates] ✗ NOT found. Words checked: {words_checked}, in Y range: {words_in_y_range}")
     print(f"    [DEBUG find_amount_coordinates] Posibles causas:")
     print(f"        - line_y_approx ({line_y_approx:.1f}) no coincide con Y real de las palabras")
     print(f"        - El monto está dividido en múltiples palabras y no se combinó correctamente")
@@ -1816,7 +1816,7 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                         match = re.search(r'[-\s]+RETIROS\s+([\d,\.]+)', section_text, re.I)
                         if match:
                             retiros = normalize_amount_str(match.group(1))
-                            print(f"✅ Santander: Encontrado RETIROS: ${retiros:,.2f}")
+                            print(f"✅ Santander: Found WITHDRAWALS: ${retiros:,.2f}")
                             if retiros > 0:
                                 summary_data['total_retiros'] = retiros
                                 summary_data['total_cargos'] = retiros
@@ -2530,7 +2530,7 @@ def create_validation_sheet(pdf_summary: dict, extracted_totals: dict, has_saldo
     ext_abonos = extracted_totals.get('total_abonos', 0.0)
     
     abonos_match = pdf_abonos is None or abs(pdf_abonos - ext_abonos) < tolerance
-    valor_en_pdf = f"${pdf_abonos:,.2f}" if pdf_abonos else "No encontrado"
+    valor_en_pdf = f"${pdf_abonos:,.2f}" if pdf_abonos else "Not found"
     
     validation_row = {
         'Concepto': 'Total Abonos / Depósitos',
@@ -2547,7 +2547,7 @@ def create_validation_sheet(pdf_summary: dict, extracted_totals: dict, has_saldo
     cargos_match = pdf_cargos is None or abs(pdf_cargos - ext_cargos) < tolerance
     validation_data.append({
         'Concepto': 'Total Cargos / Retiros',
-        'Valor en PDF': f"${pdf_cargos:,.2f}" if pdf_cargos else "No encontrado",
+        'Valor en PDF': f"${pdf_cargos:,.2f}" if pdf_cargos else "Not found",
         'Valor Extraído': f"${ext_cargos:,.2f}",
         'Diferencia': f"${abs(pdf_cargos - ext_cargos):,.2f}" if pdf_cargos else "N/A",
         'Estado': '✓' if cargos_match else '✗'
@@ -2561,7 +2561,7 @@ def create_validation_sheet(pdf_summary: dict, extracted_totals: dict, has_saldo
         saldo_match = pdf_saldo is None or abs(pdf_saldo - ext_saldo) < tolerance
         validation_data.append({
             'Concepto': 'Saldo Final',
-            'Valor en PDF': f"${pdf_saldo:,.2f}" if pdf_saldo else "No encontrado",
+            'Valor en PDF': f"${pdf_saldo:,.2f}" if pdf_saldo else "Not found",
             'Valor Extraído': f"${ext_saldo:,.2f}",
             'Diferencia': f"${abs(pdf_saldo - ext_saldo):,.2f}" if pdf_saldo else "N/A",
             'Estado': '✓' if saldo_match else '✗'
@@ -2573,7 +2573,7 @@ def create_validation_sheet(pdf_summary: dict, extracted_totals: dict, has_saldo
     mov_match = pdf_mov is None or pdf_mov == ext_mov
     validation_data.append({
         'Concepto': 'Total de Movimientos',
-        'Valor en PDF': str(pdf_mov) if pdf_mov else "No encontrado",
+        'Valor en PDF': str(pdf_mov) if pdf_mov else "Not found",
         'Valor Extraído': str(ext_mov),
         'Diferencia': str(abs(pdf_mov - ext_mov)) if pdf_mov else "N/A",
         'Estado': '✓' if mov_match else '✗'
@@ -4167,7 +4167,7 @@ def main():
         sys.exit(0)
 
     if not os.path.isfile(pdf_path):
-        print(f"❌ Error: Archivo no encontrado: {pdf_path}")
+        print(f"❌ Error: File not found: {pdf_path}")
         sys.exit(1)
 
     if not pdf_path.lower().endswith(".pdf"):
@@ -4359,7 +4359,7 @@ def main():
                 if banbajio_header_pattern and detalle_found and not header_line_skipped:
                     if banbajio_header_pattern.search(ln):
                         header_line_skipped = True
-                        print(f"✅ BanBajío: Header encontrado en página {p['page']}, línea {i+1}: {ln[:100]}")
+                        print(f"✅ BanBajío: Header found on page {p['page']}, line {i+1}: {ln[:100]}")
                         # After header, start extraction from next line (could be "SALDO INICIAL" or first movement)
                         if i + 1 < len(p['lines']):
                             movement_start_found = True
