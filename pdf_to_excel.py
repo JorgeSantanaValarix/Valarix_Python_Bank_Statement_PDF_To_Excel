@@ -2462,13 +2462,28 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
             ~df_for_totals['Descripción'].astype(str).str.contains('PAGO DE INTERES', case=False, na=False)
         ]
     
+    # For Scotiabank, exclude "COBRO DE COMISION" and "IVA POR COMISIONES" 
+    # from Cargos calculation only (not from Abonos)
+    # because these are not included in the summary totals on the PDF cover page
+    if bank_name == 'Scotiabank' and 'Descripción' in df_for_totals.columns:
+        # Create a separate DataFrame for Cargos calculation (excluding commission rows)
+        df_for_cargos = df_for_totals[
+            ~df_for_totals['Descripción'].astype(str).str.contains('COBRO DE COMISION', case=False, na=False) &
+            ~df_for_totals['Descripción'].astype(str).str.contains('IVA POR COMISIONES', case=False, na=False)
+        ]
+    else:
+        # For other banks, use the same DataFrame for both Abonos and Cargos
+        df_for_cargos = df_for_totals
+    
     # Calculate based on available columns
     if 'Abonos' in df_for_totals.columns:
         totals['total_abonos'] = df_for_totals['Abonos'].apply(normalize_amount_str).sum()
         totals['total_depositos'] = totals['total_abonos']
     
     if 'Cargos' in df_for_totals.columns:
-        totals['total_cargos'] = df_for_totals['Cargos'].apply(normalize_amount_str).sum()
+        # For Scotiabank, use df_for_cargos (which excludes commission rows)
+        # For other banks, df_for_cargos will be the same as df_for_totals
+        totals['total_cargos'] = df_for_cargos['Cargos'].apply(normalize_amount_str).sum()
         totals['total_retiros'] = totals['total_cargos']
     
     # Get final balance (last row's saldo if available)
