@@ -156,7 +156,90 @@ print(f"Inglés disponible: {'eng' in langs}")
 
 ## Uso del Script
 
-Una vez completada la instalación, puedes usar el script:
+### Ejemplo de Integración
+
+Llamar a `pdf_to_excel.py` desde C#:
+
+```csharp
+using System.Diagnostics;
+using System.IO;
+using System.Text.RegularExpressions;
+
+// TODO: Obtener ruta del PDF desde la base de datos
+string pdfPath = GetPdfPathFromDatabase();
+
+// Ejecutar script Python
+var startInfo = new ProcessStartInfo
+{
+    FileName = "python",
+    Arguments = $"\"pdf_to_excel.py\" \"{pdfPath}\"",
+    RedirectStandardOutput = true,
+    RedirectStandardError = true,
+    UseShellExecute = false,
+    CreateNoWindow = true
+};
+
+using (var process = Process.Start(startInfo))
+{
+    string output = process.StandardOutput.ReadToEnd();
+    string error = process.StandardError.ReadToEnd();
+    process.WaitForExit();
+    
+    if (process.ExitCode == 0)
+    {
+        // Extraer ruta del Excel del output: "✅ Excel file created successfully -> {path}"
+        var match = Regex.Match(output, @"Excel file created successfully -> (.+)");
+        string excelPath = match.Success ? match.Groups[1].Value.Trim() : Path.ChangeExtension(pdfPath, ".xlsx");
+        
+        // TODO: Actualizar base de datos con excelPath y estado 'Done'
+        UpdateDatabaseWithExcelPath(pdfPath, excelPath, "Done", null);
+    }
+    else
+    {
+        // TODO: Actualizar base de datos con estado 'Failed' y mensaje de error
+        UpdateDatabaseWithExcelPath(pdfPath, null, "Failed", error);
+    }
+}
+
+// Método dummy: Obtener ruta del PDF desde la base de datos
+static string GetPdfPathFromDatabase()
+{
+    // TODO: Reemplazar con consulta real a la base de datos
+    // Ejemplo SQL: SELECT PDFTOOLPATH FROM BANK_STTEMENT_SEARCH_HISTORY_FORWINDOWSERVICE WHERE Status = 'Pending'
+    return @"Test\Bank Statement\BBVA.pdf";
+}
+
+// Método dummy: Actualizar base de datos con ruta del Excel y estado
+static void UpdateDatabaseWithExcelPath(string pdfPath, string excelPath, string status, string errorMessage)
+{
+    // TODO: Reemplazar con actualización real a la base de datos
+    // Ejemplo SQL: UPDATE BANK_STTEMENT_SEARCH_HISTORY_FORWINDOWSERVICE 
+    // SET FILEPATH = @excelPath, Status = @status, ErrorMessage = @errorMessage
+    // WHERE PDFTOOLPATH = @pdfPath
+}
+```
+
+### Formato de Salida del Script
+
+El script Python imprime lo siguiente en stdout, que C# puede capturar:
+
+- `Reading PDF...`
+- `🏦 Bank detected: [nombre del banco]`
+- `📊 Exporting to Excel...`
+- `✅ VALIDATION: ALL CORRECT` (o `THERE ARE DIFFERENCES`)
+- `✅ Excel file created successfully -> [ruta completa al archivo Excel]`
+
+La última línea es la más importante, ya que contiene la ruta del archivo Excel que C# extrae usando regex.
+
+### Códigos de Salida
+
+El script retorna los siguientes códigos de salida:
+- `0` = Éxito (Excel creado correctamente)
+- `1` = Error (revisar mensajes de error en stderr)
+
+### Uso Directo desde Línea de Comandos (Opcional)
+
+También puedes ejecutar el script directamente desde la línea de comandos para pruebas:
 
 ```bash
 python pdf_to_excel.py "ruta\al\archivo.pdf"
@@ -164,21 +247,12 @@ python pdf_to_excel.py "ruta\al\archivo.pdf"
 
 El script generará un archivo Excel con el mismo nombre que el PDF pero con extensión `.xlsx`.
 
-### Ejemplo
-
+**Ejemplo:**
 ```bash
 python pdf_to_excel.py "Test\Bank Statement\BBVA.pdf"
 ```
 
 Esto generará: `Test\Bank Statement\BBVA.xlsx`
-
-### Salida del Script
-
-El script mostrará:
-- 🏦 Banco detectado: [nombre del banco]
-- 📊 Exporting to Excel...
-- ✅ VALIDACIÓN: TODO CORRECTO (o HAY DIFERENCIAS)
-- ✅ Excel file created -> [ruta del archivo]
 
 ---
 
