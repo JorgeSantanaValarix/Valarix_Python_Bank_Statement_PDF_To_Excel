@@ -598,7 +598,7 @@ def extract_text_from_ocr_data(ocr_data: dict) -> str:
     Extracts plain text from OCR data to maintain compatibility with 'content'.
     
     Args:
-        ocr_data: Diccionario con datos de pytesseract.image_to_data()
+        ocr_data: Dictionary with data from pytesseract.image_to_data()
     
     Returns:
         Plain text extracted from OCR
@@ -611,7 +611,7 @@ def extract_text_from_ocr_data(ocr_data: dict) -> str:
         text = ocr_data.get('text', [])[i] if i < len(ocr_data.get('text', [])) else ''
         conf = float(ocr_data.get('conf', [])[i]) if i < len(ocr_data.get('conf', [])) else 0
         
-        # Solo agregar palabras (level == 5) con texto y confianza > 0
+        # Only add words (level == 5) with text and confidence > 0
         if level == 5 and text and conf > 0:
             text_parts.append(text)
     
@@ -620,16 +620,16 @@ def extract_text_from_ocr_data(ocr_data: dict) -> str:
 
 def convert_ocr_data_to_words_format(ocr_data: dict, zoom_normalization_factor: float = 1.0) -> list:
     """
-    Convierte datos OCR de pytesseract.image_to_data() a formato de palabras con coordenadas reales.
-    Compatible con el formato esperado por el resto del código.
+    Converts OCR data from pytesseract.image_to_data() to word format with real coordinates.
+    Compatible with the format expected by the rest of the code.
     
     Args:
-        ocr_data: Diccionario con datos de pytesseract.image_to_data()
-        zoom_normalization_factor: Factor para normalizar coordenadas (ej: 3.0/2.0 = 1.5 si se usa zoom 3.0x
-                                   pero los rangos están calibrados para 2.0x). Default: 1.0 (sin normalización)
+        ocr_data: Dictionary with data from pytesseract.image_to_data()
+        zoom_normalization_factor: Factor to normalize coordinates (e.g.: 3.0/2.0 = 1.5 if using 3.0x zoom
+                                   but ranges are calibrated for 2.0x). Default: 1.0 (no normalization)
     
     Returns:
-        Lista de diccionarios con formato: 
+        List of dictionaries with format: 
         [{'text': str, 'x0': float, 'top': float, 'x1': float, 'bottom': float, 'conf': float, 'line_num': int}, ...]
     """
     words = []
@@ -640,7 +640,7 @@ def convert_ocr_data_to_words_format(ocr_data: dict, zoom_normalization_factor: 
         text = ocr_data.get('text', [])[i] if i < len(ocr_data.get('text', [])) else ''
         conf = float(ocr_data.get('conf', [])[i]) if i < len(ocr_data.get('conf', [])) else 0
         
-        # Solo procesar palabras (level == 5) con texto y confianza razonable
+        # Only process words (level == 5) with text and reasonable confidence
         if level == 5 and text and conf > 0:
             left = float(ocr_data.get('left', [])[i]) if i < len(ocr_data.get('left', [])) else 0
             top = float(ocr_data.get('top', [])[i]) if i < len(ocr_data.get('top', [])) else 0
@@ -648,7 +648,7 @@ def convert_ocr_data_to_words_format(ocr_data: dict, zoom_normalization_factor: 
             height = float(ocr_data.get('height', [])[i]) if i < len(ocr_data.get('height', [])) else 0
             line_num = int(ocr_data.get('line_num', [])[i]) if i < len(ocr_data.get('line_num', [])) else 0
             
-            # Normalizar coordenadas si es necesario (para mantener compatibilidad con rangos calibrados)
+            # Normalize coordinates if necessary (to maintain compatibility with calibrated ranges)
             if zoom_normalization_factor != 1.0:
                 left = left / zoom_normalization_factor
                 top = top / zoom_normalization_factor
@@ -695,34 +695,34 @@ def fix_ocr_date_errors(date_text: str, bank_name: str = None) -> str:
     
     original_text = date_text.strip()
     
-    # Correcciones comunes de OCR para dígitos en fechas
-    # Buscar y reemplazar patrones comunes al inicio del texto (donde está la fecha)
+    # Common OCR corrections for digits in dates
+    # Search and replace common patterns at the start of text (where the date is)
     
-    # Patrón 1: "og" al inicio → "09" (muy común, caso específico del usuario)
-    # Puede estar solo "og" o "og " seguido de más texto
+    # Pattern 1: "og" at start → "09" (very common, specific user case)
+    # Can be just "og" or "og " followed by more text
     if original_text.lower().startswith('og'):
-        # Reemplazar "og" al inicio con "09"
+        # Replace "og" at start with "09"
         corrected = re.sub(r'^og\b', '09', original_text, flags=re.IGNORECASE)
         if corrected != original_text:
             return corrected
     
-    # Patrón 2: "o" seguido de dígito al inicio (0 confundido con o)
-    # Ejemplos: "o1" → "01", "o2" → "02", etc.
+    # Pattern 2: "o" followed by digit at start (0 confused with o)
+    # Examples: "o1" → "01", "o2" → "02", etc.
     o_digit_pattern = re.compile(r'^o([0-9])(\s|$)', re.IGNORECASE)
     match = o_digit_pattern.match(original_text)
     if match:
         digit = match.group(1)
-        # Solo corregir si el resultado es un día válido (01-09)
+        # Only correct if the result is a valid day (01-09)
         if 1 <= int(digit) <= 9:
             return re.sub(r'^o([0-9])', f'0\\1', original_text, flags=re.IGNORECASE)
     
-    # Patrón 3: Dígito seguido de "g" al inicio (9 confundido con g)
-    # Ejemplos: "1g" → "19", "2g" → "29", etc.
+    # Pattern 3: Digit followed by "g" at start (9 confused with g)
+    # Examples: "1g" → "19", "2g" → "29", etc.
     digit_g_pattern = re.compile(r'^([0-3])g(\s|$)', re.IGNORECASE)
     match = digit_g_pattern.match(original_text)
     if match:
         digit = match.group(1)
-        # Solo corregir si el resultado es un día válido (19, 29)
+        # Only correct if the result is a valid day (19, 29)
         corrected_day = int(f"{digit}9")
         if 1 <= corrected_day <= 31:
             return re.sub(r'^([0-3])g', f'\\19', original_text, flags=re.IGNORECASE)
@@ -734,8 +734,8 @@ def fix_ocr_date_errors(date_text: str, bank_name: str = None) -> str:
     return date_text
 
 
-# DESHABILITADO: Esta función estaba causando problemas al convertir "30.40" en "$0.40"
-# Ya no es necesaria después de mejorar la resolución del OCR
+# DISABLED: This function was causing problems converting "30.40" to "$0.40"
+# No longer necessary after improving OCR resolution
 # def fix_ocr_amount_errors(word_text: str, word_x0: float, columns_config: dict, bank_name: str = None) -> str:
 #     """
 #     Corrige errores comunes del OCR en montos, usando coordenadas X para validar.
@@ -792,34 +792,34 @@ def fix_ocr_date_errors(date_text: str, bank_name: str = None) -> str:
 
 def convert_ocr_text_to_words_format(ocr_text: str, page_number: int = 1) -> list:
     """
-    [DEPRECATED] Convierte texto OCR a formato de palabras con coordenadas aproximadas.
-    Esta función está deprecada. Usar convert_ocr_data_to_words_format() en su lugar.
+    [DEPRECATED] Converts OCR text to word format with approximate coordinates.
+    This function is deprecated. Use convert_ocr_data_to_words_format() instead.
     
     Args:
         ocr_text: Text extracted by OCR
         page_number: Page number
     
     Returns:
-        Lista de diccionarios con formato: 
+        List of dictionaries with format: 
         [{'text': str, 'x0': float, 'top': float, 'x1': float, 'bottom': float}, ...]
     """
     words = []
     lines = ocr_text.split('\n')
     
-    y_pos = 100  # Posición Y inicial
+    y_pos = 100  # Initial Y position
     
     for line in lines:
         if not line.strip():
-            y_pos += 20  # Espacio entre líneas
+            y_pos += 20  # Space between lines
             continue
         
-        # Dividir línea en palabras
+        # Split line into words
         line_words = line.split()
-        x_pos = 50  # Posición X inicial
+        x_pos = 50  # Initial X position
         
         for word_text in line_words:
             if word_text.strip():
-                # Aproximación de ancho basado en longitud del texto
+                # Approximate width based on text length
                 word_width = len(word_text) * 8
                 
                 words.append({
@@ -832,27 +832,27 @@ def convert_ocr_text_to_words_format(ocr_text: str, page_number: int = 1) -> lis
                 
                 x_pos += word_width + 10  # Espacio entre palabras
         
-        y_pos += 25  # Altura de línea
+        y_pos += 25  # Line height
     
     return words
 
 
 def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> list:
     """
-    Extrae texto de PDF usando Tesseract OCR local.
-    100% privado - no envía datos a servidores externos.
-    Usa PyMuPDF para convertir PDF a imágenes (no requiere Poppler).
+    Extracts text from PDF using local Tesseract OCR.
+    100% private - does not send data to external servers.
+    Uses PyMuPDF to convert PDF to images (does not require Poppler).
     
     Args:
-        pdf_path: Ruta al archivo PDF
-        lang: Idioma para OCR (default: 'spa+eng' para español+inglés)
+        pdf_path: Path to PDF file
+        lang: Language for OCR (default: 'spa+eng' for Spanish+English)
     
     Returns:
-        Lista de diccionarios con formato: [{"page": int, "content": str, "words": list}, ...]
-        Compatible con el formato de retorno de extract_text_from_pdf.
+        List of dictionaries with format: [{"page": int, "content": str, "words": list}, ...]
+        Compatible with the return format of extract_text_from_pdf.
     
     Raises:
-        Exception: Si Tesseract no está disponible o hay error
+        Exception: If Tesseract is not available or there is an error
     """
     if not TESSERACT_AVAILABLE:
         raise Exception("Tesseract OCR is not available. Install: pip install pytesseract pymupdf pillow")
@@ -881,11 +881,11 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
             pix = page.get_pixmap(matrix=mat)
             img_data = pix.tobytes("png")
             
-            # Convertir a PIL Image
+            # Convert to PIL Image
             from io import BytesIO
             img = Image.open(BytesIO(img_data))
             
-            # Hacer OCR con coordenadas reales
+            # Perform OCR with real coordinates
             ocr_data = pytesseract.image_to_data(img, lang=lang, output_type=pytesseract.Output.DICT)
             
             # Extract plain text to maintain compatibility with 'content'
@@ -928,7 +928,7 @@ def filter_hsbc_movements_section(pages_data: list, start_string: str, end_strin
     filtered_words = []
     in_section = False
     
-    # Normalizar strings para búsqueda (case-insensitive)
+    # Normalize strings for search (case-insensitive)
     start_string_normalized = start_string.upper().strip()
     start_words_list = start_string_normalized.split()
     end_string_normalized = end_string.upper().strip()
@@ -937,15 +937,15 @@ def filter_hsbc_movements_section(pages_data: list, start_string: str, end_strin
         page_num = page_data.get('page', 0)
         words = page_data.get('words', [])
         
-        # Buscar inicio: el string puede estar dividido en múltiples palabras
+        # Search for start: the string may be split across multiple words
         if not in_section:
-            # Construir texto de la página para búsqueda
+            # Build page text for search
             page_text = ' '.join([w.get('text', '').strip() for w in words]).upper()
             
-            # Buscar si el string de inicio está en el texto de la página (puede estar dividido)
+            # Search if the start string is in the page text (may be split)
             if start_string_normalized in page_text:
                 in_section = True
-                # Encontrar la primera palabra después del inicio
+                # Find the first word after the start
                 # Contar palabras hasta llegar al inicio
                 word_count = 0
                 current_text = ''
@@ -954,62 +954,62 @@ def filter_hsbc_movements_section(pages_data: list, start_string: str, end_strin
                     word_text = word.get('text', '').strip()
                     current_text += word_text + ' '
                     if start_string_normalized in current_text.upper():
-                        # Ya pasamos el inicio, encontrar el índice de la última palabra del inicio
-                        # Buscar cuántas palabras forman el inicio
-                        start_word_index = idx + 1  # Empezar desde la siguiente palabra después del inicio
+                        # We've passed the start, find the index of the last word of the start
+                        # Search how many words form the start
+                        start_word_index = idx + 1  # Start from the next word after the start
                         break
                 
-                # Si encontramos el inicio, procesar las palabras restantes de esta página
+                # If we found the start, process the remaining words of this page
                 if start_word_index is not None and start_word_index < len(words):
-                    # Procesar palabras desde después del inicio hasta el final de la página
+                    # Process words from after the start until the end of the page
                     for word in words[start_word_index:]:
                         word_text = word.get('text', '').strip()
                         word_text_upper = word_text.upper()
                         
-                        # Detectar fin (búsqueda case-insensitive y parcial)
+                        # Detect end (case-insensitive and partial search)
                         if end_string_normalized in word_text_upper:
-                            # Detener completamente (no procesar más páginas)
+                            # Stop completely (do not process more pages)
                             return filtered_words
                         
-                        # Agregar información de página a la palabra si no la tiene
+                        # Add page information to word if it doesn't have it
                         if 'page' not in word:
                             word['page'] = page_num
                         
-                        # Agregar palabra a la sección
+                        # Add word to section
                         filtered_words.append(word)
                     
-                    # Continuar con la siguiente página
+                    # Continue with next page
                     continue
         
-        # Si ya estamos en la sección, procesar todas las palabras de esta página
+        # If we're already in the section, process all words of this page
         if in_section:
             for word in words:
                 word_text = word.get('text', '').strip()
                 word_text_upper = word_text.upper()
                 
-                # Detectar fin (búsqueda case-insensitive y parcial)
+                # Detect end (case-insensitive and partial search)
                 if end_string_normalized in word_text_upper:
-                    # Detener completamente (no procesar más páginas)
+                    # Stop completely (do not process more pages)
                     return filtered_words
                 
-                # Agregar información de página a la palabra si no la tiene
+                # Add page information to word if it doesn't have it
                 if 'page' not in word:
                     word['page'] = page_num
                 
-                # Agregar palabra a la sección
+                # Add word to section
                 filtered_words.append(word)
         else:
-            # Buscar inicio palabra por palabra (método alternativo si el método anterior no funcionó)
-            # Construir texto acumulativo de palabras consecutivas
+            # Search for start word by word (alternative method if previous method didn't work)
+            # Build cumulative text of consecutive words
             for i in range(len(words) - len(start_words_list) + 1):
-                # Tomar un grupo de palabras consecutivas del tamaño del string de inicio
+                # Take a group of consecutive words of the size of the start string
                 consecutive_words = words[i:i+len(start_words_list)]
                 consecutive_text = ' '.join([w.get('text', '').strip() for w in consecutive_words]).upper()
                 
-                # Verificar si este grupo de palabras coincide con el string de inicio
+                # Check if this group of words matches the start string
                 if consecutive_text == start_string_normalized or start_string_normalized in consecutive_text:
                     in_section = True
-                    # Continuar desde la siguiente palabra después del inicio
+                    # Continue from the next word after the start
                     break
     
     return filtered_words
@@ -1114,34 +1114,34 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict 
         for pos in dollar_positions:
             # Capture from $ until next $ or until space followed by letter (not digit)
             remaining = line[pos:]
-            # Buscar el monto completo: desde $ hasta encontrar espacio seguido de letra o siguiente $
-            # Patrón: $ seguido de dígitos, espacios, comas, puntos
+            # Search for complete amount: from $ until finding space followed by letter or next $
+            # Pattern: $ followed by digits, spaces, commas, dots
             match = re.match(r'(\$\s*[\d\s,\.]+)', remaining)
             if match:
                 monto_candidato = match.group(1)
-                # Encontrar dónde termina realmente el monto
-                # Buscar el siguiente $ después del primero
+                # Find where the amount really ends
+                # Search for next $ after the first one
                 next_dollar = remaining.find('$', 1)
-                # Buscar espacio seguido de letra (no dígito)
+                # Search for space followed by letter (not digit)
                 next_letter_space = re.search(r'\s+[A-Za-z]', remaining[1:])
                 
                 if next_dollar != -1 and (next_letter_space is None or next_dollar < next_letter_space.start() + 1):
-                    # El siguiente $ está antes del espacio con letra, cortar ahí
+                    # Next $ is before space with letter, cut there
                     monto_candidato = remaining[:next_dollar].strip()
                 elif next_letter_space:
-                    # Hay un espacio seguido de letra, cortar antes de ese espacio
+                    # There is a space followed by letter, cut before that space
                     monto_candidato = remaining[:next_letter_space.start() + 1].strip()
                 else:
-                    # No hay siguiente $ ni espacio con letra, tomar hasta el fin de línea
+                    # No next $ or space with letter, take until end of line
                     monto_candidato = remaining.strip()
                 
                 amounts_raw.append(monto_candidato)
         
         if len(amounts_raw) < 1:
-            continue  # No hay montos, no es un movimiento válido
+            continue  # No amounts, not a valid movement
         
-        # Limpiar montos: reemplazar espacios internos con comas para formato consistente
-        # Ejemplo: "$721 588.28" -> "$721,588.28" o "$ 278,400.00" -> "$278,400.00"
+        # Clean amounts: replace internal spaces with commas for consistent format
+        # Example: "$721 588.28" -> "$721,588.28" or "$ 278,400.00" -> "$278,400.00"
         amounts = []
         for amt in amounts_raw:
             # Primero, quitar espacios después del $ si los hay
@@ -1162,44 +1162,44 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict 
         
         day = day_match.group(1)
         
-        # Extraer descripción y referencia (todo hasta el primer $)
+        # Extract description and reference (everything until the first $)
         first_dollar = line.find('$')
         if first_dollar == -1:
             continue
         
         desc_and_ref = line[day_match.end():first_dollar].strip()
         
-        # Limpiar descripción (normalizar espacios)
+        # Clean description (normalize spaces)
         desc_and_ref = re.sub(r'\s+', ' ', desc_and_ref)
         
-        # Construir movimiento - fecha es solo el día (ej: "03", "13")
+        # Build movement - date is only the day (e.g.: "03", "13")
         movement = {
-            'fecha': day,  # Solo el día, sin mes/año
+            'fecha': day,  # Only the day, without month/year
             'descripcion': desc_and_ref,
             'cargos': '',
             'abonos': '',
             'saldo': ''
         }
         
-        # Asignar montos según coordenadas X (no palabras clave)
-        # Calcular posición Y aproximada de la línea (para buscar coordenadas)
-        # Usar el índice de la línea en el texto para estimar Y
+        # Assign amounts according to X coordinates (not keywords)
+        # Calculate approximate Y position of the line (to search for coordinates)
+        # Use the line index in the text to estimate Y
         line_index = lines.index(line)
-        line_y_approx = 100 + (line_index * 25)  # Estimación: 25 píxeles por línea
+        line_y_approx = 100 + (line_index * 25)  # Estimate: 25 pixels per line
         
-        # Para cada monto, encontrar sus coordenadas X y asignar a columna
+        # For each amount, find its X coordinates and assign to column
         amounts_with_columns = []
         for amount in amounts:
             amount_clean = amount.strip()
             
-            # Encontrar coordenadas X reales del monto
+            # Find real X coordinates of the amount
             x0, x1 = find_amount_coordinates(amount_clean, line, line_y_approx, pages_data, y_tolerance=20)
             
             if x0 is not None and x1 is not None:
-                # Calcular centro del monto para debug
+                # Calculate center of amount for debug
                 x_center = (x0 + x1) / 2
                 
-                # Usar assign_word_to_column() para determinar la columna
+                # Use assign_word_to_column() to determine the column
                 col_name = assign_word_to_column(x0, x1, columns_config)
                 
                 if col_name:
@@ -1225,17 +1225,17 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict 
                     'x1': None
                 })
         
-        # Asignar montos a columnas según resultados
-        # Si hay ambigüedad (monto asignado a cargos pero podría ser abonos), usar contexto
-        # Estrategia: Si hay 2 montos y ambos están en rango de cargos, el más a la izquierda es cargos, el otro es saldo
-        # Si un monto está en rango de cargos pero está más cerca del centro de abonos, reconsiderar
+        # Assign amounts to columns according to results
+        # If there is ambiguity (amount assigned to cargos but could be abonos), use context
+        # Strategy: If there are 2 amounts and both are in cargos range, the leftmost is cargos, the other is saldo
+        # If an amount is in cargos range but is closer to abonos center, reconsider
         
-        # Primero, identificar montos que podrían estar mal asignados
-        # Si un monto está en rango de cargos pero su centro está más cerca del centro de abonos, reconsiderar
+        # First, identify amounts that might be incorrectly assigned
+        # If an amount is in cargos range but its center is closer to abonos center, reconsider
         for amt_data in amounts_with_columns:
             if amt_data['column'] == 'cargos' and amt_data.get('x_center') is not None:
                 x_center = amt_data['x_center']
-                # Calcular distancia a centros de ambos rangos
+                # Calculate distance to centers of both ranges
                 if 'cargos' in columns_config and 'abonos' in columns_config:
                     cargos_min, cargos_max = columns_config['cargos']
                     abonos_min, abonos_max = columns_config['abonos']
@@ -1250,20 +1250,20 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict 
                     dist_cargos = abs(x_center - cargos_center)
                     dist_abonos = abs(x_center - abonos_center)
                     
-                    # Si está significativamente más cerca de abonos (diferencia > 30 píxeles), reconsiderar
+                    # If significantly closer to abonos (difference > 30 pixels), reconsider
                     if dist_abonos < dist_cargos and (dist_cargos - dist_abonos) > 30:
-                        # Verificar si está dentro o cerca del rango de abonos (expandir rango 50 píxeles)
+                        # Check if it's within or near abonos range (expand range 50 pixels)
                         abonos_range_expanded_min = abonos_min - 50
                         abonos_range_expanded_max = abonos_max + 50
                         if abonos_range_expanded_min <= x_center <= abonos_range_expanded_max:
                             amt_data['column'] = 'abonos'
         
-        # Ahora asignar montos a columnas
+        # Now assign amounts to columns
         for amt_data in amounts_with_columns:
             amt = amt_data['amount']
             col = amt_data['column']
             
-            # Solo asignar si la columna no está ya ocupada
+            # Only assign if the column is not already occupied
             if col == 'saldo' and not movement.get('saldo'):
                 movement['saldo'] = amt
             elif col == 'cargos' and not movement.get('cargos'):
@@ -1271,17 +1271,17 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict 
             elif col == 'abonos' and not movement.get('abonos'):
                 movement['abonos'] = amt
         
-        # Asegurar que saldo esté asignado cuando hay 2 montos
-        # Si hay 2 montos y saldo no está asignado, el segundo monto es saldo (estructura típica HSBC)
+        # Ensure saldo is assigned when there are 2 amounts
+        # If there are 2 amounts and saldo is not assigned, the second amount is saldo (typical HSBC structure)
         if len(amounts) == 2 and not movement.get('saldo'):
-            # Verificar si el segundo monto está asignado a otra columna
+            # Check if the second amount is assigned to another column
             second_amt_data = amounts_with_columns[1] if len(amounts_with_columns) > 1 else None
             if second_amt_data and second_amt_data.get('column') and second_amt_data['column'] != 'saldo':
-                # El segundo monto está asignado a otra columna (cargos o abonos), pero debería ser saldo
-                # Reasignar el segundo monto a saldo
+                # The second amount is assigned to another column (cargos or abonos), but should be saldo
+                # Reassign the second amount to saldo
                 movement['saldo'] = amounts[1].strip()
             elif not second_amt_data or not second_amt_data.get('column'):
-                # El segundo monto no está asignado, asignarlo a saldo
+                # The second amount is not assigned, assign it to saldo
                 movement['saldo'] = amounts[1].strip()
         
         # Fallback: si hay montos sin asignar, usar lógica por posición
@@ -1291,17 +1291,17 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict 
             if len(amounts) == 2:
                 assigned_cols = [a['column'] for a in amounts_with_columns if a['column']]
                 
-                # Si saldo aún no está asignado, el segundo monto es saldo
+                # If saldo is still not assigned, the second amount is saldo
                 if 'saldo' not in assigned_cols and not movement.get('saldo'):
                     movement['saldo'] = amounts[1].strip()
                 
-                # Si cargos y abonos no están asignados, el primer monto es cargos (por estructura HSBC)
+                # If cargos and abonos are not assigned, the first amount is cargos (by HSBC structure)
                 if 'cargos' not in assigned_cols and 'abonos' not in assigned_cols and not movement.get('cargos'):
-                    # En HSBC, cuando hay 2 montos, el primero es generalmente Cargos (Retiro/Cargo)
-                    # Solo asignar a Abonos si hay evidencia clara (coordenadas X muy cerca de rango abonos)
+                    # In HSBC, when there are 2 amounts, the first is generally Cargos (Withdrawal/Charge)
+                    # Only assign to Abonos if there is clear evidence (X coordinates very close to abonos range)
                     first_amt = amounts_with_columns[0]
                     if first_amt['x0'] is not None:
-                        # Calcular distancia a cada rango
+                        # Calculate distance to each range
                         x_center = (first_amt['x0'] + first_amt['x1']) / 2
                         cargos_center = (cargos_range[0] + cargos_range[1]) / 2
                         abonos_center = (abonos_range[0] + abonos_range[1]) / 2
@@ -1309,17 +1309,17 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict 
                         dist_cargos = abs(x_center - cargos_center)
                         dist_abonos = abs(x_center - abonos_center)
                         
-                        # Si está significativamente más cerca de abonos (diferencia > 50 píxeles), asignar a abonos
-                        # De lo contrario, asignar a cargos (estructura típica de HSBC)
+                        # If significantly closer to abonos (difference > 50 pixels), assign to abonos
+                        # Otherwise, assign to cargos (typical HSBC structure)
                         if dist_abonos < dist_cargos and (dist_cargos - dist_abonos) > 50:
                             movement['abonos'] = first_amt['amount']
                         else:
                             movement['cargos'] = first_amt['amount']
                     else:
-                        # Sin coordenadas, usar estructura típica: primer monto = cargos
+                        # Without coordinates, use typical structure: first amount = cargos
                         movement['cargos'] = first_amt['amount']
             
-            # Si hay 3+ montos, asignar por posición: primero=cargos, segundo=abonos, último=saldo
+            # If there are 3+ amounts, assign by position: first=cargos, second=abonos, last=saldo
             elif len(amounts) >= 3:
                 if not movement.get('cargos'):
                     movement['cargos'] = amounts[0].strip()
@@ -1328,10 +1328,10 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict 
                 if not movement.get('saldo'):
                     movement['saldo'] = amounts[-1].strip()
         
-        # Verificación final: Asegurar que saldo esté asignado cuando hay 2+ montos
-        # Esta es una verificación de seguridad adicional
+        # Final verification: Ensure saldo is assigned when there are 2+ amounts
+        # This is an additional safety check
         if len(amounts) >= 2 and not movement.get('saldo'):
-            # Si hay 2+ montos y saldo no está asignado, asignar el último monto a saldo
+            # If there are 2+ amounts and saldo is not assigned, assign the last amount to saldo
             movement['saldo'] = amounts[-1].strip()
         
         
@@ -1377,7 +1377,7 @@ def find_amount_coordinates(amount_text: str, line_text: str, line_y_approx: flo
     for page_data in pages_data:
         words = page_data.get('words', [])
         
-        # Agrupar palabras por line_num si está disponible (más preciso)
+        # Group words by line_num if available (more precise)
         words_by_line = {}
         for word in words:
             line_num = word.get('line_num', None)
@@ -1395,32 +1395,32 @@ def find_amount_coordinates(amount_text: str, line_text: str, line_y_approx: flo
             word_line_num = word.get('line_num', None)
             word_conf = word.get('conf', 100)
             
-            # Filtrar palabras con baja confianza (opcional, pero útil)
+            # Filter words with low confidence (optional, but useful)
             if word_conf < 30:
                 continue
             
-            # Verificar si está en la misma línea Y (con tolerancia reducida para coordenadas reales)
+            # Check if it's on the same Y line (with reduced tolerance for real coordinates)
             if abs(word_y - line_y_approx) > y_tolerance:
                 continue
             
             words_in_y_range += 1
             
-            # Verificar si esta palabra contiene el monto
-            # Normalizar palabra para comparación
+            # Check if this word contains the amount
+            # Normalize word for comparison
             word_normalized = word_text.replace(' ', '').replace(',', '').replace('$', '')
             
-            # Buscar si el monto está contenido en esta palabra o en palabras adyacentes
+            # Search if the amount is contained in this word or in adjacent words
             if amount_normalized in word_normalized or word_normalized in amount_normalized:
                 print(f"    [DEBUG find_amount_coordinates] ✓ Found in word: '{word_text}' (Y: {word_y:.1f}, X: {word_x0:.1f}-{word_x1:.1f}, conf: {word_conf:.1f})")
                 return (word_x0, word_x1)
             
-            # También buscar si el monto aparece como parte de la línea
-            # (puede estar dividido en múltiples palabras: "$30" "022.54")
+            # Also search if the amount appears as part of the line
+            # (may be split across multiple words: "$30" "022.54")
             if '$' in word_text:
-                # Esta palabra tiene $, puede ser el inicio del monto
-                # Si tenemos line_num, buscar solo en la misma línea
+                # This word has $, may be the start of the amount
+                # If we have line_num, search only in the same line
                 if word_line_num is not None and word_line_num in words_by_line:
-                    # Buscar en palabras de la misma línea (más preciso)
+                    # Search in words of the same line (more precise)
                     line_words = words_by_line[word_line_num]
                     word_idx = next((i for i, w in enumerate(line_words) if w == word), -1)
                     
@@ -1429,43 +1429,43 @@ def find_amount_coordinates(amount_text: str, line_text: str, line_y_approx: flo
                         combined_x0 = word_x0
                         combined_x1 = word_x1
                         
-                        # Buscar palabras siguientes en la misma línea
+                        # Search for following words in the same line
                         for next_word in line_words[word_idx + 1:]:
                             next_word_text = next_word.get('text', '').strip()
                             
-                            # Agregar palabra siguiente
+                            # Add next word
                             combined_text += next_word_text
                             combined_x1 = next_word.get('x1', combined_x1)
                             
-                            # Normalizar y comparar
+                            # Normalize and compare
                             combined_normalized = combined_text.replace(' ', '').replace(',', '').replace('$', '')
                             if amount_normalized in combined_normalized:
                                 print(f"    [DEBUG find_amount_coordinates] ✓ Found in combined words (line_num={word_line_num}): '{combined_text}' (X: {combined_x0:.1f}-{combined_x1:.1f})")
                                 return (combined_x0, combined_x1)
                             
-                            # Si ya tenemos suficientes caracteres, detener
+                            # If we already have enough characters, stop
                             if len(combined_normalized) >= len(amount_normalized) + 5:
                                 break
                 else:
-                    # Fallback: buscar en todas las palabras (método anterior)
+                    # Fallback: search in all words (previous method)
                     word_idx = words.index(word)
                     combined_text = word_text
                     combined_x0 = word_x0
                     combined_x1 = word_x1
                     
-                    # Buscar palabras siguientes en la misma línea Y
+                    # Search for following words on the same Y line
                     for next_word in words[word_idx + 1:]:
                         next_word_y = next_word.get('top', 0)
                         next_word_text = next_word.get('text', '').strip()
                         
                         if abs(next_word_y - line_y_approx) > y_tolerance:
-                            break  # Ya no está en la misma línea
+                            break  # No longer on the same line
                         
-                        # Agregar palabra siguiente
+                        # Add next word
                         combined_text += next_word_text
                         combined_x1 = next_word.get('x1', combined_x1)
                         
-                        # Normalizar y comparar
+                        # Normalize and compare
                         combined_normalized = combined_text.replace(' ', '').replace(',', '').replace('$', '')
                         if amount_normalized in combined_normalized:
                             print(f"    [DEBUG find_amount_coordinates] ✓ Found in combined words: '{combined_text}' (X: {combined_x0:.1f}-{combined_x1:.1f})")
@@ -1475,12 +1475,12 @@ def find_amount_coordinates(amount_text: str, line_text: str, line_y_approx: flo
                         if len(combined_normalized) >= len(amount_normalized) + 5:
                             break
     
-    # Debug: mostrar estadísticas si no se encontró
+    # Debug: show statistics if not found
     print(f"    [DEBUG find_amount_coordinates] ✗ NOT found. Words checked: {words_checked}, in Y range: {words_in_y_range}")
-    print(f"    [DEBUG find_amount_coordinates] Posibles causas:")
-    print(f"        - line_y_approx ({line_y_approx:.1f}) no coincide con Y real de las palabras")
-    print(f"        - El monto está dividido en múltiples palabras y no se combinó correctamente")
-    print(f"        - El formato del monto en words no coincide con amount_text")
+    print(f"    [DEBUG find_amount_coordinates] Possible causes:")
+    print(f"        - line_y_approx ({line_y_approx:.1f}) does not match real Y of words")
+    print(f"        - The amount is split across multiple words and was not combined correctly")
+    print(f"        - The amount format in words does not match amount_text")
     
     return (None, None)
 
@@ -1521,34 +1521,34 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
     if not pages_data or len(pages_data) == 0:
         return summary_data
     
-    # Buscar en las primeras dos páginas (antes del inicio de movimientos)
+    # Search in the first two pages (before the start of movements)
     pages_to_check = min(2, len(pages_data))
     
-    # Patrones para buscar los valores según especificación del usuario
-    # Patrón 1: "Depósitos/" o "Depósitos\" seguido de un monto (Total Abonos)
+    # Patterns to search for values according to user specification
+    # Pattern 1: "Depósitos/" or "Depósitos\" followed by an amount (Total Abonos)
     depositos_slash_pattern = re.compile(
         r'Dep[oó]sitos?\s*[/\\]\s*\$?\s*([\d,\.\s]+)',
         re.IGNORECASE
     )
     
-    # Patrón 2: "Retiros/Cargos" seguido de un monto (Total Cargos)
+    # Pattern 2: "Retiros/Cargos" followed by an amount (Total Cargos)
     retiros_cargos_pattern = re.compile(
         r'Retiros?\s*[/]\s*Cargos?\s+\$?\s*([\d,\.\s]+)',
         re.IGNORECASE
     )
     
-    # Patrón 3: "Saldo Final del Periodo" seguido de un monto
+    # Pattern 3: "Saldo Final del Periodo" followed by an amount
     saldo_final_pattern = re.compile(
         r'Saldo\s+Final\s+del\s+Periodo\s+\$?\s*([\d,\.\s]+)',
         re.IGNORECASE
     )
-    # Patrón alternativo: "Saldo Final del" (sin "Periodo") seguido de monto
+    # Alternative pattern: "Saldo Final del" (without "Periodo") followed by amount
     saldo_final_pattern_alt = re.compile(
         r'Saldo\s+Final\s+del\s+\$?\s*([\d,\.\s]+)',
         re.IGNORECASE
     )
     
-    # Buscar en las primeras dos páginas
+    # Search in the first two pages
     for page_idx in range(pages_to_check):
         page_data = pages_data[page_idx]
         page_text = page_data.get('content', '')
@@ -1563,7 +1563,7 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
             if not line:
                 continue
             
-            # PRIMERO: Buscar Depósitos/ (Total Abonos)
+            # FIRST: Search for Depósitos/ (Total Abonos)
             if not summary_data['total_abonos']:
                 match = depositos_slash_pattern.search(line)
                 if match:
@@ -1574,7 +1574,7 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
                         summary_data['total_abonos'] = amount
                         summary_data['total_depositos'] = amount
             
-            # SEGUNDO: Buscar Retiros/Cargos (Total Cargos)
+            # SECOND: Search for Retiros/Cargos (Total Cargos)
             if not summary_data['total_cargos']:
                 match = retiros_cargos_pattern.search(line)
                 if match:
@@ -1585,7 +1585,7 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
                         summary_data['total_cargos'] = amount
                         summary_data['total_retiros'] = amount
             
-            # TERCERO: Buscar Saldo Final del Periodo
+            # THIRD: Search for Saldo Final del Periodo
             if not summary_data['saldo_final']:
                 match = saldo_final_pattern.search(line)
                 if match:
@@ -2681,7 +2681,7 @@ def extract_digitem_section(pdf_path: str, columns_config: dict) -> pd.DataFrame
                 # Check both text and words for "DIGITEM"
                 if re.search(r'\bDIGITEM\b', text, re.I):
                     in_digitem_section = True
-                    #print(f"📄 Sección DIGITEM encontrada en página {page_num}")
+                    #print(f"📄 DIGITEM section found on page {page_num}")
                     # Skip the header line "DETALLE DE OPERACIONES" that comes after DIGITEM
                     skip_next_line = True
                 else:
@@ -2689,7 +2689,7 @@ def extract_digitem_section(pdf_path: str, columns_config: dict) -> pd.DataFrame
                     all_words_text = ' '.join([w.get('text', '') for w in words])
                     if re.search(r'\bDIGITEM\b', all_words_text, re.I):
                         in_digitem_section = True
-                        # print(f"📄 Sección DIGITEM encontrada en página {page_num} (desde words)")
+                        # print(f"📄 DIGITEM section found on page {page_num} (from words)")
                         skip_next_line = True
                     else:
                         continue
@@ -2901,16 +2901,16 @@ def extract_digitem_section(pdf_path: str, columns_config: dict) -> pd.DataFrame
             # Keep only needed columns
             df_digitem = df_digitem[['Fecha', 'Descripción', 'Importe']]
             
-            #print(f"✅ Se extrajeron {len(df_digitem)} registros de DIGITEM del PDF")
+            #print(f"✅ Extracted {len(df_digitem)} DIGITEM records from PDF")
             return df_digitem
         else:
             pass
-            # print("ℹ️  No se encontró sección DIGITEM en el PDF")
+            # print("ℹ️  DIGITEM section not found in PDF")
             return pd.DataFrame(columns=['Fecha', 'Descripción', 'Importe'])
     
     except Exception as e:
         pass
-        # print(f"⚠️  Error al extraer DIGITEM del PDF: {e}")
+        # print(f"⚠️  Error extracting DIGITEM from PDF: {e}")
         # import traceback
         # traceback.print_exc()
         return pd.DataFrame(columns=['Fecha', 'Descripción', 'Importe'])
@@ -3033,7 +3033,7 @@ def extract_transferencia_section(pdf_path: str) -> pd.DataFrame:
             return pd.DataFrame(columns=['Fecha', 'Descripción', 'Importe', 'Comisiones', 'I.V.A', 'Total'])
     
     except Exception as e:
-        #print(f"⚠️  Error al extraer TRANSFERENCIA del PDF: {e}")
+        #print(f"⚠️  Error extracting TRANSFERENCIA from PDF: {e}")
         import traceback
         traceback.print_exc()
         return pd.DataFrame(columns=['Fecha', 'Descripción', 'Importe', 'Comisiones', 'I.V.A', 'Total'])
@@ -3195,29 +3195,29 @@ def assign_word_to_column(word_x0, word_x1, columns):
         if col_name in columns:
             x_min, x_max = columns[col_name]
             
-            # Validar y corregir rangos invertidos
+            # Validate and correct inverted ranges
             if x_min > x_max:
-                print(f"[ADVERTENCIA] Rango invertido para '{col_name}': ({x_min}, {x_max}). Corrigiendo a ({x_max}, {x_min})")
-                x_min, x_max = x_max, x_min  # Intercambiar valores
+                print(f"[WARNING] Inverted range for '{col_name}': ({x_min}, {x_max}). Correcting to ({x_max}, {x_min})")
+                x_min, x_max = x_max, x_min  # Swap values
             
             if x_min <= word_center <= x_max:
-                # Calcular distancia del centro del monto al centro del rango
+                # Calculate distance from amount center to range center
                 range_center = (x_min + x_max) / 2
                 distance = abs(word_center - range_center)
                 matching_cols.append((col_name, distance, range_center))
     
-    # Si hay múltiples coincidencias, retornar la más cercana al centro del rango
+    # If there are multiple matches, return the closest to the range center
     if matching_cols:
-        # Ordenar por distancia (más cercana primero)
+        # Sort by distance (closest first)
         matching_cols.sort(key=lambda x: x[1])
-        return matching_cols[0][0]  # Retornar la columna más cercana
+        return matching_cols[0][0]  # Return the closest column
     
     # Then check other columns (fecha, liq, descripcion, etc.)
     for col_name, (x_min, x_max) in columns.items():
         if col_name not in numeric_cols:  # Skip numeric cols, already checked
-            # Validar y corregir rangos invertidos
+            # Validate and correct inverted ranges
             if x_min > x_max:
-                x_min, x_max = x_max, x_min  # Intercambiar valores
+                x_min, x_max = x_max, x_min  # Swap values
             
             if x_min <= word_center <= x_max:
                 return col_name
@@ -3247,7 +3247,7 @@ def is_transaction_row(row_data, bank_name=None, debug_only_if_contains_iva=Fals
     has_date = False
     if bank_name == 'HSBC':
         # For HSBC, date is only 2 digits (01-31)
-        # Limpiar la fecha: quitar puntos, espacios y otros caracteres no numéricos al final
+        # Clean the date: remove dots, spaces and other non-numeric characters at the end
         fecha_clean = fecha.strip().rstrip('.,;:')
         hsbc_date_re = re.compile(r'^(0[1-9]|[12][0-9]|3[01])$')
         has_date = bool(hsbc_date_re.match(fecha_clean))
@@ -3275,7 +3275,7 @@ def is_transaction_row(row_data, bank_name=None, debug_only_if_contains_iva=Fals
     
     if cargos:
         # Check if cargos is a valid amount (not just any text)
-        # Limpiar el monto: quitar $, espacios y comas para validación
+        # Clean the amount: remove $, spaces and commas for validation
         cargos_clean = cargos.replace(' ', '').replace(',', '').replace('$', '').strip()
         if amount_validation_pattern.match(cargos_clean):
             has_valid_amount = True
@@ -3356,7 +3356,7 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
             fecha_texts = [w.get('text', '').strip() for w in fecha_words]
             fecha_text = ' '.join(fecha_texts)
             
-            # Aplicar corrección de errores OCR en fechas antes de buscar el patrón
+            # Apply OCR error correction in dates before searching for pattern
             fecha_text_corrected = fix_ocr_date_errors(fecha_text, bank_name)
             if fecha_text_corrected != fecha_text:
                 fecha_text = fecha_text_corrected
@@ -3365,7 +3365,7 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
             hsbc_date_match = date_pattern.search(fecha_text)
             if hsbc_date_match:
                 date_text = hsbc_date_match.group(1)  # Just the 2 digits (01-31)
-                # Limpiar la fecha: quitar puntos, espacios y otros caracteres no numéricos
+                # Clean the date: remove dots, spaces and other non-numeric characters
                 date_text = date_text.strip().rstrip('.,;:')
                 row_data['fecha'] = date_text
                 # Remove these words from sorted_words so they're not processed again
@@ -3501,11 +3501,11 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                         # Remove these words from sorted_words so they're not processed again
                         sorted_words = [w for w in sorted_words if w not in fecha_words]
     
-    # Para HSBC, primero intentar reconstruir montos que están divididos en múltiples palabras
-    # Ejemplo: "$", "30", ".40" o "$", "30.40" deben combinarse antes de detectar
-    # También: "30" y ".40" -> "30.40" (montos sin $ que están divididos)
+    # For HSBC, first try to reconstruct amounts that are split across multiple words
+    # Example: "$", "30", ".40" or "$", "30.40" must be combined before detecting
+    # Also: "30" and ".40" -> "30.40" (amounts without $ that are split)
     if bank_name == 'HSBC' and len(sorted_words) > 1:
-        # Crear una lista de palabras con texto combinado para montos
+        # Create a list of words with combined text for amounts
         combined_words = []
         i = 0
         while i < len(sorted_words):
@@ -3515,16 +3515,16 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
             current_x1 = current_word.get('x1', 0)
             current_center = (current_x0 + current_x1) / 2
             
-            # Si la palabra actual es "$" o empieza con "$", intentar combinar con palabras siguientes
+            # If the current word is "$" or starts with "$", try to combine with following words
             if current_text == '$' or (current_text.startswith('$') and len(current_text) == 1):
-                # Buscar palabras siguientes que puedan ser parte del monto
+                # Search for following words that may be part of the amount
                 combined_text = current_text
                 combined_x0 = current_x0
                 combined_x1 = current_x1
                 j = i + 1
                 
-                # Combinar hasta 4 palabras siguientes si forman un monto válido
-                # Ejemplo: "$" + "30" + ".40" -> "$ 30.40"
+                # Combine up to 4 following words if they form a valid amount
+                # Example: "$" + "30" + ".40" -> "$ 30.40"
                 while j < len(sorted_words) and j < i + 5:
                     next_word = sorted_words[j]
                     next_text = next_word.get('text', '').strip()
@@ -3532,12 +3532,12 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                     next_x1 = next_word.get('x1', 0)
                     next_center = (next_x0 + next_x1) / 2
                     
-                    # Verificar si están cerca horizontalmente (dentro de 100 píxeles)
+                    # Check if they are close horizontally (within 100 pixels)
                     if abs(next_center - current_center) < 100:
-                        # Intentar combinar
+                        # Try to combine
                         test_combined = (combined_text + ' ' + next_text).strip()
-                        # Verificar si el texto combinado forma un monto válido
-                        # Patrón mejorado que acepta "$ 30.40", "$30.40", "$ 30 .40", etc.
+                        # Check if the combined text forms a valid amount
+                        # Improved pattern that accepts "$ 30.40", "$30.40", "$ 30 .40", etc.
                         hsbc_amount_test = re.compile(r'\$\s*\d{1,3}(?:[\s,]\d{3})*(?:\s*\.\s*\d{2}|\s+\d{2}|\s*,\s*\d{2})|\$\s*\d{1,3}\.\d{2}|\$\s*\d{1,3}\s*\.\s*\d{2}')
                         if hsbc_amount_test.search(test_combined):
                             combined_text = test_combined
@@ -3545,8 +3545,8 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                             combined_center = (combined_x0 + combined_x1) / 2
                             j += 1
                         else:
-                            # Si la siguiente palabra es solo ".XX" o "XX" (parte decimal), seguir combinando
-                            # Esto maneja casos como "$" + "30" + ".40"
+                            # If the next word is only ".XX" or "XX" (decimal part), continue combining
+                            # This handles cases like "$" + "30" + ".40"
                             if re.match(r'^\.?\d{2}$', next_text):
                                 combined_text = test_combined
                                 combined_x1 = next_x1
@@ -3556,26 +3556,26 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                     else:
                         break
                 
-                # Validar y normalizar el texto combinado final
+                # Validate and normalize the final combined text
                 if combined_text != current_text:
-                    # Normalizar espacios: "$ 30 .40" -> "$ 30.40"
+                    # Normalize spaces: "$ 30 .40" -> "$ 30.40"
                     normalized = re.sub(r'\$\s*(\d+)\s+\.\s*(\d{2})', r'$ \1.\2', combined_text)
                     normalized = re.sub(r'\$\s*(\d+)\s+(\d{2})(?!\d)', r'$ \1.\2', normalized)
                     if normalized != combined_text:
                         combined_text = normalized
                 
-                # Si se combinó algo, actualizar la palabra
+                # If something was combined, update the word
                 if combined_text != current_text:
                     current_word['text'] = combined_text
                     current_word['x0'] = combined_x0
                     current_word['x1'] = combined_x1
-                    # Saltar las palabras que se combinaron
+                    # Skip the words that were combined
                     i = j
                 else:
                     i += 1
-            # También combinar números seguidos de ".XX" (ej: "30" + ".40" -> "30.40")
-            elif re.match(r'^\d+$', current_text):  # Palabra es solo dígitos
-                # Buscar palabra siguiente que pueda ser la parte decimal
+            # Also combine numbers followed by ".XX" (e.g.: "30" + ".40" -> "30.40")
+            elif re.match(r'^\d+$', current_text):  # Word is only digits
+                # Search for next word that may be the decimal part
                 if i + 1 < len(sorted_words):
                     next_word = sorted_words[i + 1]
                     next_text = next_word.get('text', '').strip()
@@ -3583,11 +3583,11 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                     next_x1 = next_word.get('x1', 0)
                     next_center = (next_x0 + next_x1) / 2
                     
-                    # Verificar si están cerca horizontalmente (dentro de 100 píxeles)
+                    # Check if they are close horizontally (within 100 pixels)
                     if abs(next_center - current_center) < 100:
-                        # Verificar si la siguiente palabra es ".XX" o "XX" (parte decimal)
-                        if re.match(r'^\.?\d{2}$', next_text):  # ".40" o "40" (2 dígitos)
-                            # Combinar: "30" + ".40" -> "30.40" o "30" + "40" -> "30.40"
+                        # Check if the next word is ".XX" or "XX" (decimal part)
+                        if re.match(r'^\.?\d{2}$', next_text):  # ".40" or "40" (2 digits)
+                            # Combine: "30" + ".40" -> "30.40" or "30" + "40" -> "30.40"
                             if next_text.startswith('.'):
                                 combined_text = f"{current_text}{next_text}"
                             else:
@@ -3596,7 +3596,7 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                             current_word['text'] = combined_text
                             current_word['x0'] = current_x0
                             current_word['x1'] = combined_x1
-                            # Saltar la siguiente palabra ya que se combinó
+                            # Skip the next word since it was combined
                             i += 2
                         else:
                             i += 1
@@ -3619,13 +3619,13 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
         center = (x0 + x1) / 2
 
 
-        # Aplicar corrección de errores OCR (solo para HSBC)
-        # DESHABILITADO: Ya no es necesario después de mejorar la resolución del OCR
-        # Esta lógica estaba convirtiendo "30.40" en "$0.40" incorrectamente
+        # Apply OCR error correction (only for HSBC)
+        # DISABLED: No longer necessary after improving OCR resolution
+        # This logic was incorrectly converting "30.40" to "$0.40"
         # if bank_name == 'HSBC' and columns:
         #     original_text = text
         #     text = fix_ocr_amount_errors(text, x0, columns, bank_name)
-        #     # Actualizar el texto en el diccionario word para que se use en descripciones
+        #     # Update the text in the word dictionary so it's used in descriptions
         #     if text != original_text:
         #         word['text'] = text
 
@@ -3635,7 +3635,7 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
         word_in_description_range = False
         if 'descripcion' in columns:
             desc_x0, desc_x1 = columns['descripcion']
-            # Validar y corregir rangos invertidos
+            # Validate and correct inverted ranges
             if desc_x0 > desc_x1:
                 desc_x0, desc_x1 = desc_x1, desc_x0
             if desc_x0 <= center <= desc_x1:
@@ -3649,35 +3649,35 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
             konfio_amount_pattern = re.compile(r'\$\s*\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})|\d{1,3}(?:[\.,\s]\d{3})*[\.,]\d{2}')
             m = konfio_amount_pattern.search(text)
         else:
-            # Para HSBC, buscar todos los montos en la palabra (puede haber múltiples)
-            # IMPORTANTE: No detectar montos si la palabra está en el rango de descripción
+            # For HSBC, search for all amounts in the word (there may be multiple)
+            # IMPORTANT: Do not detect amounts if the word is in the description range
             if bank_name == 'HSBC':
-                # Buscar todos los montos (con o sin $) usando un patrón mejorado que capture montos completos
+                # Search for all amounts (with or without $) using an improved pattern that captures complete amounts
                 # Skip if word is in description range (prevents "39.00 MXN" from being detected as amount)
                 if not word_in_description_range:
-                    # Patrón mejorado para HSBC que captura montos completos incluso con espacios
-                    # Busca: $ seguido opcionalmente de espacios, luego dígitos (1-3), luego grupos de 3 dígitos opcionales, luego .XX
-                    # Ejemplo: "$ 30.40" -> captura "30.40", "$30.40" -> "30.40", "30.40" -> "30.40"
-                    # El patrón debe capturar desde $ hasta el final del monto, incluyendo espacios internos
+                    # Improved pattern for HSBC that captures complete amounts even with spaces
+                    # Searches: $ optionally followed by spaces, then digits (1-3), then optional groups of 3 digits, then .XX
+                    # Example: "$ 30.40" -> captures "30.40", "$30.40" -> "30.40", "30.40" -> "30.40"
+                    # The pattern must capture from $ to the end of the amount, including internal spaces
                     hsbc_amount_pattern = re.compile(r'\$\s*(\d{1,3}(?:[\s,]\d{3})*\.\d{2}|\d{1,3}(?:[\s,]\d{3})*,\d{2}|\d{1,3}\.\d{2}|\d{1,3},\d{2})')
-                    # También buscar montos sin $ al inicio
-                    # IMPORTANTE: Usar lookahead negativo para evitar capturar solo ".40" cuando debería ser "30.40"
-                    # El patrón debe asegurar que hay al menos un dígito antes del punto decimal
+                    # Also search for amounts without $ at the start
+                    # IMPORTANT: Use negative lookahead to avoid capturing only ".40" when it should be "30.40"
+                    # The pattern must ensure there is at least one digit before the decimal point
                     hsbc_amount_pattern_no_dollar = re.compile(r'(?<!\$)(?<![\.\d])(\d{1,3}(?:[\s,]\d{3})*\.\d{2}|\d{1,3}(?:[\s,]\d{3})*,\d{2}|\d{1,3}\.\d{2}|\d{1,3},\d{2})(?![\.\d])')
                     
-                    # Primero buscar montos con $
+                    # First search for amounts with $
                     amount_matches = hsbc_amount_pattern.findall(text)
-                    # Si no hay montos con $, buscar sin $
+                    # If no amounts with $, search without $
                     if not amount_matches:
                         amount_matches = hsbc_amount_pattern_no_dollar.findall(text)
                     
                     if amount_matches:
                         for amt_match in amount_matches:
-                            # Limpiar espacios del monto capturado
+                            # Clean spaces from captured amount
                             amt_clean = re.sub(r'\s+', '', amt_match)
-                            # Normalizar: reemplazar coma por punto si es separador decimal
+                            # Normalize: replace comma with dot if it's a decimal separator
                             if ',' in amt_clean and '.' not in amt_clean:
-                                # Verificar si la coma es separador decimal (últimos 2 dígitos después de coma)
+                                # Check if the comma is a decimal separator (last 2 digits after comma)
                                 parts = amt_clean.split(',')
                                 if len(parts) == 2 and len(parts[1]) == 2:
                                     amt_clean = parts[0] + '.' + parts[1]
@@ -3688,8 +3688,8 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                                 # Tiene ambos: la coma es separador de miles, el punto es decimal
                                 amt_clean = amt_clean.replace(',', '')
                             
-                            # Solo agregar si el monto tiene al menos un dígito antes del punto decimal
-                            # Esto evita capturar solo ".40" cuando debería ser "30.40"
+                            # Only add if the amount has at least one digit before the decimal point
+                            # This avoids capturing only ".40" when it should be "30.40"
                             if amt_clean and re.match(r'^\d+', amt_clean):
                                 amounts.append((amt_clean, center))
             else:
@@ -3709,11 +3709,11 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
             date_end_pos = date_match.end()
             # For HSBC, ensure we split the 2-digit date from the rest of the text
             if bank_name == 'HSBC':
-                # Aplicar corrección de errores OCR antes de buscar el patrón
+                # Apply OCR error correction before searching for pattern
                 text_corrected = fix_ocr_date_errors(text, bank_name)
                 if text_corrected != text:
                     text = text_corrected
-                    # Actualizar el texto en el diccionario word
+                    # Update the text in the word dictionary
                     word['text'] = text
                 
                 # The date should be exactly 2 digits (01-31) at the start
@@ -4168,7 +4168,7 @@ def main():
 
     pdf_path = sys.argv[1]
     
-    # Normalizar ruta del PDF (maneja rutas UNC, espacios, etc.)
+    # Normalize PDF path (handles UNC paths, spaces, etc.)
     pdf_path = os.path.normpath(pdf_path)
     if not os.path.isabs(pdf_path):
         pdf_path = os.path.abspath(pdf_path)
@@ -4200,7 +4200,7 @@ def main():
         print(f"   Detalle: {e}")
         sys.exit(1)
 
-    # Normalizar ruta de salida
+    # Normalize output path
     output_excel = os.path.normpath(os.path.splitext(pdf_path)[0] + ".xlsx")
     
     # Validar permisos de escritura en el directorio de salida
@@ -6566,7 +6566,7 @@ def main():
                     df_mov[col] = df_mov[col].apply(extract_amount)
         
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
-            # Establecer autor en propiedades del Excel
+            # Set author in Excel properties
             writer.book.properties.creator = "CONTAAYUDA"
             
             #print("   - Escribiendo pestaña 'Summary'...")
@@ -6582,13 +6582,13 @@ def main():
             if df_transferencias is not None and not df_transferencias.empty:
                 #print("   - Escribiendo pestaña 'Transferencias'...")
                 df_transferencias.to_excel(writer, sheet_name='Transferencias', index=False)
-                #print(f"   ✅ Pestaña 'Transferencias' creada exitosamente con {len(df_transferencias)} filas")
+                #print(f"   ✅ 'Transferencias' sheet created successfully with {len(df_transferencias)} rows")
             
             # Write DIGITEM sheet if available
             if df_digitem is not None and not df_digitem.empty:
                 # print("   - Escribiendo pestaña 'DIGITEM'...")
                 df_digitem.to_excel(writer, sheet_name='DIGITEM', index=False)
-                # print(f"   ✅ Pestaña 'DIGITEM' creada exitosamente con {len(df_digitem)} filas")
+                # print(f"   ✅ 'DIGITEM' sheet created successfully with {len(df_digitem)} rows")
             
             # Ensure validation DataFrame exists and is not empty
             #print("   - Escribiendo pestaña 'Data Validation'...")
