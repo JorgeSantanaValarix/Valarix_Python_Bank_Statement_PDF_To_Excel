@@ -4701,12 +4701,14 @@ def main():
             # Create pattern from movements_end string (escape special chars)
             # For Santander and Clara, we need special handling for patterns with numbers
             if bank_config['name'] == 'Santander':
-                # Santander: "TOTAL" followed by numbers - indicates end of movements table
-                movement_end_pattern = re.compile(r'^TOTAL\s+[\d,\.]+\s+[\d,\.]+\s+[\d,\.]+', re.I)
+                # Santander: movements_end is "TOTAL", but we need to match "TOTAL" followed by numbers
+                # Use movements_end_string as base and add number pattern
+                movement_end_pattern = re.compile(re.escape(movement_end_string) + r'\s+[\d,\.]+\s+[\d,\.]+\s+[\d,\.]+', re.I)
             elif bank_config['name'] == 'Clara':
-                # Clara: "Total MXN" followed by amounts - indicates end of movements table
-                # Pattern should match "Total MXN X MXN Y" where Y can be negative
-                movement_end_pattern = re.compile(r'\bTotal\s+MXN\b', re.I)
+                # Clara: movements_end is "Total MXN", followed by two amounts
+                # Pattern: movement_end_string followed by two amounts (second can be negative)
+                # Example: "Total MXN 3,115.30 MXN -3,305.40"
+                movement_end_pattern = re.compile(re.escape(movement_end_string) + r'\s+[\d,\.]+\s+[\d,\.\-]+', re.I)
             else:
                 # For other banks, use simple string matching
                 movement_end_pattern = re.compile(re.escape(movement_end_string), re.I)
