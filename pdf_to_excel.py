@@ -2471,6 +2471,20 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
             ~df_for_totals['Descripción'].astype(str).str.contains('COBRO DE COMISION', case=False, na=False) &
             ~df_for_totals['Descripción'].astype(str).str.contains('IVA POR COMISIONES', case=False, na=False)
         ]
+    elif bank_name == 'Banorte' and 'Descripción' in df_for_totals.columns:
+        # For Banorte, exclude commission and IVA rows from Cargos calculation only (not from Abonos)
+        # because these are not included in the summary totals on the PDF cover page
+        # Exclude rows that contain ANY of these strings (can be multiple rows):
+        # - "COMISION ORDEN DE PAGO SPE"
+        # - "I.V.A. ORDEN DE PAGO SPEI"
+        # - "COMISION POR NO"
+        # - "I.V.A. LIQ"
+        df_for_cargos = df_for_totals[
+            ~(df_for_totals['Descripción'].astype(str).str.contains('COMISION ORDEN DE PAGO SPE', case=False, na=False) |
+              df_for_totals['Descripción'].astype(str).str.contains('I.V.A. ORDEN DE PAGO SPEI', case=False, na=False) |
+              df_for_totals['Descripción'].astype(str).str.contains('COMISION POR NO', case=False, na=False) |
+              df_for_totals['Descripción'].astype(str).str.contains('I.V.A. LIQ', case=False, na=False))
+        ]
     else:
         # For other banks, use the same DataFrame for both Abonos and Cargos
         df_for_cargos = df_for_totals
@@ -2481,7 +2495,7 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
         totals['total_depositos'] = totals['total_abonos']
     
     if 'Cargos' in df_for_totals.columns:
-        # For Scotiabank, use df_for_cargos (which excludes commission rows)
+        # For Scotiabank and Banorte, use df_for_cargos (which excludes commission rows)
         # For other banks, df_for_cargos will be the same as df_for_totals
         totals['total_cargos'] = df_for_cargos['Cargos'].apply(normalize_amount_str).sum()
         totals['total_retiros'] = totals['total_cargos']
