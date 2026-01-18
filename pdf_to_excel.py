@@ -117,7 +117,7 @@ BANK_CONFIGS = {
     "Clara": {
         "name": "Clara",
         "movements_start": "Movimientos",
-        "movements_end": "Total",
+        "movements_end": "Total MXN",
         "columns": {
             "fecha": (35, 60),             # Columna Fecha de Operación
             "descripcion": (60, 450),       # Columna Descripción (ampliado para capturar todas las palabras de descripción)
@@ -4704,8 +4704,9 @@ def main():
                 # Santander: "TOTAL" followed by numbers - indicates end of movements table
                 movement_end_pattern = re.compile(r'^TOTAL\s+[\d,\.]+\s+[\d,\.]+\s+[\d,\.]+', re.I)
             elif bank_config['name'] == 'Clara':
-                # Clara: "Total" followed by 2 amounts - indicates end of movements table
-                movement_end_pattern = re.compile(r'\bTotal\b\s+[\d,\.]+\s+[\d,\.]+', re.I)
+                # Clara: "Total MXN" followed by amounts - indicates end of movements table
+                # Pattern should match "Total MXN X MXN Y" where Y can be negative
+                movement_end_pattern = re.compile(r'\bTotal\s+MXN\b', re.I)
             else:
                 # For other banks, use simple string matching
                 movement_end_pattern = re.compile(re.escape(movement_end_string), re.I)
@@ -4816,17 +4817,20 @@ def main():
                                 match_found = True
                                 break
                     elif bank_config['name'] == 'Clara':
-                        # For Clara, check for "Total" followed by 2 amounts
-                        # Try multiple flexible patterns
-                        clara_end_patterns = [
-                            re.compile(r'\bTotal\b\s+MXN\s+[\d,\.]+\s+MXN\s+[\d,\.]+', re.I),  # "Total MXN ... MXN ..."
-                            re.compile(r'\bTotal\b\s+[\d,\.]+\s+[\d,\.]+', re.I),  # "Total" followed by two amounts
-                            re.compile(r'^Total\b\s+[\d,\.]+\s+[\d,\.]+', re.I),  # "Total" at start of line
-                        ]
-                        for pattern in clara_end_patterns:
-                            if pattern.search(all_text):
-                                match_found = True
-                                break
+                        # For Clara, check for "Total MXN" (movements_end string) or "Total MXN X MXN Y" pattern
+                        # First check if movements_end string is present
+                        if movement_end_string and movement_end_string.lower() in all_text.lower():
+                            match_found = True
+                        else:
+                            # Also check for "Total MXN" followed by amounts (can include negative)
+                            clara_end_patterns = [
+                                re.compile(r'\bTotal\s+MXN\s+[\d,\.]+\s+MXN\s+-?[\d,\.]+', re.I),  # "Total MXN X MXN Y" (Y can be negative)
+                                re.compile(r'\bTotal\s+MXN\b', re.I),  # Just "Total MXN" (movements_end string)
+                            ]
+                            for pattern in clara_end_patterns:
+                                if pattern.search(all_text):
+                                    match_found = True
+                                    break
                     else:
                         # For other banks (Banregio, Banamex, Santander, Banorte, Konfio, Banbajío), use the standard pattern
                         if movement_end_pattern.search(all_text):
