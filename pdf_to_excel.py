@@ -2618,9 +2618,9 @@ def print_validation_summary(pdf_summary: dict, extracted_totals: dict, validati
     overall_status = validation_df[validation_df['Concepto'] == 'VALIDACIÓN GENERAL']['Estado'].values[0]
     
     if '✓' in overall_status:
-        print("✅ VALIDACIÓN: TODO CORRECTO")
+        print("✅ VALIDATION: ALL CORRECT")
     else:
-        print("❌ VALIDACIÓN: HAY DIFERENCIAS")
+        print("❌ VALIDATION: THERE ARE DIFFERENCES")
         pass
     
     # print("\nComparación de Totales:")
@@ -3044,28 +3044,28 @@ def extract_text_from_pdf(pdf_path: str) -> list:
     Extract text and word positions from each page of a PDF.
     Returns a list of dictionaries (page_number, text, words).
     
-    Si detecta texto ilegible (caracteres CID), usa Tesseract OCR como fallback.
+    If it detects illegible text (CID characters), uses Tesseract OCR as fallback.
     """
-    # PASO 1: Detectar si el PDF tiene texto ilegible
+    # STEP 1: Detect if PDF has illegible text
     is_illegible, cid_ratio, ascii_ratio = is_pdf_text_illegible(pdf_path)
     
     if is_illegible and TESSERACT_AVAILABLE:
-        print(f"[INFO] PDF detectado como ilegible (CID ratio: {cid_ratio:.2%}, ASCII ratio: {ascii_ratio:.2%})")
-        print(f"[INFO] Usando Tesseract OCR local como fallback...")
-        print(f"[INFO] El banco se detectará después de procesar con OCR...")
+        print(f"[INFO] PDF detected as illegible (CID ratio: {cid_ratio:.2%}, ASCII ratio: {ascii_ratio:.2%})")
+        print(f"[INFO] Using local Tesseract OCR as fallback...")
+        print(f"[INFO] Bank will be detected after processing with OCR...")
         try:
-            # Usar Tesseract OCR
+            # Use Tesseract OCR
             extracted_data = extract_text_with_tesseract_ocr(pdf_path)
-            # Marcar que se usó OCR
+            # Mark that OCR was used
             for page_data in extracted_data:
                 page_data['_used_ocr'] = True
             return extracted_data
         except Exception as e:
-            print(f"[ADVERTENCIA] Error con Tesseract OCR: {e}")
-            print(f"[INFO] Continuando con extracción normal (puede tener caracteres ilegibles)...")
-            # Continuar con extracción normal si OCR falla
+            print(f"[WARNING] Error with Tesseract OCR: {e}")
+            print(f"[INFO] Continuing with normal extraction (may have illegible characters)...")
+            # Continue with normal extraction if OCR fails
     
-    # PASO 2: Extracción normal con pdfplumber (código existente - SIN CAMBIOS)
+    # STEP 2: Normal extraction with pdfplumber (existing code - NO CHANGES)
     extracted_data = []
     
     # Detect bank to apply Konfio-specific fixes
@@ -4206,27 +4206,27 @@ def main():
     # Validar permisos de escritura en el directorio de salida
     output_dir = os.path.dirname(output_excel) or os.getcwd()
     if not os.access(output_dir, os.W_OK):
-        print(f"❌ Error: Sin permisos de escritura en el directorio: {output_dir}")
+        print(f"❌ Error: No write permissions in directory: {output_dir}")
         sys.exit(1)
     
-    # Validar espacio en disco disponible (opcional pero recomendado)
+    # Validate available disk space (optional but recommended)
     try:
         import shutil
         pdf_size = os.path.getsize(pdf_path)
-        # Estimar tamaño del Excel (PDF size * 2 como margen de seguridad)
+        # Estimate Excel size (PDF size * 2 as safety margin)
         estimated_excel_size = pdf_size * 2
         disk_usage = shutil.disk_usage(output_dir)
         free_space = disk_usage.free
         
         if free_space < estimated_excel_size:
-            print(f"❌ Error: Espacio insuficiente en disco. Disponible: {free_space:,} bytes, Necesario: {estimated_excel_size:,} bytes")
+            print(f"❌ Error: Insufficient disk space. Available: {free_space:,} bytes, Required: {estimated_excel_size:,} bytes")
             sys.exit(1)
     except ImportError:
-        # shutil no disponible, continuar sin validación
+        # shutil not available, continue without validation
         pass
     except Exception as e:
-        # Si falla la validación, continuar (no crítico)
-        print(f"[ADVERTENCIA] No se pudo validar espacio en disco: {e}")
+        # If validation fails, continue (not critical)
+        print(f"[WARNING] Could not validate disk space: {e}")
 
     print("Reading PDF...")
     
@@ -4238,19 +4238,19 @@ def main():
     
     # Detect bank: from extracted text if OCR was used, otherwise from PDF
     if used_ocr:
-        # Si se usó OCR, detectar banco desde el texto extraído
-        print(f"[INFO] Detectando banco desde texto extraído con OCR...")
-        all_text = '\n'.join([p.get('content', '') for p in extracted_data[:3]])  # Primeras 3 páginas
+        # If OCR was used, detect bank from extracted text
+        print(f"[INFO] Detecting bank from text extracted with OCR...")
+        all_text = '\n'.join([p.get('content', '') for p in extracted_data[:3]])  # First 3 pages
         detected_bank = detect_bank_from_text(all_text)
-        print(f"🏦 Banco detectado: {detected_bank}")
+        print(f"🏦 Bank detected: {detected_bank}")
     else:
-        # Si no se usó OCR, detectar banco desde PDF (método normal)
+        # If OCR was not used, detect bank from PDF (normal method)
         detected_bank = detect_bank_from_pdf(pdf_path)
-        print(f"🏦 Banco detectado: {detected_bank}")
+        print(f"🏦 Bank detected: {detected_bank}")
     
     is_hsbc = (detected_bank == "HSBC")
     
-    # split pages into lines (necesario para el procesamiento posterior)
+    # split pages into lines (necessary for subsequent processing)
     pages_lines = split_pages_into_lines(extracted_data)
     
     # Get bank config based on detected bank
