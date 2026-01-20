@@ -517,15 +517,20 @@ def detect_bank_from_text(text: str) -> str:
     Returns the bank name if detected, otherwise returns DEFAULT_BANK.
     """
     if not text:
+        print("🔍 Bank detection: No text provided, using default")
         return DEFAULT_BANK
     
     # Pattern to detect numeric amounts (to reject lines with amounts, as they are likely movement rows, not bank headers)
     # Matches amounts like: 300,000.00, 157,741.18, 1,234.56, etc.
     amount_pattern = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})+(?:[\.,]\d{2})|\d{4,}(?:[\.,]\d{2})?")
     
+    print(f"🔍 Bank detection: Analyzing {len(text.split(chr(10)))} lines of text")
+    
     # Split into lines and check each line
     lines = text.split('\n')
+    line_num = 0
     for line in lines:
+        line_num += 1
         line_clean = line.strip()
         if not line_clean:
             continue
@@ -534,20 +539,32 @@ def detect_bank_from_text(text: str) -> str:
         if amount_pattern.search(line_clean):
             continue
         
+        # Debug: show line being checked (first 20 lines only to avoid too much output)
+        if line_num <= 20:
+            print(f"🔍 Bank detection: Checking line {line_num}: {line_clean[:100]}")
+        
         # Check each bank's keywords
         for bank_name, keywords in BANK_KEYWORDS.items():
             for keyword_pattern in keywords:
-                if re.search(keyword_pattern, line_clean, re.I):
+                match = re.search(keyword_pattern, line_clean, re.I)
+                if match:
+                    print(f"🔍 Bank detection: ✓ MATCH FOUND - Bank: '{bank_name}', Pattern: '{keyword_pattern}', Line {line_num}: {line_clean[:100]}")
                     return bank_name
+                elif line_num <= 20:
+                    # Only show non-matches for first 20 lines to avoid too much output
+                    print(f"   - Checking '{bank_name}' pattern '{keyword_pattern}': NO MATCH")
         
         # Also check if line contains bank name directly (case insensitive)
         line_upper = line_clean.upper()
         for bank_name in BANK_KEYWORDS.keys():
             # Check for exact bank name match (as whole word)
-            if re.search(rf'\b{re.escape(bank_name.upper())}\b', line_upper):
+            match = re.search(rf'\b{re.escape(bank_name.upper())}\b', line_upper)
+            if match:
+                print(f"🔍 Bank detection: ✓ MATCH FOUND (direct name) - Bank: '{bank_name}', Line {line_num}: {line_clean[:100]}")
                 return bank_name
     
     # If no bank detected, return default
+    print(f"🔍 Bank detection: ✗ No bank detected after checking {line_num} lines, using default: {DEFAULT_BANK}")
     return DEFAULT_BANK
 
 
@@ -4383,7 +4400,7 @@ def main():
     if used_ocr:
         # If OCR was used, detect bank from extracted text
         print(f"[INFO] Detecting bank from text extracted with OCR...")
-        all_text = '\n'.join([p.get('content', '') for p in extracted_data[:3]])  # First 3 pages
+        all_text = '\n'.join([p.get('content', '') for p in extracted_data])  # All pages
         detected_bank = detect_bank_from_text(all_text)
         print(f"🏦 Bank detected: {detected_bank}")
     else:
