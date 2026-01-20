@@ -56,6 +56,8 @@ def configure_tesseract():
 BANK_CONFIGS = {
     "BBVA": {
         "name": "BBVA",
+        "movements_start": "Detalle de Movimientos Realizados",
+        "movements_end": "Total de Movimientos",
         "columns": {
             "fecha": (9, 38),              # Operation Date column
             "liq": (52, 81),                # LIQ (Liquidation) column
@@ -3870,10 +3872,28 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                         row_data[col_name] = text
             else:
                 # Normal assignment for other banks or other columns
-                if row_data[col_name]:
-                    row_data[col_name] += ' ' + text
+                # Debug for BBVA: show how cargos column is being assigned
+                # Only print when we're in the movements section (indicated by having a date in the row)
+                if bank_name == 'BBVA' and col_name == 'cargos' and row_data.get('fecha'):
+                    print(f"[DEBUG BBVA extract_movement_row] Asignando a CARGOS:")
+                    print(f"  Palabra: '{text}'")
+                    print(f"  Posición: X0={x0:.1f}, X1={x1:.1f}, Centro={center:.1f}")
+                    if 'cargos' in columns:
+                        cargos_x0, cargos_x1 = columns['cargos']
+                        print(f"  Rango CARGOS: X={cargos_x0}-{cargos_x1}")
+                        print(f"  ¿Dentro del rango? {cargos_x0 <= center <= cargos_x1}")
+                    if row_data[col_name]:
+                        print(f"  Valor anterior CARGOS: '{row_data[col_name]}'")
+                        row_data[col_name] += ' ' + text
+                        print(f"  Nuevo valor CARGOS: '{row_data[col_name]}'")
+                    else:
+                        row_data[col_name] = text
+                        print(f"  Nuevo valor CARGOS: '{row_data[col_name]}'")
                 else:
-                    row_data[col_name] = text
+                    if row_data[col_name]:
+                        row_data[col_name] += ' ' + text
+                    else:
+                        row_data[col_name] = text
                 
         # For Konfio, if word doesn't match any column but is in description area, add it to description
         elif bank_name == 'Konfio' and 'descripcion' in columns:
@@ -4732,6 +4752,8 @@ def main():
         in_comision_zone = False
         # For BanBajío, track detected rows for debugging
         banbajio_detected_rows = 0
+        # For BBVA, track when we're in the movements section (for debug prints)
+        in_bbva_movements_section = False
         for page_data in extracted_data:
             if extraction_stopped:
                 break
@@ -4802,10 +4824,14 @@ def main():
                     if scotiabank_header_pattern.search(all_row_text):
                         continue  # Skip the header line
                 
-                # For banks with movement_start_pattern (Banamex, Base, Clara, Konfio, etc.), skip the start pattern line if it appears during coordinate-based extraction
+                # For banks with movement_start_pattern (Banamex, Base, Clara, Konfio, BBVA, etc.), skip the start pattern line if it appears during coordinate-based extraction
                 if movement_start_pattern:
                     all_row_text = ' '.join([w.get('text', '') for w in row_words])
                     if movement_start_pattern.search(all_row_text):
+                        # For BBVA, activate movements section when start pattern is found
+                        if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
+                            in_bbva_movements_section = True
+                            print(f"[DEBUG BBVA] Inicio de sección detectado por movements_start (Página {page_num}, Fila {row_idx+1}): '{all_row_text[:80]}'")
                         continue  # Skip the start pattern line
                     
                 # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
@@ -4856,6 +4882,10 @@ def main():
                     
                     if match_found:
                         #print(f"🛑 Fin de tabla de movimientos detectado en página {page_num}")
+                        # For BBVA, mark that we've left the movements section
+                        if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
+                            in_bbva_movements_section = False
+                            print(f"[DEBUG BBVA] Fin de sección de movimientos detectado (Página {page_num}, Fila {row_idx+1})")
                         extraction_stopped = True
                         break
 
@@ -4863,6 +4893,57 @@ def main():
                 # Pass bank_name and date_pattern to enable date/description separation
                 
                 row_data = extract_movement_row(row_words, columns_config, bank_config['name'], date_pattern)
+                
+                # Debug for BBVA: print complete line and how cargos column is being split
+                # Only print when we're in the movements section
+                if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
+                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    cargos_val = str(row_data.get('cargos') or '').strip()
+                    abonos_val = str(row_data.get('abonos') or '').strip()
+                    saldo_val = str(row_data.get('saldo') or '').strip()
+                    fecha_val = str(row_data.get('fecha') or '').strip()
+                    desc_val = str(row_data.get('descripcion') or '').strip()
+                    
+                    # Print complete line
+                    print(f"[DEBUG BBVA] Línea completa (Página {page_num}, Fila {row_idx+1}):")
+                    print(f"  Texto completo: '{all_row_text}'")
+                    
+                    # Print how words are being assigned to cargos column
+                    if 'cargos' in columns_config:
+                        cargos_x0, cargos_x1 = columns_config['cargos']
+                        print(f"  Rango columna CARGOS: X={cargos_x0}-{cargos_x1}")
+                        
+                        # Show which words are in cargos range
+                        cargos_words = []
+                        for word in row_words:
+                            word_x0 = word.get('x0', 0)
+                            word_x1 = word.get('x1', 0)
+                            word_center = (word_x0 + word_x1) / 2
+                            word_text = word.get('text', '')
+                            
+                            if cargos_x0 <= word_center <= cargos_x1:
+                                cargos_words.append({
+                                    'text': word_text,
+                                    'x0': word_x0,
+                                    'x1': word_x1,
+                                    'center': word_center
+                                })
+                        
+                        if cargos_words:
+                            print(f"  Palabras en rango CARGOS ({len(cargos_words)}):")
+                            for cw in cargos_words:
+                                print(f"    - '{cw['text']}' (X: {cw['x0']:.1f}-{cw['x1']:.1f}, centro: {cw['center']:.1f})")
+                        else:
+                            print(f"  ⚠️  No se encontraron palabras en el rango CARGOS")
+                    
+                    # Print extracted values
+                    print(f"  Valores extraídos:")
+                    print(f"    Fecha: '{fecha_val}'")
+                    print(f"    Descripción: '{desc_val[:80]}'")
+                    print(f"    CARGOS: '{cargos_val}'")
+                    print(f"    Abonos: '{abonos_val}'")
+                    print(f"    Saldo: '{saldo_val}'")
+                    print()
                 
                 # Debug for Konfio: print row data after extraction (only first 3 pages)
                 if bank_config['name'] == 'Konfio' and page_num <= 3:
@@ -4947,6 +5028,12 @@ def main():
                     
 
                 if has_date:
+                    # For BBVA, mark that we're in the movements section when we find the first date
+                    # Only if movements_start was not already found (fallback mechanism)
+                    if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
+                        in_bbva_movements_section = True
+                        print(f"[DEBUG BBVA] Inicio de sección detectado por primera fecha (Página {page_num}, Fila {row_idx+1})")
+                    
                     # Only add rows that have date AND (description OR amounts)
                     # This ensures we don't add incomplete rows
                     desc_val = str(row_data.get('descripcion') or '').strip()
