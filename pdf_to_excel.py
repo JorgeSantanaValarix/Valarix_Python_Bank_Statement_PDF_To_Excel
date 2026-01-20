@@ -552,6 +552,9 @@ def detect_bank_from_pdf(pdf_path: str) -> str:
 def is_pdf_text_illegible(pdf_path: str, cid_threshold: float = 0.05) -> tuple:
     """
     Detects if a PDF has illegible text (CID characters).
+    Analyzes first and second page (if available) to determine if PDF is illegible.
+    Uses majority strategy: PDF is considered illegible only if BOTH pages are illegible.
+    For single-page PDFs, uses the result of that page directly.
     
     Args:
         pdf_path: Path to PDF file
@@ -565,29 +568,61 @@ def is_pdf_text_illegible(pdf_path: str, cid_threshold: float = 0.05) -> tuple:
             if len(pdf.pages) == 0:
                 return False, 0.0, 0.0
             
-            # Analyze first page (sufficient to detect problem)
-            first_page = pdf.pages[0]
-            text = first_page.extract_text() or ""
+            # Analyze first and second page (if available)
+            # Strategy: PDF is illegible only if BOTH pages are illegible (majority strategy)
+            pages_to_check = min(2, len(pdf.pages))
+            page_results = []
             
-            if not text or len(text) < 50:
-                # If no text or very short, may be illegible
-                return True, 1.0, 0.0
+            for i in range(pages_to_check):
+                page = pdf.pages[i]
+                page_text = page.extract_text() or ""
+                
+                if not page_text or len(page_text) < 50:
+                    # If page has no text or very short, consider it illegible
+                    page_results.append({
+                        'page_num': i + 1,
+                        'is_illegible': True,
+                        'cid_ratio': 1.0,
+                        'ascii_ratio': 0.0
+                    })
+                    continue
+                
+                # Count CID characters for this page
+                page_cid_count = page_text.count('(cid:')
+                page_total_chars = len(page_text)
+                page_cid_ratio = page_cid_count / page_total_chars if page_total_chars > 0 else 0.0
+                
+                # Count ASCII characters for this page
+                page_ascii_count = sum(1 for c in page_text if ord(c) < 128)
+                page_ascii_ratio = page_ascii_count / page_total_chars if page_total_chars > 0 else 0.0
+                
+                # Check if this page is illegible
+                page_is_illegible = (page_cid_ratio > cid_threshold) or (page_ascii_ratio < 0.7)
+                
+                page_results.append({
+                    'page_num': i + 1,
+                    'is_illegible': page_is_illegible,
+                    'cid_ratio': page_cid_ratio,
+                    'ascii_ratio': page_ascii_ratio
+                })
             
-            # Count CID characters
-            cid_count = text.count('(cid:')
-            total_chars = len(text)
-            cid_ratio = cid_count / total_chars if total_chars > 0 else 0.0
+            # Determine overall illegibility using majority strategy
+            if pages_to_check == 1:
+                # Only one page: use its result directly
+                overall_is_illegible = page_results[0]['is_illegible']
+                combined_cid_ratio = page_results[0]['cid_ratio']
+                combined_ascii_ratio = page_results[0]['ascii_ratio']
+            else:
+                # Two pages: PDF is illegible only if BOTH are illegible
+                page1_illegible = page_results[0]['is_illegible']
+                page2_illegible = page_results[1]['is_illegible']
+                overall_is_illegible = page1_illegible and page2_illegible
+                
+                # Calculate combined ratios (average of both pages)
+                combined_cid_ratio = (page_results[0]['cid_ratio'] + page_results[1]['cid_ratio']) / 2.0
+                combined_ascii_ratio = (page_results[0]['ascii_ratio'] + page_results[1]['ascii_ratio']) / 2.0
             
-            # Count ASCII characters
-            ascii_count = sum(1 for c in text if ord(c) < 128)
-            ascii_ratio = ascii_count / total_chars if total_chars > 0 else 0.0
-            
-            # Consider illegible if:
-            # - CID ratio > threshold, OR
-            # - ASCII ratio < 0.7 (less than 70% is ASCII)
-            is_illegible = (cid_ratio > cid_threshold) or (ascii_ratio < 0.7)
-            
-            return is_illegible, cid_ratio, ascii_ratio
+            return overall_is_illegible, combined_cid_ratio, combined_ascii_ratio
             
     except Exception as e:
         # If error reading with pdfplumber, assume it may be illegible
