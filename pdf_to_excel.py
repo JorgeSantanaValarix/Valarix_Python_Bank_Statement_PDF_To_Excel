@@ -70,6 +70,7 @@ BANK_CONFIGS = {
     
     "Santander": {
         "name": "Santander",
+        "movements_start": "DETALLEDEMOVIMIENTOSCUENTADECHEQUES",
         "movements_end": "TOTAL",
         "columns": {
             "fecha": (18, 52),             # Operation Date column
@@ -82,7 +83,8 @@ BANK_CONFIGS = {
 
     "Scotiabank": {
         "name": "Scotiabank",
-        "movements_end": "LAS TASAS DE INTERES ESTAN EXPRESADAS EN TERMINOS ANUALES SIMPLES",
+        "movements_start": "Fecha Concepto Origen Referencia Depósito Retiro Saldo",
+        "movements_end": "LAS TASAS DE INTERES",
         "columns": {
             "fecha": (56, 81),             # Operation Date column
             "descripcion": (92, 240),     # Description column
@@ -94,7 +96,8 @@ BANK_CONFIGS = {
 
     "Inbursa": {
         "name": "Inbursa",
-        "movements_end": "Si desea recibir pagos a través de transferencias bancarias electrónicas",
+        "movements_start": "FECHA REFERENCIA CONCEPTO CARGOS ABONOS SALDO",
+        "movements_end": "Si desea recibir pagos",
         "columns": {
             "fecha": (11, 40),             # Operation Date column
             "descripcion": (145, 369),     # Description column
@@ -130,6 +133,7 @@ BANK_CONFIGS = {
 
     "Banregio": {
         "name": "Banregio",
+        "movements_start": "DIA CONCEPTO CARGOS ABONOS SALDO",
         "movements_end": "Total",
         "columns": {
             "fecha": (35, 42),             # Operation Date column
@@ -142,6 +146,7 @@ BANK_CONFIGS = {
     
      "Banorte": {
         "name": "Banorte",
+        "movements_start": "DETALLE DE MOVIMIENTOS (PESOS)",
         "movements_end": "INVERSION ENLACE NEGOCIOS",
         "columns": {
             "fecha": (54, 85),             # Operation Date column
@@ -199,6 +204,19 @@ BANK_CONFIGS = {
             "cargos": (375, 415),          # Charges column (slightly expanded)
             "abonos": (440, 485),          # Credits column (slightly expanded)
             "saldo": (520, 560),           # Balance column (slightly expanded)
+        }
+    },
+
+    "Hey": {
+        "name": "Hey",
+        "movements_start": "DIA CONCEPTO CARGOS ABONOS SALDO",
+        "movements_end": "Total",
+        "columns": {
+            "fecha": (35, 42),             # Operation Date column (placeholder, calibrate with --find)
+            "descripcion": (53, 310),     # Description column (placeholder, calibrate with --find)
+            "cargos": (380, 418),          # Charges column (placeholder, calibrate with --find)
+            "abonos": (460, 498),          # Credits column (placeholder, calibrate with --find)
+            "saldo": (530, 573),           # Balance column (placeholder, calibrate with --find)
         }
     },
 
@@ -4768,10 +4786,10 @@ def main():
         movement_end_string = bank_config.get('movements_end')
         if movement_end_string:
             # Create pattern from movements_end string (escape special chars)
-            # For Santander and Clara, we need special handling for patterns with numbers
-            if bank_config['name'] == 'Santander':
-                # Santander: movements_end is "TOTAL", but we need to match "TOTAL" followed by numbers
-                # Use movements_end_string as base and add number pattern
+            # For Santander, Banregio, Hey, and Clara, we need special handling for patterns with numbers
+            if bank_config['name'] == 'Santander' or bank_config['name'] == 'Banregio' or bank_config['name'] == 'Hey':
+                # Santander/Banregio/Hey: movements_end is "TOTAL"/"Total", but we need to match followed by 3 numeric amounts
+                # Example: "TOTAL 821,646.20 820,238.73 1,417.18" or "Total 45,998.00 49,675.60 4,580.78"
                 movement_end_pattern = re.compile(re.escape(movement_end_string) + r'\s+[\d,\.]+\s+[\d,\.]+\s+[\d,\.]+', re.I)
             elif bank_config['name'] == 'Clara':
                 # Clara: movements_end is "Total MXN", followed by two amounts
@@ -4880,18 +4898,22 @@ def main():
                     all_text = ' '.join([w.get('text', '') for w in row_words])
                     match_found = False
                     
-                    # For Scotiabank, try multiple flexible patterns to handle variations in spacing and formatting
+                    # For Scotiabank, try flexible pattern matching (movements_end is "LAS TASAS DE INTERES")
                     if bank_config['name'] == 'Scotiabank':
-                        # Try multiple flexible patterns
-                        scotiabank_end_patterns = [
-                            re.compile(r'LAS\s+TASAS\s+DE\s+INTERES\s+ESTAN\s+EXPRESADAS\s+EN\s+TERMINOS\s+ANUALES\s+SIMPLES\.?', re.I),
-                            re.compile(r'LAS\s+TASAS\s+DE\s+INTERES.*?ESTAN.*?EXPRESADAS.*?EN.*?TERMINOS.*?ANUALES.*?SIMPLES\.?', re.I),
-                            re.compile(r'LAS.*?TASAS.*?DE.*?INTERES.*?ESTAN.*?EXPRESADAS.*?EN.*?TERMINOS.*?ANUALES.*?SIMPLES', re.I),
-                        ]
-                        for pattern in scotiabank_end_patterns:
-                            if pattern.search(all_text):
-                                match_found = True
-                                break
+                        # First check if movements_end string is present (flexible matching)
+                        if movement_end_string and movement_end_string.lower() in all_text.lower():
+                            match_found = True
+                        else:
+                            # Try multiple flexible patterns for variations (fallback)
+                            scotiabank_end_patterns = [
+                                re.compile(r'LAS\s+TASAS\s+DE\s+INTERES\s+ESTAN\s+EXPRESADAS\s+EN\s+TERMINOS\s+ANUALES\s+SIMPLES\.?', re.I),
+                                re.compile(r'LAS\s+TASAS\s+DE\s+INTERES.*?ESTAN.*?EXPRESADAS.*?EN.*?TERMINOS.*?ANUALES.*?SIMPLES\.?', re.I),
+                                re.compile(r'LAS.*?TASAS.*?DE.*?INTERES.*?ESTAN.*?EXPRESADAS.*?EN.*?TERMINOS.*?ANUALES.*?SIMPLES', re.I),
+                            ]
+                            for pattern in scotiabank_end_patterns:
+                                if pattern.search(all_text):
+                                    match_found = True
+                                    break
                     elif bank_config['name'] == 'Clara':
                         # For Clara, check for "Total MXN" (movements_end string) or "Total MXN X MXN Y" pattern
                         # First check if movements_end string is present
@@ -4907,8 +4929,12 @@ def main():
                                 if pattern.search(all_text):
                                     match_found = True
                                     break
+                    elif bank_config['name'] == 'Santander' or bank_config['name'] == 'Banregio' or bank_config['name'] == 'Hey':
+                        # For Santander/Banregio/Hey, use the pattern with 3 numeric amounts (already created in movement_end_pattern)
+                        if movement_end_pattern.search(all_text):
+                            match_found = True
                     else:
-                        # For other banks (Banregio, Banamex, Santander, Banorte, Konfio, Banbajío), use the standard pattern
+                        # For other banks (Banamex, Santander, Banorte, Konfio, Banbajío, etc.), use the standard pattern
                         if movement_end_pattern.search(all_text):
                             match_found = True
                             #if bank_config['name'] == 'Banbajío':
