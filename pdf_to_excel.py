@@ -234,6 +234,11 @@ BANK_KEYWORDS = {
         r"\bBBVA\s+BANCOMER\b",
         r"ESTADO\s+DE\s+CUENTA\s+MAESTRA\s+PYME\s+BBVA",
         r"BBVA\s+ADELANTE",
+        r"BBVA\s+MEXICO",
+        r"INSTITUCION\s+DE\s+BANCA\s+MULTIPLE",
+        r"GRUPO\s+FINANCIERO\s+BBVA",
+        r"BBVA\s+MEXICO.*?INSTITUCION\s+DE\s+BANCA\s+MULTIPLE",
+        r"GRUPO\s+FINANCIERO\s+BBVA\s+MEXICO",
     ],
     "Banamex": [
         r"\bDIGITEM\b",  # Very specific word for Banamex
@@ -514,6 +519,10 @@ def detect_bank_from_text(text: str) -> str:
     if not text:
         return DEFAULT_BANK
     
+    # Pattern to detect numeric amounts (to reject lines with amounts, as they are likely movement rows, not bank headers)
+    # Matches amounts like: 300,000.00, 157,741.18, 1,234.56, etc.
+    amount_pattern = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})+(?:[\.,]\d{2})|\d{4,}(?:[\.,]\d{2})?")
+    
     # Split into lines and check each line
     lines = text.split('\n')
     for line in lines:
@@ -521,10 +530,16 @@ def detect_bank_from_text(text: str) -> str:
         if not line_clean:
             continue
         
+        # Skip lines that contain numeric amounts (these are likely movement rows, not bank headers)
+        if amount_pattern.search(line_clean):
+            continue
+        
         # Check each bank's keywords
         for bank_name, keywords in BANK_KEYWORDS.items():
             for keyword_pattern in keywords:
                 if re.search(keyword_pattern, line_clean, re.I):
+                    # Print which keyword was used for detection
+                    print(f"🔍 Bank detection: Found keyword pattern '{keyword_pattern}' for bank '{bank_name}' in line: {line_clean[:100]}")
                     return bank_name
         
         # Also check if line contains bank name directly (case insensitive)
@@ -532,9 +547,12 @@ def detect_bank_from_text(text: str) -> str:
         for bank_name in BANK_KEYWORDS.keys():
             # Check for exact bank name match (as whole word)
             if re.search(rf'\b{re.escape(bank_name.upper())}\b', line_upper):
+                # Print which bank name was used for detection
+                print(f"🔍 Bank detection: Found bank name '{bank_name}' directly in line: {line_clean[:100]}")
                 return bank_name
     
     # If no bank detected, return default
+    print(f"🔍 Bank detection: No bank detected, using default: {DEFAULT_BANK}")
     return DEFAULT_BANK
 
 
@@ -3730,6 +3748,10 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
         x0 = word.get('x0', 0)
         x1 = word.get('x1', 0)
         center = (x0 + x1) / 2
+        
+        # Debug for BBVA: print word assignment
+        if bank_name == 'BBVA':
+            print(f"      🔍 BBVA: Procesando palabra '{text}' | X: ({x0:.1f}, {x1:.1f}) | Centro: {center:.1f}")
 
 
         # Apply OCR error correction (only for HSBC)
@@ -3938,6 +3960,14 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
         
         # Normal column assignment
         col_name = assign_word_to_column(x0, x1, columns)
+        
+        # Debug for BBVA: print column assignment
+        if bank_name == 'BBVA':
+            if col_name:
+                print(f"         → Asignado a columna '{col_name}'")
+            else:
+                print(f"         → No asignado a ninguna columna")
+        
         if col_name:
             # For Banamex and HSBC, prevent text from description range being assigned to cargos/abonos/saldo
             # Only assign to these columns if the word is actually an amount AND not in description range
@@ -3986,6 +4016,13 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                 # Validate that the text is a valid amount with 2 decimals
                 # DEC_AMOUNT_RE requires: digits with optional thousands separators + 2 decimals
                 is_valid_amount = bool(DEC_AMOUNT_RE.search(text))
+                
+                # Debug for BBVA: print validation result
+                if bank_name == 'BBVA':
+                    if is_valid_amount:
+                        print(f"         ✓ Monto válido: '{text}' → asignado a '{col_name}'")
+                    else:
+                        print(f"         ✗ Monto inválido: '{text}' → reasignado a 'descripcion'")
                 
                 if not is_valid_amount:
                     # Not a valid amount, assign to description instead
@@ -4879,9 +4916,19 @@ def main():
             if movement_start_pattern and not movement_start_found:
                 # Check if this page contains the start pattern
                 page_text = ' '.join([w.get('text', '') for w in words])
+                # Debug for BBVA: show search for start pattern
+                if bank_config['name'] == 'BBVA':
+                    movement_start_string = bank_config.get('movements_start', '')
+                    print(f"🔍 BBVA: Buscando patrón de inicio '{movement_start_string}' en página {page_num}")
+                    print(f"   Texto de la página: {page_text[:200]}...")
                 if not movement_start_pattern.search(page_text):
                     # Start pattern not found on this page, skip it
+                    if bank_config['name'] == 'BBVA':
+                        print(f"   ✗ Patrón de inicio NO encontrado en página {page_num}")
                     continue
+                else:
+                    if bank_config['name'] == 'BBVA':
+                        print(f"   ✓ Patrón de inicio encontrado en página {page_num}")
             
             # Check if this page contains movements (page >= movement_start_page if found)
             if movement_start_found and page_num < movement_start_page:
@@ -4938,11 +4985,19 @@ def main():
                 # For banks with movement_start_pattern (Banamex, Base, Clara, Konfio, BBVA, etc.), skip the start pattern line if it appears during coordinate-based extraction
                 if movement_start_pattern:
                     all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    # Debug for BBVA: show each row being checked for start pattern
+                    if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
+                        movement_start_string = bank_config.get('movements_start', '')
+                        print(f"🔍 BBVA: Verificando fila (página {page_num}, fila {row_idx+1}): {all_row_text[:150]}")
+                        print(f"   Buscando patrón: '{movement_start_string}'")
                     if movement_start_pattern.search(all_row_text):
                         # For BBVA, activate movements section when start pattern is found
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
+                            print(f"   ✓ Patrón de inicio encontrado! Activando sección de movimientos BBVA")
                             in_bbva_movements_section = True
                         continue  # Skip the start pattern line
+                    elif bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
+                        print(f"   ✗ Patrón NO encontrado en esta fila")
                     
                 # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
                 if bank_config['name'] == 'Banregio':
@@ -5009,7 +5064,30 @@ def main():
                 # Extract structured row using coordinates
                 # Pass bank_name and date_pattern to enable date/description separation
                 
+                # Debug for BBVA: print original row text and word assignments
+                if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
+                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                    print(f"🔍 BBVA: Fila original (página {page_num}, fila {row_idx+1}): {all_row_text}")
+                    print(f"   Palabras en fila ({len(row_words)} palabras):")
+                    for word_idx, word in enumerate(row_words):
+                        word_text = word.get('text', '')
+                        word_x0 = word.get('x0', 0)
+                        word_x1 = word.get('x1', 0)
+                        word_center = (word_x0 + word_x1) / 2
+                        print(f"     [{word_idx+1}] Texto: '{word_text}' | X: ({word_x0:.1f}, {word_x1:.1f}) | Centro: {word_center:.1f}")
+                
                 row_data = extract_movement_row(row_words, columns_config, bank_config['name'], date_pattern)
+                
+                # Debug for BBVA: print row data after extraction
+                if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
+                    fecha_val = str(row_data.get('fecha') or '').strip()
+                    liq_val = str(row_data.get('liq') or '').strip()
+                    desc_val = str(row_data.get('descripcion') or '').strip()
+                    cargos_val = str(row_data.get('cargos') or '').strip()
+                    abonos_val = str(row_data.get('abonos') or '').strip()
+                    saldo_val = str(row_data.get('saldo') or '').strip()
+                    print(f"   → Extraído - Fecha: '{fecha_val}' | Liq: '{liq_val}' | Desc: '{desc_val[:60]}...' | Cargos: '{cargos_val}' | Abonos: '{abonos_val}' | Saldo: '{saldo_val}'")
+                    print()
                 
                 # Debug for Konfio: print row data after extraction (only first 3 pages)
                 if bank_config['name'] == 'Konfio' and page_num <= 3:
@@ -5097,6 +5175,9 @@ def main():
                     # For BBVA, mark that we're in the movements section when we find the first date
                     # Only if movements_start was not already found (fallback mechanism)
                     if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
+                        all_row_text_fallback = ' '.join([w.get('text', '') for w in row_words])
+                        print(f"🔍 BBVA: Fecha encontrada (fallback) - Activando sección de movimientos")
+                        print(f"   Fila: {all_row_text_fallback[:150]}")
                         in_bbva_movements_section = True
                     
                     # Only add rows that have date AND (description OR amounts)
