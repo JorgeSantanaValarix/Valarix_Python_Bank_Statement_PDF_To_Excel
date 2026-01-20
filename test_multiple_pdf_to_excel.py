@@ -153,6 +153,29 @@ def process_single_pdf(pdf_path: str, script_path: str = "pdf_to_excel.py") -> t
         return (False, "Execution error", str(e), elapsed_time)
 
 
+def format_time(seconds: float) -> str:
+    """
+    Format time in seconds to a human-readable string.
+    
+    Args:
+        seconds: Time in seconds
+    
+    Returns:
+        Formatted time string (e.g., "2m 30.5s" or "45.2s")
+    """
+    if seconds < 60:
+        return f"{seconds:.2f}s"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        secs = seconds % 60
+        return f"{minutes}m {secs:.2f}s"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = seconds % 60
+        return f"{hours}h {minutes}m {secs:.2f}s"
+
+
 def process_folder(folder_path: str, recursive: bool = False) -> dict:
     """
     Process all PDF files in a folder.
@@ -162,13 +185,14 @@ def process_folder(folder_path: str, recursive: bool = False) -> dict:
         recursive: If True, process PDFs in subdirectories too
     
     Returns:
-        Dictionary with statistics including failed list
+        Dictionary with statistics including failed list and total time
     """
     stats = {
         'total': 0,
         'successful': 0,
         'failed': 0,
-        'failed_list': []  # List of dicts: {'file': str, 'error_type': str, 'error_message': str}
+        'failed_list': [],  # List of dicts: {'file': str, 'error_type': str, 'error_message': str}
+        'total_time': 0.0
     }
     
     # Find PDFs
@@ -182,6 +206,9 @@ def process_folder(folder_path: str, recursive: bool = False) -> dict:
     print(f"📁 Processing folder: {folder_path}")
     print(f"📄 Found {stats['total']} PDF file(s)\n")
     
+    # Start total timer
+    total_start_time = time.time()
+    
     # Process each PDF
     for idx, pdf_path in enumerate(pdf_files, 1):
         pdf_name = os.path.basename(pdf_path)
@@ -191,10 +218,14 @@ def process_folder(folder_path: str, recursive: bool = False) -> dict:
         print(f"[{idx}/{stats['total']}] Processing: {pdf_name}")
         print("=" * 60)
         
-        success, error_type, error_message = process_single_pdf(pdf_path)
+        success, error_type, error_message, elapsed_time = process_single_pdf(pdf_path)
         
         # Separator after processing
         print("=" * 60)
+        
+        # Print time for this PDF
+        time_str = format_time(elapsed_time)
+        print(f"⏱️  Time: {time_str}")
         
         if success:
             print(f"✅ Success: {pdf_name}\n")
@@ -207,6 +238,9 @@ def process_folder(folder_path: str, recursive: bool = False) -> dict:
                 'error_type': error_type,
                 'error_message': error_message
             })
+    
+    # Calculate total time
+    stats['total_time'] = time.time() - total_start_time
     
     return stats
 
@@ -221,6 +255,7 @@ def print_summary(stats: dict):
     total = stats['total']
     successful = stats['successful']
     failed = stats['failed']
+    total_time = stats.get('total_time', 0.0)
     
     # Calculate success rate
     if total > 0:
@@ -235,6 +270,7 @@ def print_summary(stats: dict):
     print(f"✅ Successful: {successful}")
     print(f"❌ Failed: {failed}")
     print(f"📈 Success rate: {success_rate:.1f}%")
+    print(f"⏱️  Total time: {format_time(total_time)}")
     
     if stats['failed_list']:
         print(f"\n❌ Failed PDFs:")
