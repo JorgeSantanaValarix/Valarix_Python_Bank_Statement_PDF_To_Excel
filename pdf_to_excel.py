@@ -3911,35 +3911,18 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                 # DEC_AMOUNT_RE requires: digits with optional thousands separators + 2 decimals
                 is_valid_amount = bool(DEC_AMOUNT_RE.search(text))
                 
-                # Debug for BBVA: show validation process
-                if col_name == 'cargos' and row_data.get('fecha'):
-                    print(f"[DEBUG BBVA extract_movement_row] Validando para CARGOS:")
-                    print(f"  Palabra: '{text}'")
-                    print(f"  Posición: X0={x0:.1f}, X1={x1:.1f}, Centro={center:.1f}")
-                    if 'cargos' in columns:
-                        cargos_x0, cargos_x1 = columns['cargos']
-                        print(f"  Rango CARGOS: X={cargos_x0}-{cargos_x1}")
-                        print(f"  ¿Dentro del rango? {cargos_x0 <= center <= cargos_x1}")
-                    print(f"  ¿Es monto válido (con 2 decimales)? {is_valid_amount}")
-                
                 if not is_valid_amount:
                     # Not a valid amount, assign to description instead
                     if row_data.get('descripcion'):
                         row_data['descripcion'] += ' ' + text
                     else:
                         row_data['descripcion'] = text
-                    if col_name == 'cargos' and row_data.get('fecha'):
-                        print(f"  ❌ Rechazado: asignado a Descripción en lugar de CARGOS")
                 else:
                     # Valid amount, assign normally
                     if row_data[col_name]:
                         row_data[col_name] += ' ' + text
                     else:
                         row_data[col_name] = text
-                    if col_name == 'cargos' and row_data.get('fecha'):
-                        print(f"  ✅ Aceptado: asignado a CARGOS")
-                        if row_data[col_name]:
-                            print(f"  Valor CARGOS: '{row_data[col_name]}'")
             else:
                 # Normal assignment for other banks or other columns
                 if row_data[col_name]:
@@ -4883,7 +4866,6 @@ def main():
                         # For BBVA, activate movements section when start pattern is found
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                             in_bbva_movements_section = True
-                            print(f"[DEBUG BBVA] Inicio de sección detectado por movements_start (Página {page_num}, Fila {row_idx+1}): '{all_row_text[:80]}'")
                         continue  # Skip the start pattern line
                     
                 # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
@@ -4937,7 +4919,6 @@ def main():
                         # For BBVA, mark that we've left the movements section
                         if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
                             in_bbva_movements_section = False
-                            print(f"[DEBUG BBVA] Fin de sección de movimientos detectado (Página {page_num}, Fila {row_idx+1})")
                         extraction_stopped = True
                         break
 
@@ -4945,57 +4926,6 @@ def main():
                 # Pass bank_name and date_pattern to enable date/description separation
                 
                 row_data = extract_movement_row(row_words, columns_config, bank_config['name'], date_pattern)
-                
-                # Debug for BBVA: print complete line and how cargos column is being split
-                # Only print when we're in the movements section
-                if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
-                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                    cargos_val = str(row_data.get('cargos') or '').strip()
-                    abonos_val = str(row_data.get('abonos') or '').strip()
-                    saldo_val = str(row_data.get('saldo') or '').strip()
-                    fecha_val = str(row_data.get('fecha') or '').strip()
-                    desc_val = str(row_data.get('descripcion') or '').strip()
-                    
-                    # Print complete line
-                    print(f"[DEBUG BBVA] Línea completa (Página {page_num}, Fila {row_idx+1}):")
-                    print(f"  Texto completo: '{all_row_text}'")
-                    
-                    # Print how words are being assigned to cargos column
-                    if 'cargos' in columns_config:
-                        cargos_x0, cargos_x1 = columns_config['cargos']
-                        print(f"  Rango columna CARGOS: X={cargos_x0}-{cargos_x1}")
-                        
-                        # Show which words are in cargos range
-                        cargos_words = []
-                        for word in row_words:
-                            word_x0 = word.get('x0', 0)
-                            word_x1 = word.get('x1', 0)
-                            word_center = (word_x0 + word_x1) / 2
-                            word_text = word.get('text', '')
-                            
-                            if cargos_x0 <= word_center <= cargos_x1:
-                                cargos_words.append({
-                                    'text': word_text,
-                                    'x0': word_x0,
-                                    'x1': word_x1,
-                                    'center': word_center
-                                })
-                        
-                        if cargos_words:
-                            print(f"  Palabras en rango CARGOS ({len(cargos_words)}):")
-                            for cw in cargos_words:
-                                print(f"    - '{cw['text']}' (X: {cw['x0']:.1f}-{cw['x1']:.1f}, centro: {cw['center']:.1f})")
-                        else:
-                            print(f"  ⚠️  No se encontraron palabras en el rango CARGOS")
-                    
-                    # Print extracted values
-                    print(f"  Valores extraídos:")
-                    print(f"    Fecha: '{fecha_val}'")
-                    print(f"    Descripción: '{desc_val[:80]}'")
-                    print(f"    CARGOS: '{cargos_val}'")
-                    print(f"    Abonos: '{abonos_val}'")
-                    print(f"    Saldo: '{saldo_val}'")
-                    print()
                 
                 # Debug for Konfio: print row data after extraction (only first 3 pages)
                 if bank_config['name'] == 'Konfio' and page_num <= 3:
@@ -5084,7 +5014,6 @@ def main():
                     # Only if movements_start was not already found (fallback mechanism)
                     if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                         in_bbva_movements_section = True
-                        print(f"[DEBUG BBVA] Inicio de sección detectado por primera fecha (Página {page_num}, Fila {row_idx+1})")
                     
                     # Only add rows that have date AND (description OR amounts)
                     # This ensures we don't add incomplete rows
