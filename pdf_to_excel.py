@@ -514,10 +514,7 @@ def detect_bank_from_text(text: str) -> str:
     Detect the bank from extracted text content.
     Returns the bank name if detected, otherwise returns DEFAULT_BANK.
     """
-    print("🔍 [BANK DETECTION] Starting bank detection from text...")
-    
     if not text:
-        print("🔍 [BANK DETECTION] No text provided, using default bank")
         return DEFAULT_BANK
     
     # Pattern to detect numeric amounts with exactly 2 decimal places (to reject lines with monetary amounts, as they are likely movement rows, not bank headers)
@@ -527,38 +524,21 @@ def detect_bank_from_text(text: str) -> str:
     
     # Split into lines and check each line
     lines = text.split('\n')
-    total_lines = len(lines)
-    print(f"🔍 [BANK DETECTION] Analyzing {total_lines} lines of text...")
     
-    lines_checked = 0
-    lines_skipped_amounts = 0
-    
-    for line_idx, line in enumerate(lines, 1):
+    for line in lines:
         line_clean = line.strip()
         if not line_clean:
             continue
         
-        lines_checked += 1
-        
         # Skip lines that contain numeric amounts with exactly 2 decimal places (these are likely movement rows, not bank headers)
         # Only skip if the amount has exactly 2 decimals (monetary format)
         if amount_pattern.search(line_clean):
-            lines_skipped_amounts += 1
-            if lines_checked <= 10:  # Show first 10 skipped lines for debugging
-                print(f"🔍 [BANK DETECTION] Line {line_idx} skipped (contains monetary amount with 2 decimals): {line_clean[:80]}")
             continue
-        
-        # Show first 20 lines being checked
-        if lines_checked <= 20:
-            print(f"🔍 [BANK DETECTION] Checking line {line_idx}: {line_clean[:80]}")
         
         # Check each bank's keywords
         for bank_name, keywords in BANK_KEYWORDS.items():
             for keyword_pattern in keywords:
                 if re.search(keyword_pattern, line_clean, re.I):
-                    print(f"🔍 [BANK DETECTION] ✅ MATCH FOUND! Bank: {bank_name}")
-                    print(f"🔍 [BANK DETECTION] Pattern matched: {keyword_pattern}")
-                    print(f"🔍 [BANK DETECTION] Line content: {line_clean[:100]}")
                     return bank_name
         
         # Also check if line contains bank name directly (case insensitive)
@@ -566,14 +546,9 @@ def detect_bank_from_text(text: str) -> str:
         for bank_name in BANK_KEYWORDS.keys():
             # Check for exact bank name match (as whole word)
             if re.search(rf'\b{re.escape(bank_name.upper())}\b', line_upper):
-                print(f"🔍 [BANK DETECTION] ✅ MATCH FOUND! Bank: {bank_name} (direct name match)")
-                print(f"🔍 [BANK DETECTION] Line content: {line_clean[:100]}")
                 return bank_name
     
     # If no bank detected, return default
-    print(f"🔍 [BANK DETECTION] No bank detected after checking {lines_checked} lines")
-    print(f"🔍 [BANK DETECTION] Lines skipped (contained amounts): {lines_skipped_amounts}")
-    print(f"🔍 [BANK DETECTION] Using default bank: {DEFAULT_BANK}")
     return DEFAULT_BANK
 
 
@@ -582,39 +557,27 @@ def detect_bank_from_pdf(pdf_path: str) -> str:
     Detect the bank from PDF content by reading line by line.
     Returns the bank name if detected, otherwise returns DEFAULT_BANK.
     """
-    print(f"🔍 [BANK DETECTION] Starting bank detection from PDF: {os.path.basename(pdf_path)}")
-    
     try:
         with pdfplumber.open(pdf_path) as pdf:
-            total_pages = len(pdf.pages)
             # Read first few pages (usually bank name appears early)
-            max_pages_to_check = min(3, total_pages)
-            print(f"🔍 [BANK DETECTION] PDF has {total_pages} pages, checking first {max_pages_to_check} pages")
+            max_pages_to_check = min(3, len(pdf.pages))
             
             all_text = ""
             for page_num in range(max_pages_to_check):
                 page = pdf.pages[page_num]
                 text = page.extract_text()
                 if text:
-                    text_length = len(text)
                     all_text += text + "\n"
-                    print(f"🔍 [BANK DETECTION] Page {page_num + 1}: extracted {text_length} characters")
-                else:
-                    print(f"🔍 [BANK DETECTION] Page {page_num + 1}: no text extracted")
             
             if all_text:
-                print(f"🔍 [BANK DETECTION] Total text extracted: {len(all_text)} characters")
                 return detect_bank_from_text(all_text)
-            else:
-                print(f"🔍 [BANK DETECTION] No text extracted from PDF pages")
     
     except Exception as e:
-        print(f"🔍 [BANK DETECTION] ❌ Error detecting bank from PDF: {e}")
-        import traceback
-        traceback.print_exc()
+        pass
+        # print(f"⚠️  Error al detectar banco: {e}")
     
     # If no bank detected, return default
-    print(f"🔍 [BANK DETECTION] Using default bank: {DEFAULT_BANK}")
+    #print(f"⚠️  No se pudo detectar el banco, usando: {DEFAULT_BANK}")
     return DEFAULT_BANK
 
 
@@ -4418,26 +4381,15 @@ def main():
     used_ocr = any(p.get('_used_ocr', False) for p in extracted_data)
     
     # Detect bank: from extracted text if OCR was used, otherwise from PDF
-    print("\n" + "="*60)
-    print("🔍 BANK DETECTION START")
-    print("="*60)
-    
     if used_ocr:
         # If OCR was used, detect bank from extracted text
-        print(f"[INFO] Detecting bank from text extracted with OCR...")
         all_text = '\n'.join([p.get('content', '') for p in extracted_data])  # All pages
-        print(f"[INFO] Total text length from OCR: {len(all_text)} characters")
         detected_bank = detect_bank_from_text(all_text)
-        print(f"🏦 Bank detected: {detected_bank}")
     else:
         # If OCR was not used, detect bank from PDF (normal method)
-        print(f"[INFO] Detecting bank from PDF (normal text extraction)...")
         detected_bank = detect_bank_from_pdf(pdf_path)
-        print(f"🏦 Bank detected: {detected_bank}")
     
-    print("="*60)
-    print("🔍 BANK DETECTION END")
-    print("="*60 + "\n")
+    print(f"🏦 Bank detected: {detected_bank}")
     
     is_hsbc = (detected_bank == "HSBC")
     
