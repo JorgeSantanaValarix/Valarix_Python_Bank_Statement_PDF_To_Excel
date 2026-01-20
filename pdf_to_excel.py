@@ -3870,30 +3870,47 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                         row_data[col_name] += ' ' + text
                     else:
                         row_data[col_name] = text
-            else:
-                # Normal assignment for other banks or other columns
-                # Debug for BBVA: show how cargos column is being assigned
-                # Only print when we're in the movements section (indicated by having a date in the row)
-                if bank_name == 'BBVA' and col_name == 'cargos' and row_data.get('fecha'):
-                    print(f"[DEBUG BBVA extract_movement_row] Asignando a CARGOS:")
+            # For BBVA, validate that amounts have 2 decimals before assigning to cargos/abonos/saldo
+            elif bank_name == 'BBVA' and col_name in ('cargos', 'abonos', 'saldo'):
+                # Validate that the text is a valid amount with 2 decimals
+                # DEC_AMOUNT_RE requires: digits with optional thousands separators + 2 decimals
+                is_valid_amount = bool(DEC_AMOUNT_RE.search(text))
+                
+                # Debug for BBVA: show validation process
+                if col_name == 'cargos' and row_data.get('fecha'):
+                    print(f"[DEBUG BBVA extract_movement_row] Validando para CARGOS:")
                     print(f"  Palabra: '{text}'")
                     print(f"  Posición: X0={x0:.1f}, X1={x1:.1f}, Centro={center:.1f}")
                     if 'cargos' in columns:
                         cargos_x0, cargos_x1 = columns['cargos']
                         print(f"  Rango CARGOS: X={cargos_x0}-{cargos_x1}")
                         print(f"  ¿Dentro del rango? {cargos_x0 <= center <= cargos_x1}")
-                    if row_data[col_name]:
-                        print(f"  Valor anterior CARGOS: '{row_data[col_name]}'")
-                        row_data[col_name] += ' ' + text
-                        print(f"  Nuevo valor CARGOS: '{row_data[col_name]}'")
+                    print(f"  ¿Es monto válido (con 2 decimales)? {is_valid_amount}")
+                
+                if not is_valid_amount:
+                    # Not a valid amount, assign to description instead
+                    if row_data.get('descripcion'):
+                        row_data['descripcion'] += ' ' + text
                     else:
-                        row_data[col_name] = text
-                        print(f"  Nuevo valor CARGOS: '{row_data[col_name]}'")
+                        row_data['descripcion'] = text
+                    if col_name == 'cargos' and row_data.get('fecha'):
+                        print(f"  ❌ Rechazado: asignado a Descripción en lugar de CARGOS")
                 else:
+                    # Valid amount, assign normally
                     if row_data[col_name]:
                         row_data[col_name] += ' ' + text
                     else:
                         row_data[col_name] = text
+                    if col_name == 'cargos' and row_data.get('fecha'):
+                        print(f"  ✅ Aceptado: asignado a CARGOS")
+                        if row_data[col_name]:
+                            print(f"  Valor CARGOS: '{row_data[col_name]}'")
+            else:
+                # Normal assignment for other banks or other columns
+                if row_data[col_name]:
+                    row_data[col_name] += ' ' + text
+                else:
+                    row_data[col_name] = text
                 
         # For Konfio, if word doesn't match any column but is in description area, add it to description
         elif bank_name == 'Konfio' and 'descripcion' in columns:
