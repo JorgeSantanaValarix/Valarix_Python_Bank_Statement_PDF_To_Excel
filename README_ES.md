@@ -254,6 +254,77 @@ python pdf_to_excel.py "Test\Bank Statement\BBVA.pdf"
 
 Esto generará: `Test\Bank Statement\BBVA.xlsx`
 
+### Procesar Múltiples PDFs en una Carpeta
+
+Para procesar múltiples archivos PDF en un directorio a la vez, usa `test_multiple_pdf_to_excel.py`:
+
+```bash
+python test_multiple_pdf_to_excel.py "ruta\a\la\carpeta"
+```
+
+**Características:**
+- Procesa todos los archivos PDF en la carpeta especificada
+- Muestra el output en tiempo real de cada procesamiento de PDF
+- Muestra el tiempo de procesamiento de cada PDF
+- Muestra un resumen final con:
+  - Total de PDFs procesados
+  - Número de conversiones exitosas
+  - Número de conversiones fallidas
+  - Porcentaje de éxito
+  - Lista de PDFs fallidos con detalles del error
+  - Tiempo total de procesamiento
+
+**Opciones:**
+- `-r` o `--recursive`: Procesa PDFs en subdirectorios también
+
+**Ejemplos:**
+
+Procesar todos los PDFs en una carpeta:
+```bash
+python test_multiple_pdf_to_excel.py "C:\Estados de Cuenta"
+```
+
+Procesar PDFs recursivamente (incluyendo subdirectorios):
+```bash
+python test_multiple_pdf_to_excel.py "C:\Estados de Cuenta" --recursive
+```
+
+Si no se proporciona una ruta de carpeta, el script te pedirá que la ingreses:
+```bash
+python test_multiple_pdf_to_excel.py
+```
+
+**Ejemplo de Salida:**
+```
+📁 Processing folder: C:\Estados de Cuenta
+📄 Found 10 PDF file(s)
+
+============================================================
+[1/10] Processing: estado1.pdf
+============================================================
+[Output de pdf_to_excel.py...]
+============================================================
+⏱️  Time: 1m 23.5s
+✅ Success: estado1.pdf
+
+...
+
+============================================================
+📊 FINAL SUMMARY
+============================================================
+Total PDFs processed: 10
+✅ Successful: 8
+❌ Failed: 2
+📈 Success rate: 80.0%
+⏱️  Total time: 12m 34.5s
+
+❌ Failed PDFs:
+   1. estado5.pdf
+      Error: Validation error
+      Details: ❌ VALIDATION: THERE ARE DIFFERENCES
+============================================================
+```
+
 ---
 
 ## Troubleshooting

@@ -254,6 +254,77 @@ python pdf_to_excel.py "Test\Bank Statement\BBVA.pdf"
 
 This will generate: `Test\Bank Statement\BBVA.xlsx`
 
+### Processing Multiple PDFs in a Folder
+
+To process multiple PDF files in a directory at once, use `test_multiple_pdf_to_excel.py`:
+
+```bash
+python test_multiple_pdf_to_excel.py "path\to\folder"
+```
+
+**Features:**
+- Processes all PDF files in the specified folder
+- Shows real-time output from each PDF processing
+- Displays processing time for each PDF
+- Shows a final summary with:
+  - Total PDFs processed
+  - Number of successful conversions
+  - Number of failed conversions
+  - Success rate percentage
+  - List of failed PDFs with error details
+  - Total processing time
+
+**Options:**
+- `-r` or `--recursive`: Process PDFs in subdirectories too
+
+**Examples:**
+
+Process all PDFs in a folder:
+```bash
+python test_multiple_pdf_to_excel.py "C:\Bank Statements"
+```
+
+Process PDFs recursively (including subdirectories):
+```bash
+python test_multiple_pdf_to_excel.py "C:\Bank Statements" --recursive
+```
+
+If no folder path is provided, the script will prompt you to enter it:
+```bash
+python test_multiple_pdf_to_excel.py
+```
+
+**Output Example:**
+```
+📁 Processing folder: C:\Bank Statements
+📄 Found 10 PDF file(s)
+
+============================================================
+[1/10] Processing: statement1.pdf
+============================================================
+[Output from pdf_to_excel.py...]
+============================================================
+⏱️  Time: 1m 23.5s
+✅ Success: statement1.pdf
+
+...
+
+============================================================
+📊 FINAL SUMMARY
+============================================================
+Total PDFs processed: 10
+✅ Successful: 8
+❌ Failed: 2
+📈 Success rate: 80.0%
+⏱️  Total time: 12m 34.5s
+
+❌ Failed PDFs:
+   1. statement5.pdf
+      Error: Validation error
+      Details: ❌ VALIDATION: THERE ARE DIFFERENCES
+============================================================
+```
+
 ---
 
 ## Troubleshooting
