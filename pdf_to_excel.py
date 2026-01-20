@@ -2661,7 +2661,57 @@ def create_validation_sheet(pdf_summary: dict, extracted_totals: dict, has_saldo
     return pd.DataFrame(validation_data)
 
 
-def print_validation_summary(pdf_summary: dict, extracted_totals: dict, validation_df: pd.DataFrame):
+def has_numeric_values_in_movements(df_mov: pd.DataFrame) -> bool:
+    """
+    Verifica si df_mov tiene al menos un valor numérico en columnas numéricas.
+    
+    Args:
+        df_mov: DataFrame con los movimientos del banco
+    
+    Returns:
+        True si hay al menos un valor numérico > 0, False en caso contrario
+    """
+    # Columnas numéricas a verificar (case-insensitive)
+    numeric_columns = ['Cargos', 'Abonos', 'Saldo', 'Liquidación']
+    
+    # Buscar columnas que coincidan (case-insensitive)
+    for col in df_mov.columns:
+        col_lower = col.lower()
+        if col_lower in [nc.lower() for nc in numeric_columns]:
+            # Intentar convertir valores a numéricos
+            for val in df_mov[col]:
+                if pd.notna(val) and str(val).strip():
+                    # Excluir la fila "Total" si existe
+                    if str(val).strip().lower() == 'total':
+                        continue
+                    normalized = normalize_amount_str(str(val).strip())
+                    if normalized is not None and normalized > 0:
+                        return True
+    return False
+
+
+def all_differences_are_na(validation_df: pd.DataFrame) -> bool:
+    """
+    Verifica si todas las filas de 'Diferencia' (excepto VALIDACIÓN GENERAL) son "N/A".
+    
+    Args:
+        validation_df: DataFrame de validación
+    
+    Returns:
+        True si todas las diferencias son "N/A", False en caso contrario
+    """
+    # Filtrar filas excluyendo 'VALIDACIÓN GENERAL'
+    filtered_df = validation_df[validation_df['Concepto'] != 'VALIDACIÓN GENERAL']
+    
+    if len(filtered_df) == 0:
+        return False  # No hay filas para verificar
+    
+    # Verificar que todas las diferencias sean "N/A"
+    all_na = (filtered_df['Diferencia'] == "N/A").all()
+    return all_na
+
+
+def print_validation_summary(pdf_summary: dict, extracted_totals: dict, validation_df: pd.DataFrame, df_mov: pd.DataFrame):
     """
     Print validation summary to console with checkmarks or X marks.
     """
@@ -2669,10 +2719,18 @@ def print_validation_summary(pdf_summary: dict, extracted_totals: dict, validati
     # print("📊 VALIDACIÓN DE DATOS")
     # print("=" * 80)
     
+    # Verificar casos especiales ANTES de evaluar overall_status
+    force_error = False
+    if not has_numeric_values_in_movements(df_mov):
+        force_error = True
+    elif all_differences_are_na(validation_df):
+        force_error = True
+    
     # Check overall status
     overall_status = validation_df[validation_df['Concepto'] == 'VALIDACIÓN GENERAL']['Estado'].values[0]
     
-    if '✓' in overall_status:
+    # Reusar código existente: si force_error es True, forzar que caiga en else
+    if '✓' in overall_status and not force_error:
         print("✅ VALIDATION: ALL CORRECT")
     else:
         print("❌ VALIDATION: THERE ARE DIFFERENCES")
@@ -6614,7 +6672,7 @@ def main():
     print("📊 Exporting to Excel...")
     
     # Print validation summary to console
-    print_validation_summary(pdf_summary, extracted_totals, df_validation)
+    print_validation_summary(pdf_summary, extracted_totals, df_validation, df_mov)
     
     # Determine number of sheets to write
     num_sheets = 3  # Summary, Movements, Data Validation
