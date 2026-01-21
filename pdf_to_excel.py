@@ -3590,18 +3590,10 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
             fecha_texts = [w.get('text', '').strip() for w in fecha_words]
             fecha_text = ' '.join(fecha_texts)
             
-            # 🔍 HSBC DEBUG: Mostrar extracción de fecha desde rango
-            if debug_only_if_contains_iva:
-                print(f"   🔍 Extracción de fecha desde rango X {fecha_x0:.1f}-{fecha_x1:.1f}:")
-                print(f"      Palabras encontradas: {[w.get('text', '') for w in fecha_words]}")
-                print(f"      Texto combinado: '{fecha_text}'")
-            
             # Apply OCR error correction in dates before searching for pattern
             fecha_text_corrected = fix_ocr_date_errors(fecha_text, bank_name)
             if fecha_text_corrected != fecha_text:
                 fecha_text = fecha_text_corrected
-                if debug_only_if_contains_iva:
-                    print(f"      Texto corregido: '{fecha_text}'")
             
             # For HSBC, date is only 2 digits (01-31)
             hsbc_date_match = date_pattern.search(fecha_text)
@@ -3610,12 +3602,8 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                 # Clean the date: remove dots, spaces and other non-numeric characters
                 date_text = date_text.strip().rstrip('.,;:')
                 row_data['fecha'] = date_text
-                if debug_only_if_contains_iva:
-                    print(f"      ✅ Fecha extraída: '{date_text}'")
                 # Remove these words from sorted_words so they're not processed again
                 sorted_words = [w for w in sorted_words if w not in fecha_words]
-            elif debug_only_if_contains_iva:
-                print(f"      ❌ No se encontró patrón de fecha en: '{fecha_text}'")
     
     # For Konfio, first try to reconstruct dates that might be split across multiple words
     # Konfio dates can be split like "31" and "mar 2023" in separate words
@@ -3954,18 +3942,12 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
             date_end_pos = date_match.end()
             # For HSBC, ensure we split the 2-digit date from the rest of the text
             if bank_name == 'HSBC':
-                # 🔍 HSBC DEBUG: Mostrar procesamiento de palabra con posible fecha
-                if debug_only_if_contains_iva:
-                    print(f"   🔍 Procesando palabra con posible fecha: '{text}' (X: {x0:.1f}-{x1:.1f})")
-                
                 # Apply OCR error correction before searching for pattern
                 text_corrected = fix_ocr_date_errors(text, bank_name)
                 if text_corrected != text:
                     text = text_corrected
                     # Update the text in the word dictionary
                     word['text'] = text
-                    if debug_only_if_contains_iva:
-                        print(f"      Texto corregido: '{text}'")
                 
                 # The date should be exactly 2 digits (01-31) at the start
                 # Extract the 2 digits and everything after as description
@@ -3982,9 +3964,6 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                         description_text = description_text.replace('_', ' ')
                     else:
                         description_text = ''
-                    
-                    if debug_only_if_contains_iva:
-                        print(f"      ✅ Fecha extraída: '{date_text}', Descripción: '{description_text}'")
                     
                     # Assign date to fecha column (only if not already assigned)
                     if not row_data.get('fecha'):
