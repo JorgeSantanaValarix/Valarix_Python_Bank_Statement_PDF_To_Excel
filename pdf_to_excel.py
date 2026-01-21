@@ -2532,6 +2532,10 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
             ~df_for_totals['Descripción'].astype(str).str.contains('PAGO DE INTERES', case=False, na=False)
         ]
     
+    # Initialize df_for_abonos and df_for_cargos (will be set for specific banks)
+    df_for_abonos = df_for_totals  # Default: use same DataFrame for Abonos
+    df_for_cargos = df_for_totals  # Default: use same DataFrame for Cargos
+    
     # For Scotiabank, exclude "COBRO DE COMISION" and "IVA POR COMISIONES" 
     # from Cargos calculation only (not from Abonos)
     # because these are not included in the summary totals on the PDF cover page
@@ -2555,17 +2559,36 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
               df_for_totals['Descripción'].astype(str).str.contains('COMISION POR NO', case=False, na=False) |
               df_for_totals['Descripción'].astype(str).str.contains('I.V.A. LIQ', case=False, na=False))
         ]
-    else:
-        # For other banks, use the same DataFrame for both Abonos and Cargos
-        df_for_cargos = df_for_totals
+    elif bank_name == 'HSBC' and 'Descripción' in df_for_totals.columns:
+        # For HSBC, exclude specific rows from Cargos calculation only (not from Abonos)
+        # because these are not included in the summary totals on the PDF cover page
+        # Exclude rows that contain ANY of these strings:
+        # - "S.R. RETENIDO"
+        # - "IVA" or variants (I.V.A., IVA., 1VA, INA, INVA, etc.) - OCR errors
+        # - "COMISION"
+        # Use regex pattern string to match IVA variants (case-insensitive)
+        iva_pattern_str = r'\b(IVA|I\.V\.A\.|IVA\.|1VA|INA|INVA)\b'
+        df_for_cargos = df_for_totals[
+            ~(df_for_totals['Descripción'].astype(str).str.contains('S.R. RETENIDO', case=False, na=False) |
+              df_for_totals['Descripción'].astype(str).str.contains('COMISION', case=False, na=False) |
+              df_for_totals['Descripción'].astype(str).str.contains(iva_pattern_str, case=False, na=False, regex=True))
+        ]
+        
+        # For HSBC, also exclude "PAGO DE INTERES NOMINAL" from Abonos calculation
+        # because it's not included in the summary totals on the PDF cover page
+        df_for_abonos = df_for_totals[
+            ~df_for_totals['Descripción'].astype(str).str.contains('PAGO DE INTERES NOMINAL', case=False, na=False)
+        ]
     
     # Calculate based on available columns
     if 'Abonos' in df_for_totals.columns:
-        totals['total_abonos'] = df_for_totals['Abonos'].apply(normalize_amount_str).sum()
+        # For HSBC, use df_for_abonos (which excludes "PAGO DE INTERES NOMINAL")
+        # For other banks, df_for_abonos will be the same as df_for_totals
+        totals['total_abonos'] = df_for_abonos['Abonos'].apply(normalize_amount_str).sum()
         totals['total_depositos'] = totals['total_abonos']
     
     if 'Cargos' in df_for_totals.columns:
-        # For Scotiabank and Banorte, use df_for_cargos (which excludes commission rows)
+        # For Scotiabank, Banorte, and HSBC, use df_for_cargos (which excludes commission rows)
         # For other banks, df_for_cargos will be the same as df_for_totals
         totals['total_cargos'] = df_for_cargos['Cargos'].apply(normalize_amount_str).sum()
         totals['total_retiros'] = totals['total_cargos']
@@ -3431,12 +3454,15 @@ def is_transaction_row(row_data, bank_name=None, debug_only_if_contains_iva=Fals
     # For HSBC, also require a non-empty description (to filter out invalid rows)
     has_valid_description = True
     if bank_name == 'HSBC':
-        # Description should not be empty and should not be just numbers or dates
+        # Description should not be empty and should have at least 3 characters
+        # For HSBC, descriptions can contain numbers if they are in the description coordinates
+        # Since words are already assigned to columns based on coordinates, if text is in descripcion column,
+        # it means it's in the correct coordinate range, so we accept it even if it's only numbers
         if not descripcion or len(descripcion.strip()) < 3:
             has_valid_description = False
-        # Reject if description is just a date or number
-        if re.match(r'^[\d\s\/\-]+$', descripcion):
-            has_valid_description = False
+        # For HSBC, we don't reject descriptions that only contain numbers/spaces
+        # because if they're in the description column coordinates, they are valid descriptions
+        # (e.g., reference numbers, transaction IDs, etc.)
     
     return has_date and has_valid_amount and has_valid_description
 
@@ -4588,8 +4614,11 @@ def main():
                 # Extraer movimiento usando BANK_CONFIGS
                 row_data = extract_movement_row(row_words, columns_config, 'HSBC', date_pattern, debug_only_if_contains_iva=contains_iva)
                 
-                # Procesar montos detectados (_amounts) y asignarlos a columnas para HSBC
+                # Obtener amounts_list
                 amounts_list = row_data.get('_amounts', [])
+                
+                # Procesar montos detectados (_amounts) y asignarlos a columnas para HSBC
+                # amounts_list ya fue obtenido arriba (en el bloque de debug o aquí)
                 
                 # Función auxiliar para validar que un valor es un monto válido
                 def is_valid_amount(value):
