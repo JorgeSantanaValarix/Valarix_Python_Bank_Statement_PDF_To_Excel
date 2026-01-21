@@ -148,6 +148,7 @@ BANK_CONFIGS = {
         "name": "Banorte",
         "movements_start": "DETALLE DE MOVIMIENTOS (PESOS)",
         "movements_end": "INVERSION ENLACE NEGOCIOS",
+        "movements_end_secondary": "CARGOS OBJETADOS EN EL PERÍODO",
         "columns": {
             "fecha": (54, 85),             # Operation Date column
             "descripcion": (87, 167),     # Description column
@@ -4786,6 +4787,13 @@ def main():
                 # For other banks, use simple string matching
                 movement_end_pattern = re.compile(re.escape(movement_end_string), re.I)
         
+        # For Banorte, create secondary pattern for alternative movements_end (from BANK_CONFIGS)
+        banorte_secondary_end_pattern = None
+        if bank_config['name'] == 'Banorte':
+            banorte_secondary_end_string = bank_config.get('movements_end_secondary')
+            if banorte_secondary_end_string:
+                banorte_secondary_end_pattern = re.compile(re.escape(banorte_secondary_end_string), re.I)
+        
         extraction_stopped = False
         # For Banregio, initialize flag to track when we're in the commission zone
         in_comision_zone = False
@@ -4898,8 +4906,15 @@ def main():
                         # For Santander/Banregio/Hey, use the pattern with 3 numeric amounts (already created in movement_end_pattern)
                         if movement_end_pattern.search(all_text):
                             match_found = True
+                    elif bank_config['name'] == 'Banorte':
+                        # For Banorte, try primary pattern first ("INVERSION ENLACE NEGOCIOS")
+                        if movement_end_pattern and movement_end_pattern.search(all_text):
+                            match_found = True
+                        # If primary pattern not found, try secondary pattern ("CARGOS OBJETADOS EN EL PERÍODO")
+                        elif banorte_secondary_end_pattern and banorte_secondary_end_pattern.search(all_text):
+                            match_found = True
                     else:
-                        # For other banks (Banamex, Santander, Banorte, Konfio, Banbajío, etc.), use the standard pattern
+                        # For other banks (Banamex, Santander, Konfio, Banbajío, etc.), use the standard pattern
                         if movement_end_pattern.search(all_text):
                             match_found = True
                             #if bank_config['name'] == 'Banbajío':
