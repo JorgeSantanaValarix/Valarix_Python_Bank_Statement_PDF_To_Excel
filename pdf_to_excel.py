@@ -945,14 +945,43 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
         # Use PyMuPDF to convert PDF to images (does not require Poppler)
         doc = fitz.open(pdf_path)
         
+        # Get page dimensions for DPI calculation (use first page as reference)
+        first_page = doc[0]
+        page_width_pts = first_page.rect.width
+        page_height_pts = first_page.rect.height
+        page_width_inches = page_width_pts / 72.0
+        page_height_inches = page_height_pts / 72.0
+        
+        # Use fixed zoom factor for optimal OCR quality (6.0x = 432 DPI)
+        # Target DPI: 432 DPI (6.0x zoom factor)
+        target_dpi = 432
+        zoom_factor = 6.0  # Fixed zoom for consistent OCR quality
+        
+        # Calculate effective DPI with fixed zoom
+        effective_dpi = 72.0 * zoom_factor  # 432 DPI
+        
+        # Calculate resulting image dimensions in pixels
+        img_width_px = int(page_width_pts * zoom_factor)
+        img_height_px = int(page_height_pts * zoom_factor)
+        
+        # Show DPI calculation info (only for first page to avoid spam)
+        print(f"[INFO] Page dimensions: {page_width_pts:.1f} x {page_height_pts:.1f} pts ({page_width_inches:.2f} x {page_height_inches:.2f} inches)")
+        print(f"[INFO] Target DPI: {target_dpi} DPI (zoom: {zoom_factor:.1f}x)")
+        print(f"[INFO] Using zoom: {zoom_factor:.1f}x → Effective DPI: {effective_dpi:.0f} DPI")
+        print(f"[INFO] Image size: {img_width_px} x {img_height_px} pixels")
+        if effective_dpi < 300:
+            print(f"[WARNING] DPI ({effective_dpi:.0f}) is below recommended 300 DPI for OCR")
+        elif effective_dpi > 500:
+            print(f"[INFO] DPI ({effective_dpi:.0f}) is high - may have diminishing returns beyond 400-500 DPI")
+        else:
+            print(f"[INFO] DPI ({effective_dpi:.0f}) is within optimal range for OCR accuracy")
+        
         for page_num in range(len(doc)):
             page = doc[page_num]
             print(f"[INFO] Processing page {page_num + 1}/{len(doc)} with OCR...")
             
             # Convert page to image (high resolution)
-            # Increased to 5.0x for better OCR precision, especially for small characters and mixed text (I.V.A., etc.)
             # Coordinates will be normalized later to maintain compatibility with column ranges calibrated for 2.0x
-            zoom_factor = 5.0  # Increased to 5.0x for better OCR precision (especially for small characters like I.V.A.)
             mat = fitz.Matrix(zoom_factor, zoom_factor)
             pix = page.get_pixmap(matrix=mat)
             img_data = pix.tobytes("png")
@@ -981,6 +1010,7 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
             
             # Perform OCR with real coordinates and improved configuration
             # PSM 6: Single uniform block of text (good for multi-line content)
+            # Note: PSM 7 was tested but caused issues with word extraction and coordinates
             # OEM 1: LSTM engine (better accuracy than legacy engine)
             tesseract_config = r'--oem 1 --psm 6'
             ocr_data = pytesseract.image_to_data(img_for_ocr, lang=lang, output_type=pytesseract.Output.DICT, config=tesseract_config)
@@ -2594,11 +2624,9 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
         # - "IVA" or variants (I.V.A., IVA., 1VA, INA, INVA, etc.) - OCR errors
         # - "COMISION"
         # Use regex pattern string to match IVA variants (case-insensitive)
-        iva_pattern_str = r'\b(IVA|I\.V\.A\.|IVA\.|1VA|INA|INVA|OVA.|LV.A.)\b'
+        iva_pattern_str = r'\b(IVA|I\.V\.A\.|IVA\.|1VA|INA|INVA|OVA.|LV.A.|IVA.)\b'
         df_for_cargos = df_for_totals[
-            ~(df_for_totals['Descripción'].astype(str).str.contains('S.R. RETENIDO', case=False, na=False) |
-              
-              df_for_totals['Descripción'].astype(str).str.contains(iva_pattern_str, case=False, na=False, regex=True))
+            ~(df_for_totals['Descripción'].astype(str).str.contains('S.R. RETENIDO', case=False, na=False) )
         ]
         
         # For HSBC, exclude "PAGO DE INTERES NOMINAL", "COMISION", and "REV" from Abonos calculation
@@ -4626,15 +4654,28 @@ def main():
         # Filtrar palabras en la sección de movimientos
         filtered_words = filter_hsbc_movements_section(extracted_data, start_string, end_string)
         
+        # 🔍 HSBC DEBUG: Verificar filtrado de palabras
+        print(f"\n🔍 HSBC DEBUG: Filtrado de palabras en sección de movimientos:")
+        print(f"   movements_start: '{start_string}'")
+        print(f"   movements_end: '{end_string}'")
+        print(f"   Total de palabras filtradas: {len(filtered_words)}")
+        
         if not filtered_words:
+            print(f"   ⚠️  No se encontraron palabras en la sección de movimientos")
             df_mov = pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
         else:
             # Agrupar palabras por filas (igual que otros bancos)
             # Para HSBC, usar tolerancia Y más amplia para capturar montos que pueden estar ligeramente desalineados
             word_rows = group_words_by_row(filtered_words, y_tolerance=5)
             
+            # 🔍 HSBC DEBUG: Verificar agrupación de palabras
+            print(f"   Total de filas agrupadas: {len(word_rows)}")
+            
             # Patrón de fecha para HSBC (solo día: 01-31)
             date_pattern = re.compile(r"^(0[1-9]|[12][0-9]|3[01])(?=\s|$)")
+            
+            # 🔍 HSBC DEBUG: Buffer para guardar últimas 2 filas válidas antes de movements_end
+            last_two_valid_rows = []
             
             # Extraer movimientos usando la misma lógica que otros bancos
             for row_idx, row_words in enumerate(word_rows):
@@ -4756,7 +4797,47 @@ def main():
                 is_valid = is_transaction_row(row_data, 'HSBC', debug_only_if_contains_iva=False)
                 
                 if is_valid:
+                    # 🔍 HSBC DEBUG: Guardar últimas 2 filas válidas antes de movements_end
+                    # Construir texto original de la fila
+                    line_original = ' '.join([w.get('text', '') for w in row_words])
+                    
+                    # Obtener número de página de la primera palabra
+                    page_num_ocr = row_words[0].get('page', 0) if row_words else 0
+                    
+                    # Guardar información de la fila (mantener solo últimas 2)
+                    row_debug_info = {
+                        'line_original': line_original,
+                        'row_data': row_data.copy(),
+                        'row_idx': row_idx,
+                        'page_num': page_num_ocr
+                    }
+                    last_two_valid_rows.append(row_debug_info)
+                    if len(last_two_valid_rows) > 2:
+                        last_two_valid_rows.pop(0)  # Mantener solo las últimas 2
+                    
                     movement_rows.append(row_data)
+            
+            # 🔍 HSBC DEBUG: Mostrar últimas 2 filas válidas después de procesar todas las filas (flujo OCR)
+            print(f"\n🔍 HSBC DEBUG: Procesamiento OCR completado")
+            print(f"   Total de filas procesadas: {len(movement_rows)}")
+            print(f"   Últimas 2 filas válidas guardadas: {len(last_two_valid_rows)}")
+            
+            if last_two_valid_rows:
+                print(f"\n🔍 HSBC DEBUG: Últimas 2 filas válidas procesadas (flujo OCR):")
+                for i, row_info in enumerate(reversed(last_two_valid_rows), 1):
+                    print(f"\n   --- Fila {i} de las últimas 2 ---")
+                    print(f"      📄 Texto original: '{row_info['line_original']}'")
+                    print(f"      📊 División en columnas (después del procesamiento):")
+                    print(f"         • Fecha: '{row_info['row_data'].get('fecha', '')}'")
+                    descripcion_full = str(row_info['row_data'].get('descripcion', ''))
+                    print(f"         • Descripción: '{descripcion_full[:100]}{'...' if len(descripcion_full) > 100 else ''}'")
+                    print(f"         • Cargos: '{row_info['row_data'].get('cargos', '')}'")
+                    print(f"         • Abonos: '{row_info['row_data'].get('abonos', '')}'")
+                    print(f"         • Saldo: '{row_info['row_data'].get('saldo', '')}'")
+                    if 'page_num' in row_info:
+                        print(f"      📍 Ubicación: Página {row_info['page_num']}, Fila {row_info['row_idx'] + 1}")
+            else:
+                print(f"   ⚠️  No se guardaron últimas 2 filas válidas (puede que no haya filas válidas o el procesamiento terminó antes)")
         
         df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
         
@@ -4801,6 +4882,8 @@ def main():
         banbajio_detected_rows = 0
         # For BBVA, track when we're in the movements section
         in_bbva_movements_section = False
+        # 🔍 HSBC DEBUG: Buffer para guardar últimas 2 filas válidas antes de movements_end
+        last_two_valid_rows = []
         for page_data in extracted_data:
             if extraction_stopped:
                 break
@@ -4914,13 +4997,31 @@ def main():
                         elif banorte_secondary_end_pattern and banorte_secondary_end_pattern.search(all_text):
                             match_found = True
                     else:
-                        # For other banks (Banamex, Santander, Konfio, Banbajío, etc.), use the standard pattern
+                        # For other banks (Banamex, Santander, Konfio, Banbajío, HSBC, etc.), use the standard pattern
                         if movement_end_pattern.search(all_text):
                             match_found = True
                             #if bank_config['name'] == 'Banbajío':
                                 #print(f"🛑 BanBajío: Fin de extracción detectado en página {page_num}, fila {row_idx+1}: {all_row_text[:100]}")
                     
                     if match_found:
+                        # 🔍 HSBC DEBUG: Mostrar últimas 2 filas válidas antes de movements_end
+                        if bank_config['name'] == 'HSBC' and last_two_valid_rows:
+                            print(f"\n🔍 HSBC DEBUG: Últimas 2 filas válidas ANTES de movements_end:")
+                            print(f"   movements_end detectado en: Página {page_num}, Fila {row_idx + 1}")
+                            print(f"   Texto de movements_end: '{all_text}'")
+                            for i, row_info in enumerate(reversed(last_two_valid_rows), 1):
+                                print(f"\n   --- Fila {i} antes de movements_end ---")
+                                print(f"      📄 Texto original: '{row_info['line_original']}'")
+                                print(f"      📊 División en columnas (después del procesamiento):")
+                                print(f"         • Fecha: '{row_info['row_data'].get('fecha', '')}'")
+                                descripcion_full = str(row_info['row_data'].get('descripcion', ''))
+                                print(f"         • Descripción: '{descripcion_full[:100]}{'...' if len(descripcion_full) > 100 else ''}'")
+                                print(f"         • Cargos: '{row_info['row_data'].get('cargos', '')}'")
+                                print(f"         • Abonos: '{row_info['row_data'].get('abonos', '')}'")
+                                print(f"         • Saldo: '{row_info['row_data'].get('saldo', '')}'")
+                                if 'page_num' in row_info:
+                                    print(f"      📍 Ubicación: Página {row_info['page_num']}, Fila {row_info['row_idx'] + 1}")
+                        
                         #print(f"🛑 Fin de tabla de movimientos detectado en página {page_num}")
                         # For BBVA, mark that we've left the movements section
                         if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
@@ -5084,6 +5185,22 @@ def main():
                         
                         movement_rows.append(row_data)
                     elif has_description_or_amounts:
+                        # For HSBC, validate row before adding
+                        if bank_config['name'] == 'HSBC':
+                            is_valid = is_transaction_row(row_data, 'HSBC', debug_only_if_contains_iva=False)
+                            if is_valid:
+                                # 🔍 HSBC DEBUG: Guardar últimas 2 filas válidas antes de movements_end (flujo normal, no OCR)
+                                all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                                row_debug_info = {
+                                    'line_original': all_row_text,
+                                    'row_data': row_data.copy(),
+                                    'row_idx': row_idx,
+                                    'page_num': page_num
+                                }
+                                last_two_valid_rows.append(row_debug_info)
+                                if len(last_two_valid_rows) > 2:
+                                    last_two_valid_rows.pop(0)  # Mantener solo las últimas 2
+                        
                         # For Banregio, only include rows where description starts with "TRA" or "DOC"
                         if bank_config['name'] == 'Banregio':
                             desc_val_check = str(row_data.get('descripcion') or '').strip()
