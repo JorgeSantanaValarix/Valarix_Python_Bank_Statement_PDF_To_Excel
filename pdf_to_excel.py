@@ -96,7 +96,7 @@ BANK_CONFIGS = {
 
     "Inbursa": {
         "name": "Inbursa",
-        "movements_start": "FECHA REFERENCIA CONCEPTO CARGOS ABONOS SALDO",
+        "movements_start": "DETALLE DE MOVIMIENTOS",
         "movements_end": "Si desea recibir pagos",
         "columns": {
             "fecha": (11, 40),             # Operation Date column
@@ -4548,7 +4548,12 @@ def main():
                     # For Inbursa, only look for dates (not headers, as we already skipped the header line)
                     if inbursa_header_pattern:
                         # For Inbursa, only start when we find a date (actual movement row) after the header
-                        if day_re.search(ln):
+                        # Inbursa dates can appear as "ENE. 01" or "ABR 10" (month with optional dot + day)
+                        # Valid months: ENE, FEB, MAR, ABR, MAY, JUN, JUL, AGO, SEP, OCT, NOV, DIC
+                        # Day: 01-31
+                        # This prevents false positives like "IVA 16" or "16.0" from being detected as dates
+                        inbursa_date_pattern = re.compile(r'^(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\.?\s+(0[1-9]|[12][0-9]|3[01])\b', re.I)
+                        if inbursa_date_pattern.search(ln.strip()):
                             movement_start_found = True
                             movement_start_page = p['page']
                             movement_start_index = i
@@ -5065,6 +5070,22 @@ def main():
                         has_date = bool(banamex_date_pattern.search(fecha_val))
                     else:
                         has_date = bool(date_pattern.search(fecha_val))
+                        # For Inbursa, use strict date pattern: "MES. DD" or "MES DD" at start of line
+                        # Valid months: ENE, FEB, MAR, ABR, MAY, JUN, JUL, AGO, SEP, OCT, NOV, DIC
+                        # This prevents false positives like "01 BAL" or "IVA 16"
+                        if bank_config['name'] == 'Inbursa':
+                            inbursa_date_pattern = re.compile(r'^(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\.?\s+(0[1-9]|[12][0-9]|3[01])\b', re.I)
+                            # Check if fecha_val matches the pattern (must be at start)
+                            has_date = bool(inbursa_date_pattern.match(fecha_val.strip()))
+                            # If fecha_val doesn't match, check all row text for the pattern
+                            if not has_date:
+                                all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                                if inbursa_date_pattern.search(all_row_text.strip()):
+                                    has_date = True
+                                    # Extract the date and assign to fecha
+                                    date_match = inbursa_date_pattern.search(all_row_text.strip())
+                                    if date_match:
+                                        row_data['fecha'] = date_match.group()
                         # For Konfio, if no date in fecha column, check all words in the row
                         # But use strict format: must be "DIA MES AÑO" (e.g., "14 mar 2023"), not just "14"
                         if bank_config['name'] == 'Konfio' and not has_date:
@@ -6145,6 +6166,10 @@ def main():
         # For BanBajío, preserve the date format "DIA MES" (e.g., "3 ENE") as-is
         df_mov['Fecha'] = df_mov['fecha'].astype(str)
         df_mov = df_mov.drop(columns=['fecha'])
+    elif bank_config['name'] == 'Inbursa' and 'fecha' in df_mov.columns:
+        # For Inbursa, preserve the date format "MES. DD" or "MES DD" (e.g., "ENE. 01" or "ABR 10") as-is
+        df_mov['Fecha'] = df_mov['fecha'].astype(str)
+        df_mov = df_mov.drop(columns=['fecha'])
     elif bank_config['name'] == 'BBVA':
         # For BBVA, extract dates from separate 'fecha' and 'liq' columns
         fecha_oper_dates = None
@@ -6192,13 +6217,13 @@ def main():
             df_mov['Fecha Liq'] = dates.apply(lambda t: t[1])
 
     # Remove original 'fecha' if present (only if not already removed)
-    # Skip this for HSBC - HSBC will handle 'fecha' to 'Fecha' conversion in its own block
-    if 'fecha' in df_mov.columns and bank_config['name'] != 'HSBC':
+    # Skip this for HSBC, Banregio, Base, Banbajío, and Inbursa - they already handled 'fecha' to 'Fecha' conversion
+    if 'fecha' in df_mov.columns and bank_config['name'] != 'HSBC' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base' and bank_config['name'] != 'Banbajío' and bank_config['name'] != 'Inbursa':
         df_mov = df_mov.drop(columns=['fecha'])
     
     # For non-BBVA banks, use only 'Fecha' column (based on Fecha Oper) and remove Fecha Liq
-    # Skip this for Banregio, Base, BanBajío, and HSBC (HSBC already has 'Fecha' from OCR or will be set below)
-    if bank_config['name'] != 'BBVA' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base' and bank_config['name'] != 'Banbajío' and bank_config['name'] != 'HSBC':
+    # Skip this for Banregio, Base, BanBajío, Inbursa, and HSBC (HSBC already has 'Fecha' from OCR or will be set below)
+    if bank_config['name'] != 'BBVA' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base' and bank_config['name'] != 'Banbajío' and bank_config['name'] != 'Inbursa' and bank_config['name'] != 'HSBC':
         if 'Fecha Oper' in df_mov.columns:
             df_mov['Fecha'] = df_mov['Fecha Oper']
             df_mov = df_mov.drop(columns=['Fecha Oper', 'Fecha Liq'])
