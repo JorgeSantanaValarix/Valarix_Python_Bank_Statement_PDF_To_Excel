@@ -8,7 +8,7 @@ import pandas as pd
 try:
     import pytesseract
     import fitz  # PyMuPDF - to convert PDF to images
-    from PIL import Image, ImageEnhance
+    from PIL import Image, ImageEnhance, ImageFilter
     TESSERACT_AVAILABLE = True
 except ImportError:
     TESSERACT_AVAILABLE = False
@@ -949,9 +949,9 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
             print(f"[INFO] Processing page {page_num + 1}/{len(doc)} with OCR...")
             
             # Convert page to image (high resolution)
-            # Increased to 4.0x for better OCR precision, especially for small characters and mixed text (I.V.A., etc.)
+            # Increased to 5.0x for better OCR precision, especially for small characters and mixed text (I.V.A., etc.)
             # Coordinates will be normalized later to maintain compatibility with column ranges calibrated for 2.0x
-            zoom_factor = 4.0  # Increased to 4.0x for better OCR precision (especially for small characters like I.V.A.)
+            zoom_factor = 5.0  # Increased to 5.0x for better OCR precision (especially for small characters like I.V.A.)
             mat = fitz.Matrix(zoom_factor, zoom_factor)
             pix = page.get_pixmap(matrix=mat)
             img_data = pix.tobytes("png")
@@ -960,7 +960,8 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
             from io import BytesIO
             img = Image.open(BytesIO(img_data))
             
-            # Preprocess image for better OCR quality (Opción A improvements)
+            # Preprocess image for better OCR quality (Opción A1: PIL only improvements)
+            # Pipeline: Grayscale → Contrast Enhancement → Sharpening
             # Step 1: Convert to grayscale (simplifies data, improves thresholding)
             img_gray = img.convert('L')
             
@@ -968,8 +969,14 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
             enhancer = ImageEnhance.Contrast(img_gray)
             img_enhanced = enhancer.enhance(2.0)  # Increase contrast by 2x
             
-            # Use preprocessed image for OCR
-            img_for_ocr = img_enhanced
+            # Step 3: Sharpen edges (improves definition of small characters and dots like "I.V.A.")
+            # Kernel: [[0, -1, 0], [-1, 5, -1], [0, -1, 0]] - standard sharpening kernel
+            sharpening_kernel = ImageFilter.Kernel((3, 3), 
+                [0, -1, 0, -1, 5, -1, 0, -1, 0], scale=1)
+            img_sharpened = img_enhanced.filter(sharpening_kernel)
+            
+            # Use preprocessed image for OCR (grayscale + contrast + sharpening)
+            img_for_ocr = img_sharpened
             
             # Perform OCR with real coordinates and improved configuration
             # PSM 6: Single uniform block of text (good for multi-line content)
@@ -2586,7 +2593,7 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
         # - "IVA" or variants (I.V.A., IVA., 1VA, INA, INVA, etc.) - OCR errors
         # - "COMISION"
         # Use regex pattern string to match IVA variants (case-insensitive)
-        iva_pattern_str = r'\b(IVA|I\.V\.A\.|IVA\.|1VA|INA|INVA)\b'
+        iva_pattern_str = r'\b(IVA|I\.V\.A\.|IVA\.|1VA|INA|INVA|OVA.|LV.A.)\b'
         df_for_cargos = df_for_totals[
             ~(df_for_totals['Descripción'].astype(str).str.contains('S.R. RETENIDO', case=False, na=False) |
               df_for_totals['Descripción'].astype(str).str.contains('COMISION', case=False, na=False) |
@@ -2606,28 +2613,39 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
         # For HSBC, use df_for_abonos (which excludes "PAGO DE INTERES NOMINAL", "COMISION", and "REV")
         # For other banks, df_for_abonos will be the same as df_for_totals
         
-        # 🔍 HSBC DEBUG: Mostrar cada valor de Abonos y si será agregado a Data Validation
+        totals['total_abonos'] = df_for_abonos['Abonos'].apply(normalize_amount_str).sum()
+        totals['total_depositos'] = totals['total_abonos']
+    
+    if 'Cargos' in df_for_totals.columns:
+        # For Scotiabank, Banorte, and HSBC, use df_for_cargos (which excludes commission rows)
+        # For other banks, df_for_cargos will be the same as df_for_totals
+        
+        # 🔍 HSBC DEBUG: Mostrar cada valor de Cargos y si será agregado a Data Validation
         if bank_name == 'HSBC' and 'Descripción' in df_for_totals.columns:
-            print(f"\n🔍 HSBC DEBUG: Procesando valores de Abonos para Data Validation:")
-            print(f"   Total de filas con Abonos: {len(df_for_totals[df_for_totals['Abonos'].notna() & (df_for_totals['Abonos'] != '')])}")
+            print(f"\n🔍 HSBC DEBUG: Procesando valores de Cargos para Data Validation:")
+            print(f"   Total de filas con Cargos: {len(df_for_totals[df_for_totals['Cargos'].notna() & (df_for_totals['Cargos'] != '')])}")
             
-            # Iterar sobre todas las filas que tienen valores en Abonos
+            # Patrón regex para variantes de IVA (igual que en df_for_cargos)
+            iva_pattern = re.compile(r'\b(IVA|I\.V\.A\.|IVA\.|1VA|INA|INVA|1.V.A.|OVA.|1VA.|VA.)\b', re.IGNORECASE)
+            
+            # Iterar sobre todas las filas que tienen valores en Cargos
             for idx, row in df_for_totals.iterrows():
-                abonos_value = row.get('Abonos', '')
+                cargos_value = row.get('Cargos', '')
                 descripcion = row.get('Descripción', '')
                 
-                # Solo mostrar si hay un valor en Abonos
-                if pd.notna(abonos_value) and str(abonos_value).strip() != '':
+                # Solo mostrar si hay un valor en Cargos
+                if pd.notna(cargos_value) and str(cargos_value).strip() != '':
                     # Verificar si esta fila será incluida o excluida
-                    descripcion_upper = str(descripcion).upper()
-                    contains_pago_interes = 'PAGO DE INTERES NOMINAL' in descripcion_upper
+                    descripcion_str = str(descripcion)
+                    descripcion_upper = descripcion_str.upper()
+                    contains_sr_retenido = 'S.R. RETENIDO' in descripcion_upper
                     contains_comision = 'COMISION' in descripcion_upper
-                    contains_rev = 'REV' in descripcion_upper
-                    will_be_included = not (contains_pago_interes or contains_comision or contains_rev)
+                    contains_iva = bool(iva_pattern.search(descripcion_str))
+                    will_be_included = not (contains_sr_retenido or contains_comision or contains_iva)
                     
                     # Normalizar el valor para mostrar
-                    abonos_normalized = normalize_amount_str(str(abonos_value))
-                    abonos_formatted = f"${abonos_normalized:,.2f}" if abonos_normalized is not None else str(abonos_value)
+                    cargos_normalized = normalize_amount_str(str(cargos_value))
+                    cargos_formatted = f"${cargos_normalized:,.2f}" if cargos_normalized is not None else str(cargos_value)
                     
                     status = "✅ INCLUIDO" if will_be_included else "❌ EXCLUIDO"
                     
@@ -2635,30 +2653,25 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
                     reason = ""
                     if not will_be_included:
                         exclusion_reasons = []
-                        if contains_pago_interes:
-                            exclusion_reasons.append("'PAGO DE INTERES NOMINAL'")
+                        if contains_sr_retenido:
+                            exclusion_reasons.append("'S.R. RETENIDO'")
                         if contains_comision:
                             exclusion_reasons.append("'COMISION'")
-                        if contains_rev:
-                            exclusion_reasons.append("'REV'")
+                        if contains_iva:
+                            exclusion_reasons.append("'IVA' (o variante)")
                         reason = f" (contiene {', '.join(exclusion_reasons)})"
                     
-                    print(f"   Fila {idx + 1}: Abonos = {abonos_formatted} | {status}{reason}")
+                    print(f"   Fila {idx + 1}: Cargos = {cargos_formatted} | {status}{reason}")
                     if descripcion:
                         print(f"      Descripción: {descripcion[:80]}{'...' if len(str(descripcion)) > 80 else ''}")
+                        print("\n")
         
-        totals['total_abonos'] = df_for_abonos['Abonos'].apply(normalize_amount_str).sum()
-        totals['total_depositos'] = totals['total_abonos']
+        totals['total_cargos'] = df_for_cargos['Cargos'].apply(normalize_amount_str).sum()
+        totals['total_retiros'] = totals['total_cargos']
         
         # 🔍 HSBC DEBUG: Mostrar total calculado
         if bank_name == 'HSBC':
-            print(f"\n🔍 HSBC DEBUG: Total Abonos calculado para Data Validation: ${totals['total_abonos']:,.2f}")
-    
-    if 'Cargos' in df_for_totals.columns:
-        # For Scotiabank, Banorte, and HSBC, use df_for_cargos (which excludes commission rows)
-        # For other banks, df_for_cargos will be the same as df_for_totals
-        totals['total_cargos'] = df_for_cargos['Cargos'].apply(normalize_amount_str).sum()
-        totals['total_retiros'] = totals['total_cargos']
+            print(f"\n🔍 HSBC DEBUG: Total Cargos calculado para Data Validation: ${totals['total_cargos']:,.2f}")
     
     # Get final balance (last row's saldo if available)
     # Use the last non-empty value from the "Saldo" column in Movements tab
