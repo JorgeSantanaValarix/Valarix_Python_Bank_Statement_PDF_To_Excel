@@ -2593,18 +2593,66 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
               df_for_totals['Descripción'].astype(str).str.contains(iva_pattern_str, case=False, na=False, regex=True))
         ]
         
-        # For HSBC, also exclude "PAGO DE INTERES NOMINAL" from Abonos calculation
-        # because it's not included in the summary totals on the PDF cover page
+        # For HSBC, exclude "PAGO DE INTERES NOMINAL", "COMISION", and "REV" from Abonos calculation
+        # because these are not included in the summary totals on the PDF cover page
         df_for_abonos = df_for_totals[
-            ~df_for_totals['Descripción'].astype(str).str.contains('PAGO DE INTERES NOMINAL', case=False, na=False)
+            ~(df_for_totals['Descripción'].astype(str).str.contains('PAGO DE INTERES NOMINAL', case=False, na=False) |
+              df_for_totals['Descripción'].astype(str).str.contains('COMISION', case=False, na=False) |
+              df_for_totals['Descripción'].astype(str).str.contains('REV', case=False, na=False))
         ]
     
     # Calculate based on available columns
     if 'Abonos' in df_for_totals.columns:
-        # For HSBC, use df_for_abonos (which excludes "PAGO DE INTERES NOMINAL")
+        # For HSBC, use df_for_abonos (which excludes "PAGO DE INTERES NOMINAL", "COMISION", and "REV")
         # For other banks, df_for_abonos will be the same as df_for_totals
+        
+        # 🔍 HSBC DEBUG: Mostrar cada valor de Abonos y si será agregado a Data Validation
+        if bank_name == 'HSBC' and 'Descripción' in df_for_totals.columns:
+            print(f"\n🔍 HSBC DEBUG: Procesando valores de Abonos para Data Validation:")
+            print(f"   Total de filas con Abonos: {len(df_for_totals[df_for_totals['Abonos'].notna() & (df_for_totals['Abonos'] != '')])}")
+            
+            # Iterar sobre todas las filas que tienen valores en Abonos
+            for idx, row in df_for_totals.iterrows():
+                abonos_value = row.get('Abonos', '')
+                descripcion = row.get('Descripción', '')
+                
+                # Solo mostrar si hay un valor en Abonos
+                if pd.notna(abonos_value) and str(abonos_value).strip() != '':
+                    # Verificar si esta fila será incluida o excluida
+                    descripcion_upper = str(descripcion).upper()
+                    contains_pago_interes = 'PAGO DE INTERES NOMINAL' in descripcion_upper
+                    contains_comision = 'COMISION' in descripcion_upper
+                    contains_rev = 'REV' in descripcion_upper
+                    will_be_included = not (contains_pago_interes or contains_comision or contains_rev)
+                    
+                    # Normalizar el valor para mostrar
+                    abonos_normalized = normalize_amount_str(str(abonos_value))
+                    abonos_formatted = f"${abonos_normalized:,.2f}" if abonos_normalized is not None else str(abonos_value)
+                    
+                    status = "✅ INCLUIDO" if will_be_included else "❌ EXCLUIDO"
+                    
+                    # Determinar la razón específica de exclusión
+                    reason = ""
+                    if not will_be_included:
+                        exclusion_reasons = []
+                        if contains_pago_interes:
+                            exclusion_reasons.append("'PAGO DE INTERES NOMINAL'")
+                        if contains_comision:
+                            exclusion_reasons.append("'COMISION'")
+                        if contains_rev:
+                            exclusion_reasons.append("'REV'")
+                        reason = f" (contiene {', '.join(exclusion_reasons)})"
+                    
+                    print(f"   Fila {idx + 1}: Abonos = {abonos_formatted} | {status}{reason}")
+                    if descripcion:
+                        print(f"      Descripción: {descripcion[:80]}{'...' if len(str(descripcion)) > 80 else ''}")
+        
         totals['total_abonos'] = df_for_abonos['Abonos'].apply(normalize_amount_str).sum()
         totals['total_depositos'] = totals['total_abonos']
+        
+        # 🔍 HSBC DEBUG: Mostrar total calculado
+        if bank_name == 'HSBC':
+            print(f"\n🔍 HSBC DEBUG: Total Abonos calculado para Data Validation: ${totals['total_abonos']:,.2f}")
     
     if 'Cargos' in df_for_totals.columns:
         # For Scotiabank, Banorte, and HSBC, use df_for_cargos (which excludes commission rows)
@@ -4651,45 +4699,10 @@ def main():
                 if not row_words:
                     continue
                 
-                # Obtener la página de la primera palabra de la fila
-                first_word_page = row_words[0].get('page', 0) if row_words else 0
-                # Solo mostrar debug para la primera página
-                show_hsbc_debug = first_word_page == 4
-                
                 # Construir línea original desde palabras (sin ordenar)
                 line_original = ' '.join([w.get('text', '') for w in row_words])
                 # Solo imprimir debug si la línea contiene "I.V.A." o "IVA"
                 contains_iva = 'I.V.A.' in line_original or 'IVA' in line_original or '1VA' in line_original
-                
-                # 🔍 HSBC DEBUG: Mostrar palabras individuales ANTES de construir línea (solo primera página)
-                if show_hsbc_debug:
-                    print(f"🔍 HSBC: Fila {row_idx + 1} (Página {first_word_page}) - Palabras individuales (ANTES de ordenar):")
-                    for w_idx, word in enumerate(row_words):
-                        text = word.get('text', '')
-                        x0 = word.get('x0', 0)
-                        x1 = word.get('x1', 0)
-                        top = word.get('top', 0)
-                        center = (x0 + x1) / 2
-                        # Verificar si está en rango de fecha
-                        fecha_in_range = False
-                        if 'fecha' in columns_config:
-                            fecha_x0, fecha_x1 = columns_config['fecha']
-                            if fecha_x0 <= center <= fecha_x1:
-                                fecha_in_range = True
-                        print(f"   [{w_idx}] '{text}' | X: {x0:.1f}-{x1:.1f} (centro: {center:.1f}) | Y: {top:.1f} {'[EN RANGO FECHA]' if fecha_in_range else ''}")
-                    
-                    # 🔍 HSBC DEBUG: Mostrar texto original de la fila (sin ordenar)
-                    print(f"   Texto original (sin ordenar): {line_original}")
-                    
-                    # Ordenar palabras por X para ver cómo quedarían
-                    sorted_row_words = sorted(row_words, key=lambda w: w.get('x0', 0))
-                    line_original_sorted = ' '.join([w.get('text', '') for w in sorted_row_words])
-                    print(f"   Texto original (ORDENADO por X): {line_original_sorted}")
-                    
-                    # Mostrar rango de fecha configurado
-                    if 'fecha' in columns_config:
-                        fecha_x0, fecha_x1 = columns_config['fecha']
-                        print(f"   📍 Rango de fecha configurado: X {fecha_x0:.1f} - {fecha_x1:.1f}")
                 
                 # Extraer movimiento usando BANK_CONFIGS
                 row_data = extract_movement_row(row_words, columns_config, 'HSBC', date_pattern, debug_only_if_contains_iva=contains_iva)
@@ -4799,10 +4812,6 @@ def main():
                 
                 # Validar si es una transacción válida
                 is_valid = is_transaction_row(row_data, 'HSBC', debug_only_if_contains_iva=False)
-                
-                # 🔍 HSBC DEBUG: Mostrar si la fila es válida para Excel (solo primera página)
-                if show_hsbc_debug:
-                    print(f"   {'✅ VÁLIDA' if is_valid else '❌ INVÁLIDA'} - {'Se agregará a Excel' if is_valid else 'Se omitirá'}")
                 
                 if is_valid:
                     movement_rows.append(row_data)
