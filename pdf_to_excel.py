@@ -8,7 +8,7 @@ import pandas as pd
 try:
     import pytesseract
     import fitz  # PyMuPDF - to convert PDF to images
-    from PIL import Image
+    from PIL import Image, ImageEnhance
     TESSERACT_AVAILABLE = True
 except ImportError:
     TESSERACT_AVAILABLE = False
@@ -725,8 +725,13 @@ def convert_ocr_data_to_words_format(ocr_data: dict, zoom_normalization_factor: 
                 width = width / zoom_normalization_factor
                 height = height / zoom_normalization_factor
             
+            # Clean OCR errors: replace underscores with spaces (common OCR error for spaces)
+            # This helps with cases like "30_ PAGO" → "30  PAGO" → "30 PAGO" after normalization
+            # Examples: "30_ PAGO SERVICIO" → "30 PAGO SERVICIO", "06_1V.A." → "06 1V.A."
+            text_cleaned = text.replace('_', ' ').strip()
+            
             words.append({
-                'text': text.strip(),
+                'text': text_cleaned,
                 'x0': left,
                 'top': top,
                 'x1': left + width,
@@ -944,9 +949,9 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
             print(f"[INFO] Processing page {page_num + 1}/{len(doc)} with OCR...")
             
             # Convert page to image (high resolution)
-            # Increased to 3.0x for better precision in digits (8 vs 5, etc.)
-            # Coordinates will be normalized later to maintain compatibility with column ranges
-            zoom_factor = 3.0  # Increased from 2.0 to 3.0 for better OCR precision
+            # Increased to 4.0x for better OCR precision, especially for small characters and mixed text (I.V.A., etc.)
+            # Coordinates will be normalized later to maintain compatibility with column ranges calibrated for 2.0x
+            zoom_factor = 4.0  # Increased to 4.0x for better OCR precision (especially for small characters like I.V.A.)
             mat = fitz.Matrix(zoom_factor, zoom_factor)
             pix = page.get_pixmap(matrix=mat)
             img_data = pix.tobytes("png")
@@ -955,8 +960,22 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
             from io import BytesIO
             img = Image.open(BytesIO(img_data))
             
-            # Perform OCR with real coordinates
-            ocr_data = pytesseract.image_to_data(img, lang=lang, output_type=pytesseract.Output.DICT)
+            # Preprocess image for better OCR quality (Opción A improvements)
+            # Step 1: Convert to grayscale (simplifies data, improves thresholding)
+            img_gray = img.convert('L')
+            
+            # Step 2: Enhance contrast (helps text stand out from background)
+            enhancer = ImageEnhance.Contrast(img_gray)
+            img_enhanced = enhancer.enhance(2.0)  # Increase contrast by 2x
+            
+            # Use preprocessed image for OCR
+            img_for_ocr = img_enhanced
+            
+            # Perform OCR with real coordinates and improved configuration
+            # PSM 6: Single uniform block of text (good for multi-line content)
+            # OEM 1: LSTM engine (better accuracy than legacy engine)
+            tesseract_config = r'--oem 1 --psm 6'
+            ocr_data = pytesseract.image_to_data(img_for_ocr, lang=lang, output_type=pytesseract.Output.DICT, config=tesseract_config)
             
             # Extract plain text to maintain compatibility with 'content'
             text = extract_text_from_ocr_data(ocr_data)
@@ -3510,10 +3529,18 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
             fecha_texts = [w.get('text', '').strip() for w in fecha_words]
             fecha_text = ' '.join(fecha_texts)
             
+            # 🔍 HSBC DEBUG: Mostrar extracción de fecha desde rango
+            if debug_only_if_contains_iva:
+                print(f"   🔍 Extracción de fecha desde rango X {fecha_x0:.1f}-{fecha_x1:.1f}:")
+                print(f"      Palabras encontradas: {[w.get('text', '') for w in fecha_words]}")
+                print(f"      Texto combinado: '{fecha_text}'")
+            
             # Apply OCR error correction in dates before searching for pattern
             fecha_text_corrected = fix_ocr_date_errors(fecha_text, bank_name)
             if fecha_text_corrected != fecha_text:
                 fecha_text = fecha_text_corrected
+                if debug_only_if_contains_iva:
+                    print(f"      Texto corregido: '{fecha_text}'")
             
             # For HSBC, date is only 2 digits (01-31)
             hsbc_date_match = date_pattern.search(fecha_text)
@@ -3522,8 +3549,12 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                 # Clean the date: remove dots, spaces and other non-numeric characters
                 date_text = date_text.strip().rstrip('.,;:')
                 row_data['fecha'] = date_text
+                if debug_only_if_contains_iva:
+                    print(f"      ✅ Fecha extraída: '{date_text}'")
                 # Remove these words from sorted_words so they're not processed again
                 sorted_words = [w for w in sorted_words if w not in fecha_words]
+            elif debug_only_if_contains_iva:
+                print(f"      ❌ No se encontró patrón de fecha en: '{fecha_text}'")
     
     # For Konfio, first try to reconstruct dates that might be split across multiple words
     # Konfio dates can be split like "31" and "mar 2023" in separate words
@@ -3862,25 +3893,37 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
             date_end_pos = date_match.end()
             # For HSBC, ensure we split the 2-digit date from the rest of the text
             if bank_name == 'HSBC':
+                # 🔍 HSBC DEBUG: Mostrar procesamiento de palabra con posible fecha
+                if debug_only_if_contains_iva:
+                    print(f"   🔍 Procesando palabra con posible fecha: '{text}' (X: {x0:.1f}-{x1:.1f})")
+                
                 # Apply OCR error correction before searching for pattern
                 text_corrected = fix_ocr_date_errors(text, bank_name)
                 if text_corrected != text:
                     text = text_corrected
                     # Update the text in the word dictionary
                     word['text'] = text
+                    if debug_only_if_contains_iva:
+                        print(f"      Texto corregido: '{text}'")
                 
                 # The date should be exactly 2 digits (01-31) at the start
                 # Extract the 2 digits and everything after as description
-                hsbc_date_match = re.match(r'^(0[1-9]|[12][0-9]|3[01])(\s+.*)?', text)
+                # Pattern updated to handle cases like "06_1V.A." where underscore or other chars separate date from description
+                hsbc_date_match = re.match(r'^(0[1-9]|[12][0-9]|3[01])([_\s]+.*)?', text)
                 if hsbc_date_match:
                     date_text = hsbc_date_match.group(1)  # Just the 2 digits (01-31)
                     # Limpiar la fecha: quitar puntos, espacios y otros caracteres no numéricos
                     date_text = date_text.strip().rstrip('.,;:')
-                    description_text = hsbc_date_match.group(2)  # Everything after (with leading space)
+                    description_text = hsbc_date_match.group(2)  # Everything after (with leading underscore/space)
                     if description_text:
-                        description_text = description_text.strip()  # Remove leading space
+                        description_text = description_text.strip()  # Remove leading underscore/space
+                        # Replace underscore with space for better readability
+                        description_text = description_text.replace('_', ' ')
                     else:
                         description_text = ''
+                    
+                    if debug_only_if_contains_iva:
+                        print(f"      ✅ Fecha extraída: '{date_text}', Descripción: '{description_text}'")
                     
                     # Assign date to fecha column (only if not already assigned)
                     if not row_data.get('fecha'):
@@ -3892,6 +3935,8 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                             row_data['descripcion'] += ' ' + description_text
                         else:
                             row_data['descripcion'] = description_text
+                elif debug_only_if_contains_iva:
+                    print(f"      ❌ No se encontró patrón de fecha en: '{text}'")
             # For Banregio, ensure we split the 2-digit date from the rest of the text
             elif bank_name == 'Banregio':
                 # The date should be exactly 2 digits (01-31) at the start
@@ -4606,10 +4651,45 @@ def main():
                 if not row_words:
                     continue
                 
-                # Construir línea original desde palabras
+                # Obtener la página de la primera palabra de la fila
+                first_word_page = row_words[0].get('page', 0) if row_words else 0
+                # Solo mostrar debug para la primera página
+                show_hsbc_debug = first_word_page == 4
+                
+                # Construir línea original desde palabras (sin ordenar)
                 line_original = ' '.join([w.get('text', '') for w in row_words])
                 # Solo imprimir debug si la línea contiene "I.V.A." o "IVA"
                 contains_iva = 'I.V.A.' in line_original or 'IVA' in line_original or '1VA' in line_original
+                
+                # 🔍 HSBC DEBUG: Mostrar palabras individuales ANTES de construir línea (solo primera página)
+                if show_hsbc_debug:
+                    print(f"🔍 HSBC: Fila {row_idx + 1} (Página {first_word_page}) - Palabras individuales (ANTES de ordenar):")
+                    for w_idx, word in enumerate(row_words):
+                        text = word.get('text', '')
+                        x0 = word.get('x0', 0)
+                        x1 = word.get('x1', 0)
+                        top = word.get('top', 0)
+                        center = (x0 + x1) / 2
+                        # Verificar si está en rango de fecha
+                        fecha_in_range = False
+                        if 'fecha' in columns_config:
+                            fecha_x0, fecha_x1 = columns_config['fecha']
+                            if fecha_x0 <= center <= fecha_x1:
+                                fecha_in_range = True
+                        print(f"   [{w_idx}] '{text}' | X: {x0:.1f}-{x1:.1f} (centro: {center:.1f}) | Y: {top:.1f} {'[EN RANGO FECHA]' if fecha_in_range else ''}")
+                    
+                    # 🔍 HSBC DEBUG: Mostrar texto original de la fila (sin ordenar)
+                    print(f"   Texto original (sin ordenar): {line_original}")
+                    
+                    # Ordenar palabras por X para ver cómo quedarían
+                    sorted_row_words = sorted(row_words, key=lambda w: w.get('x0', 0))
+                    line_original_sorted = ' '.join([w.get('text', '') for w in sorted_row_words])
+                    print(f"   Texto original (ORDENADO por X): {line_original_sorted}")
+                    
+                    # Mostrar rango de fecha configurado
+                    if 'fecha' in columns_config:
+                        fecha_x0, fecha_x1 = columns_config['fecha']
+                        print(f"   📍 Rango de fecha configurado: X {fecha_x0:.1f} - {fecha_x1:.1f}")
                 
                 # Extraer movimiento usando BANK_CONFIGS
                 row_data = extract_movement_row(row_words, columns_config, 'HSBC', date_pattern, debug_only_if_contains_iva=contains_iva)
@@ -4719,6 +4799,10 @@ def main():
                 
                 # Validar si es una transacción válida
                 is_valid = is_transaction_row(row_data, 'HSBC', debug_only_if_contains_iva=False)
+                
+                # 🔍 HSBC DEBUG: Mostrar si la fila es válida para Excel (solo primera página)
+                if show_hsbc_debug:
+                    print(f"   {'✅ VÁLIDA' if is_valid else '❌ INVÁLIDA'} - {'Se agregará a Excel' if is_valid else 'Se omitirá'}")
                 
                 if is_valid:
                     movement_rows.append(row_data)
