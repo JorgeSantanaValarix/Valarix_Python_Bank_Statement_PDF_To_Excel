@@ -2597,7 +2597,7 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
         iva_pattern_str = r'\b(IVA|I\.V\.A\.|IVA\.|1VA|INA|INVA|OVA.|LV.A.)\b'
         df_for_cargos = df_for_totals[
             ~(df_for_totals['Descripción'].astype(str).str.contains('S.R. RETENIDO', case=False, na=False) |
-              df_for_totals['Descripción'].astype(str).str.contains('COMISION', case=False, na=False) |
+              
               df_for_totals['Descripción'].astype(str).str.contains(iva_pattern_str, case=False, na=False, regex=True))
         ]
         
