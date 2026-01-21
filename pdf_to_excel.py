@@ -2619,59 +2619,8 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
     if 'Cargos' in df_for_totals.columns:
         # For Scotiabank, Banorte, and HSBC, use df_for_cargos (which excludes commission rows)
         # For other banks, df_for_cargos will be the same as df_for_totals
-        
-        # 🔍 HSBC DEBUG: Mostrar cada valor de Cargos y si será agregado a Data Validation
-        if bank_name == 'HSBC' and 'Descripción' in df_for_totals.columns:
-            print(f"\n🔍 HSBC DEBUG: Procesando valores de Cargos para Data Validation:")
-            print(f"   Total de filas con Cargos: {len(df_for_totals[df_for_totals['Cargos'].notna() & (df_for_totals['Cargos'] != '')])}")
-            
-            # Patrón regex para variantes de IVA (igual que en df_for_cargos)
-            iva_pattern = re.compile(r'\b(IVA|I\.V\.A\.|IVA\.|1VA|INA|INVA|1.V.A.|OVA.|1VA.|VA.)\b', re.IGNORECASE)
-            
-            # Iterar sobre todas las filas que tienen valores en Cargos
-            for idx, row in df_for_totals.iterrows():
-                cargos_value = row.get('Cargos', '')
-                descripcion = row.get('Descripción', '')
-                
-                # Solo mostrar si hay un valor en Cargos
-                if pd.notna(cargos_value) and str(cargos_value).strip() != '':
-                    # Verificar si esta fila será incluida o excluida
-                    descripcion_str = str(descripcion)
-                    descripcion_upper = descripcion_str.upper()
-                    contains_sr_retenido = 'S.R. RETENIDO' in descripcion_upper
-                    contains_comision = 'COMISION' in descripcion_upper
-                    contains_iva = bool(iva_pattern.search(descripcion_str))
-                    will_be_included = not (contains_sr_retenido or contains_comision or contains_iva)
-                    
-                    # Normalizar el valor para mostrar
-                    cargos_normalized = normalize_amount_str(str(cargos_value))
-                    cargos_formatted = f"${cargos_normalized:,.2f}" if cargos_normalized is not None else str(cargos_value)
-                    
-                    status = "✅ INCLUIDO" if will_be_included else "❌ EXCLUIDO"
-                    
-                    # Determinar la razón específica de exclusión
-                    reason = ""
-                    if not will_be_included:
-                        exclusion_reasons = []
-                        if contains_sr_retenido:
-                            exclusion_reasons.append("'S.R. RETENIDO'")
-                        if contains_comision:
-                            exclusion_reasons.append("'COMISION'")
-                        if contains_iva:
-                            exclusion_reasons.append("'IVA' (o variante)")
-                        reason = f" (contiene {', '.join(exclusion_reasons)})"
-                    
-                    print(f"   Fila {idx + 1}: Cargos = {cargos_formatted} | {status}{reason}")
-                    if descripcion:
-                        print(f"      Descripción: {descripcion[:80]}{'...' if len(str(descripcion)) > 80 else ''}")
-                        print("\n")
-        
         totals['total_cargos'] = df_for_cargos['Cargos'].apply(normalize_amount_str).sum()
         totals['total_retiros'] = totals['total_cargos']
-        
-        # 🔍 HSBC DEBUG: Mostrar total calculado
-        if bank_name == 'HSBC':
-            print(f"\n🔍 HSBC DEBUG: Total Cargos calculado para Data Validation: ${totals['total_cargos']:,.2f}")
     
     # Get final balance (last row's saldo if available)
     # Use the last non-empty value from the "Saldo" column in Movements tab
