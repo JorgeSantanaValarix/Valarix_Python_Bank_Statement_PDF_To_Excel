@@ -4654,22 +4654,12 @@ def main():
         # Filtrar palabras en la sección de movimientos
         filtered_words = filter_hsbc_movements_section(extracted_data, start_string, end_string)
         
-        # 🔍 HSBC DEBUG: Verificar filtrado de palabras
-        print(f"\n🔍 HSBC DEBUG: Filtrado de palabras en sección de movimientos:")
-        print(f"   movements_start: '{start_string}'")
-        print(f"   movements_end: '{end_string}'")
-        print(f"   Total de palabras filtradas: {len(filtered_words)}")
-        
         if not filtered_words:
-            print(f"   ⚠️  No se encontraron palabras en la sección de movimientos")
             df_mov = pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
         else:
             # Agrupar palabras por filas (igual que otros bancos)
             # Para HSBC, usar tolerancia Y más amplia para capturar montos que pueden estar ligeramente desalineados
             word_rows = group_words_by_row(filtered_words, y_tolerance=5)
-            
-            # 🔍 HSBC DEBUG: Verificar agrupación de palabras
-            print(f"   Total de filas agrupadas: {len(word_rows)}")
             
             # Patrón de fecha para HSBC (solo día: 01-31)
             date_pattern = re.compile(r"^(0[1-9]|[12][0-9]|3[01])(?=\s|$)")
@@ -4816,28 +4806,6 @@ def main():
                         last_two_valid_rows.pop(0)  # Mantener solo las últimas 2
                     
                     movement_rows.append(row_data)
-            
-            # 🔍 HSBC DEBUG: Mostrar últimas 2 filas válidas después de procesar todas las filas (flujo OCR)
-            print(f"\n🔍 HSBC DEBUG: Procesamiento OCR completado")
-            print(f"   Total de filas procesadas: {len(movement_rows)}")
-            print(f"   Últimas 2 filas válidas guardadas: {len(last_two_valid_rows)}")
-            
-            if last_two_valid_rows:
-                print(f"\n🔍 HSBC DEBUG: Últimas 2 filas válidas procesadas (flujo OCR):")
-                for i, row_info in enumerate(reversed(last_two_valid_rows), 1):
-                    print(f"\n   --- Fila {i} de las últimas 2 ---")
-                    print(f"      📄 Texto original: '{row_info['line_original']}'")
-                    print(f"      📊 División en columnas (después del procesamiento):")
-                    print(f"         • Fecha: '{row_info['row_data'].get('fecha', '')}'")
-                    descripcion_full = str(row_info['row_data'].get('descripcion', ''))
-                    print(f"         • Descripción: '{descripcion_full[:100]}{'...' if len(descripcion_full) > 100 else ''}'")
-                    print(f"         • Cargos: '{row_info['row_data'].get('cargos', '')}'")
-                    print(f"         • Abonos: '{row_info['row_data'].get('abonos', '')}'")
-                    print(f"         • Saldo: '{row_info['row_data'].get('saldo', '')}'")
-                    if 'page_num' in row_info:
-                        print(f"      📍 Ubicación: Página {row_info['page_num']}, Fila {row_info['row_idx'] + 1}")
-            else:
-                print(f"   ⚠️  No se guardaron últimas 2 filas válidas (puede que no haya filas válidas o el procesamiento terminó antes)")
         
         df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
         
