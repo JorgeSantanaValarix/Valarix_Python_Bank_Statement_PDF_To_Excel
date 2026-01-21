@@ -83,7 +83,7 @@ BANK_CONFIGS = {
 
     "Scotiabank": {
         "name": "Scotiabank",
-        "movements_start": "Detalle de tus movimientos",
+        "movements_start": "Detalledetusmovimientos",
         "movements_end": "LAS TASAS DE INTERES",
         "columns": {
             "fecha": (56, 81),             # Operation Date column
