@@ -83,7 +83,7 @@ BANK_CONFIGS = {
 
     "Scotiabank": {
         "name": "Scotiabank",
-        "movements_start": "Fecha Concepto Origen Referencia Depósito Retiro Saldo",
+        "movements_start": "Detalle de tus movimientos",
         "movements_end": "LAS TASAS DE INTERES",
         "columns": {
             "fecha": (56, 81),             # Operation Date column
@@ -159,6 +159,7 @@ BANK_CONFIGS = {
 
      "Banbajío": {
         "name": "Banbajío",
+        "movements_start": "DETALLE DE LA CUENTA",
         "movements_end": "SALDO TOTAL",
         "columns": {
             "fecha": (21, 41),             # Operation Date column
@@ -4442,237 +4443,84 @@ def main():
     movement_start_index = None
     movements_lines = []
     
-    # For Inbursa, movements start after "DETALLE DE MOVIMIENTOS" and the header line
-    # For Banorte, movements start after "DETALLE DE MOVIMIENTOS (PESOS)"
-    # For Banbajío, movements start after the header line "FECHA NO. REF. / DOCTO DESCRIPCION DE LA OPERACION DEPOSITOS RETIROS SALDO"
-    # For Banregio, movements start after the header line "DIA CONCEPTO CARGOS ABONOS SALDO"
-    inbursa_header_pattern = None
-    banorte_detalle_pattern = None
-    banbajio_start_pattern = None
-    banbajio_header_pattern = None
-    banregio_header_pattern = None
-    scotiabank_header_pattern = None
-    detalle_found = False
-    header_line_skipped = False
-    if bank_config['name'] == 'Inbursa':
-        # Pattern to detect the header line: "FECHA REFERENCIA CONCEPTO CARGOS ABONOS SALDO"
-        # Make it more flexible to handle variations in spacing
-        inbursa_header_pattern = re.compile(r'FECHA.*?REFERENCIA.*?CONCEPTO.*?CARGOS.*?ABONOS.*?SALDO', re.I)
-    elif bank_config['name'] == 'Banorte':
-        banorte_detalle_pattern = re.compile(r'DETALLE\s+DE\s+MOVIMIENTOS\s*\(PESOS\)', re.I)
-    elif bank_config['name'] == 'Banbajío':
-        # Pattern to detect the start of movements section: "DETALLE DE LA CUENTA: CUENTA"
-        banbajio_start_pattern = re.compile(r'DETALLE\s+DE\s+LA\s+CUENTA\s*:\s*CUENTA', re.I)
-        # Pattern to detect the header line: "FECHA NO. REF. / DOCTO DESCRIPCION DE LA OPERACION DEPOSITOS RETIROS SALDO"
-        # Make it flexible to handle variations in spacing and line breaks
-        banbajio_header_pattern = re.compile(r'FECHA.*?NO\.?\s*REF\.?.*?DOCTO.*?DESCRIPCION.*?OPERACION.*?DEPOSITOS.*?RETIROS.*?SALDO', re.I)
-    elif bank_config['name'] == 'Banregio':
-        # Pattern to detect the header line: "DIA CONCEPTO CARGOS ABONOS SALDO"
-        # Make it flexible to handle variations in spacing
-        banregio_header_pattern = re.compile(r'DIA.*?CONCEPTO.*?CARGOS.*?ABONOS.*?SALDO', re.I)
-    elif bank_config['name'] == 'Scotiabank':
-        # Pattern to detect the header line: "Fecha Concepto Origen / Referencia Depósito Retiro Saldo"
-        # Make it flexible to handle variations in spacing
-        scotiabank_header_pattern = re.compile(r'Fecha.*?Concepto.*?Origen.*?Referencia.*?Dep[oó]sito.*?Retiro.*?Saldo', re.I)
-    
-    # Generic movement_start_pattern from BANK_CONFIGS (for Banamex, Base, Clara, Konfio, etc.)
+    # Generic movement_start_pattern from BANK_CONFIGS (for all banks)
     movement_start_pattern = None
     movement_start_string = bank_config.get('movements_start')
     if movement_start_string:
         # Create pattern from movements_start string (escape special chars)
         movement_start_pattern = re.compile(re.escape(movement_start_string), re.I)
     
+    # Track if we've found the movements section start
+    movement_section_found = False
+    
     for p in pages_lines:
         if not movement_start_found:
             for i, ln in enumerate(p['lines']):
-                # Generic movement_start_pattern (for Banamex, Konfio, Clara, Base, and other banks with movements_start in BANK_CONFIGS)
-                if movement_start_pattern and not detalle_found:
+                # Generic movement_start_pattern from BANK_CONFIGS (for all banks)
+                if movement_start_pattern and not movement_section_found:
                     if movement_start_pattern.search(ln):
-                        detalle_found = True
-                        continue  # Skip the start pattern line itself
+                        movement_section_found = True
+                        continue  # Skip the movements_start line itself
                 
-                # For Inbursa, find the header line "FECHA REFERENCIA CONCEPTO CARGOS ABONOS SALDO"
-                if inbursa_header_pattern and not header_line_skipped:
-                    if inbursa_header_pattern.search(ln):
-                        header_line_skipped = True
-                        detalle_found = True
-                        continue  # Skip the header line
-                
-                # For Banorte, find "DETALLE DE MOVIMIENTOS (PESOS)"
-                if banorte_detalle_pattern and not detalle_found:
-                    if banorte_detalle_pattern.search(ln):
-                        detalle_found = True
-                        continue  # Skip the "DETALLE DE MOVIMIENTOS (PESOS)" line itself
-                
-                # For Banbajío, find the start pattern "DETALLE DE LA CUENTA: CUENTA"
-                if banbajio_start_pattern and not detalle_found:
-                    if banbajio_start_pattern.search(ln):
-                        detalle_found = True
-                        #print(f"✅ BanBajío: Encontrado 'DETALLE DE LA CUENTA: CUENTA' en página {p['page']}, línea {i+1}: {ln[:100]}")
-                        continue  # Continue to next iteration to find the first date or header
-                
-                # For Banbajío, find the header line "FECHA NO. REF. / DOCTO DESCRIPCION DE LA OPERACION DEPOSITOS RETIROS SALDO"
-                # This should come right after "DETALLE DE LA CUENTA: CUENTA"
-                if banbajio_header_pattern and detalle_found and not header_line_skipped:
-                    if banbajio_header_pattern.search(ln):
-                        header_line_skipped = True
-                        print(f"✅ BanBajío: Header found on page {p['page']}, line {i+1}: {ln[:100]}")
-                        # After header, start extraction from next line (could be "SALDO INICIAL" or first movement)
-                        if i + 1 < len(p['lines']):
-                            movement_start_found = True
-                            movement_start_page = p['page']
-                            movement_start_index = i + 1  # Start from line after header
-                            next_line = p['lines'][i + 1] if i + 1 < len(p['lines']) else ""
-                            #print(f"✅ BanBajío: Inicio de extracción detectado en página {p['page']}, línea {i+2}: {next_line[:100]}")
-                            # collect from line after header onward in this page
-                            movements_lines.extend(p['lines'][i+1:])
-                            break
-                        continue  # Skip the header line
-                
-                # For Banregio, find the header line "DIA CONCEPTO CARGOS ABONOS SALDO"
-                if banregio_header_pattern and not header_line_skipped:
-                    if banregio_header_pattern.search(ln):
-                        header_line_skipped = True
-                        detalle_found = True
-                        continue  # Skip the header line
-                
-                # For Scotiabank, find the header line "Fecha Concepto Origen / Referencia Depósito Retiro Saldo"
-                if scotiabank_header_pattern and not header_line_skipped:
-                    if scotiabank_header_pattern.search(ln):
-                        header_line_skipped = True
-                        detalle_found = True
-                        continue  # Skip the header line
-                
-                # After finding header for Inbursa, or for Banorte, or for Banbajío, or for Banregio, or for Scotiabank, or for other banks, look for date/header
-                if (inbursa_header_pattern and detalle_found and header_line_skipped) or (banorte_detalle_pattern and detalle_found) or (banbajio_start_pattern and detalle_found) or (banbajio_header_pattern and detalle_found and header_line_skipped) or (banregio_header_pattern and detalle_found and header_line_skipped) or (scotiabank_header_pattern and detalle_found and header_line_skipped) or (movement_start_pattern and detalle_found) or (not inbursa_header_pattern and not banorte_detalle_pattern and not banbajio_start_pattern and not banbajio_header_pattern and not banregio_header_pattern and not scotiabank_header_pattern and not movement_start_pattern):
-                    # For Inbursa, only look for dates (not headers, as we already skipped the header line)
-                    if inbursa_header_pattern:
-                        # For Inbursa, only start when we find a date (actual movement row) after the header
-                        # Inbursa dates can appear as "ENE. 01" or "ABR 10" (month with optional dot + day)
-                        # Valid months: ENE, FEB, MAR, ABR, MAY, JUN, JUL, AGO, SEP, OCT, NOV, DIC
-                        # Day: 01-31
-                        # This prevents false positives like "IVA 16" or "16.0" from being detected as dates
+                # After finding movements_start, look for first valid movement row (date)
+                if movement_section_found:
+                    # For Inbursa, use strict date pattern: "MES. DD" or "MES DD" at start of line
+                    if bank_config['name'] == 'Inbursa':
                         inbursa_date_pattern = re.compile(r'^(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\.?\s+(0[1-9]|[12][0-9]|3[01])\b', re.I)
                         if inbursa_date_pattern.search(ln.strip()):
                             movement_start_found = True
                             movement_start_page = p['page']
                             movement_start_index = i
-                            # collect from this line onward in this page
                             movements_lines.extend(p['lines'][i:])
                             break
-                    elif banorte_detalle_pattern:
-                        # For Banorte, start when we find a date (actual movement row)
-                        if day_re.search(ln):
-                            movement_start_found = True
-                            movement_start_page = p['page']
-                            movement_start_index = i
-                            # collect from this line onward in this page
-                            movements_lines.extend(p['lines'][i:])
-                            break
-                    elif banbajio_start_pattern:
-                        # For Banbajío, after finding "DETALLE DE LA CUENTA: CUENTA", we should have already found the header
-                        # If we reach here, it means we're looking for the first movement row
-                        # Accept either a date or "SALDO INICIAL" as valid start
+                    # For Banbajío, accept either a date or "SALDO INICIAL"
+                    elif bank_config['name'] == 'Banbajío':
                         if day_re.search(ln) or re.search(r'SALDO\s+INICIAL', ln, re.I):
                             movement_start_found = True
                             movement_start_page = p['page']
                             movement_start_index = i
-                            print(f"✅ BanBajío: Inicio de extracción detectado en página {p['page']}, línea {i+1}: {ln[:100]}")
-                            # collect from this line onward in this page
                             movements_lines.extend(p['lines'][i:])
                             break
-                    elif banbajio_header_pattern:
-                        # This should not happen if logic is correct, but keep as fallback
-                        # For Banbajío, start when we find a date or "SALDO INICIAL" (actual movement row) after the header
-                        if day_re.search(ln) or re.search(r'SALDO\s+INICIAL', ln, re.I):
-                            movement_start_found = True
-                            movement_start_page = p['page']
-                            movement_start_index = i
-                            print(f"✅ BanBajío: Inicio de extracción detectado en página {p['page']}, línea {i+1}: {ln[:100]}")
-                            # collect from this line onward in this page
-                            movements_lines.extend(p['lines'][i:])
-                            break
-                    elif banregio_header_pattern:
-                        # For Banregio, start when we find a date (actual movement row) after the header
+                    # For Konfio, verify it's a valid date format (DIA MES AÑO, e.g., "14 mar 2023")
+                    elif bank_config['name'] == 'Konfio':
+                        konfio_date_in_line = date_pattern.search(ln)
+                        if konfio_date_in_line:
+                            konfio_full_date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4}\b', re.I)
+                            if konfio_full_date_pattern.search(ln):
+                                movement_start_found = True
+                                movement_start_page = p['page']
+                                movement_start_index = i
+                                movements_lines.extend(p['lines'][i:])
+                                break
+                    # For Clara, start when we find a date
+                    elif bank_config['name'] == 'Clara':
                         if day_re.search(ln):
                             movement_start_found = True
                             movement_start_page = p['page']
                             movement_start_index = i
-                            # collect from this line onward in this page
                             movements_lines.extend(p['lines'][i:])
                             break
-                    elif scotiabank_header_pattern:
-                        # For Scotiabank, start when we find a date (actual movement row) after the header
-                        if day_re.search(ln):
-                            movement_start_found = True
-                            movement_start_page = p['page']
-                            movement_start_index = i
-                            # collect from this line onward in this page
-                            movements_lines.extend(p['lines'][i:])
-                            break
-                    elif movement_start_pattern:
-                        # For banks with movement_start_pattern (Konfio, Clara, Base, etc.), start when we find a date (actual movement row) after the start pattern
-                        # For Konfio, verify it's a valid date format (DIA MES AÑO, e.g., "14 mar 2023")
-                        # This prevents false positives like "14 IVA" from being detected as a date
-                        if bank_config['name'] == 'Konfio':
-                            konfio_date_in_line = date_pattern.search(ln)
-                            if konfio_date_in_line:
-                                # Verify it's a valid Konfio date format (not just a number)
-                                date_match = konfio_date_in_line.group()
-                                # Check if it matches the full Konfio date pattern (DIA MES AÑO)
-                                konfio_full_date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4}\b', re.I)
-                                if konfio_full_date_pattern.search(ln):
-                                    movement_start_found = True
-                                    movement_start_page = p['page']
-                                    movement_start_index = i
-                                    # collect from this line onward in this page
-                                    movements_lines.extend(p['lines'][i:])
-                                    break
-                        elif bank_config['name'] == 'Clara':
-                            # For Clara, start when we find a date (actual movement row) after the start pattern
-                            if day_re.search(ln):
-                                movement_start_found = True
-                                movement_start_page = p['page']
-                                movement_start_index = i
-                                # collect from this line onward in this page
-                                movements_lines.extend(p['lines'][i:])
-                                break
-                        else:
-                            # For other banks with movement_start_pattern, look for date or header
-                            if day_re.search(ln) or header_keywords_re.search(ln):
-                                movement_start_found = True
-                                movement_start_page = p['page']
-                                movement_start_index = i
-                                # collect from this line onward in this page
-                                movements_lines.extend(p['lines'][i:])
-                                break
+                    # For other banks, look for date or header keywords
                     else:
-                        # For other banks, look for date or header
                         if day_re.search(ln) or header_keywords_re.search(ln):
                             movement_start_found = True
                             movement_start_page = p['page']
                             movement_start_index = i
-                            # collect from this line onward in this page
                             movements_lines.extend(p['lines'][i:])
                             break
+                # For banks without movements_start, look for date or header directly
+                elif not movement_start_pattern:
+                    if day_re.search(ln) or header_keywords_re.search(ln):
+                        movement_start_found = True
+                        movement_start_page = p['page']
+                        movement_start_index = i
+                        movements_lines.extend(p['lines'][i:])
+                        break
         else:
             # Already found movement start, collect all lines from this page
-            # For Banbajío, Banregio, Inbursa, and Scotiabank, filter out the header line if it appears again on subsequent pages
-            if bank_config['name'] == 'Banbajío' and banbajio_header_pattern:
-                filtered_lines = [ln for ln in p['lines'] if not banbajio_header_pattern.search(ln)]
-                movements_lines.extend(filtered_lines)
-            elif bank_config['name'] == 'Banregio' and banregio_header_pattern:
-                # Filter out header line and rows starting with "del 01 al"
-                filtered_lines = [ln for ln in p['lines'] if not banregio_header_pattern.search(ln) and not re.search(r'^del\s+01\s+al', ln, re.I)]
-                movements_lines.extend(filtered_lines)
-            elif bank_config['name'] == 'Inbursa' and inbursa_header_pattern:
-                filtered_lines = [ln for ln in p['lines'] if not inbursa_header_pattern.search(ln)]
-                movements_lines.extend(filtered_lines)
-            elif bank_config['name'] == 'Scotiabank' and scotiabank_header_pattern:
-                filtered_lines = [ln for ln in p['lines'] if not scotiabank_header_pattern.search(ln)]
-                movements_lines.extend(filtered_lines)
-            elif movement_start_pattern:
-                # For banks with movement_start_pattern (Base, Clara, Konfio, etc.), filter out the start pattern line if it appears again on subsequent pages
+            # Filter out movements_start pattern if it appears again on subsequent pages
+            # Headers will be automatically rejected by date validation during extraction
+            if movement_start_pattern:
                 filtered_lines = [ln for ln in p['lines'] if not movement_start_pattern.search(ln)]
                 movements_lines.extend(filtered_lines)
             else:
@@ -4930,36 +4778,15 @@ def main():
                 if not row_words or extraction_stopped:
                     continue
 
-                # For Banbajío, Banregio, Inbursa, and Scotiabank, skip the header line if it appears on subsequent pages
-                if bank_config['name'] == 'Banbajío' and banbajio_header_pattern:
-                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                    if banbajio_header_pattern.search(all_row_text):
-                        continue  # Skip the header line
-                
-                if bank_config['name'] == 'Banregio' and banregio_header_pattern:
-                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                    if banregio_header_pattern.search(all_row_text):
-                        continue  # Skip the header line
-                
-                if bank_config['name'] == 'Inbursa' and inbursa_header_pattern:
-                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                    if inbursa_header_pattern.search(all_row_text):
-                        continue  # Skip the header line
-                
-                # For Scotiabank, skip the header line if it appears during coordinate-based extraction
-                if bank_config['name'] == 'Scotiabank' and scotiabank_header_pattern:
-                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
-                    if scotiabank_header_pattern.search(all_row_text):
-                        continue  # Skip the header line
-                
-                # For banks with movement_start_pattern (Banamex, Base, Clara, Konfio, BBVA, etc.), skip the start pattern line if it appears during coordinate-based extraction
+                # Skip movements_start pattern if it appears during coordinate-based extraction
+                # Headers will be automatically rejected by date validation
                 if movement_start_pattern:
                     all_row_text = ' '.join([w.get('text', '') for w in row_words])
                     if movement_start_pattern.search(all_row_text):
                         # For BBVA, activate movements section when start pattern is found
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                             in_bbva_movements_section = True
-                        continue  # Skip the start pattern line
+                        continue  # Skip the movements_start line
                     
                 # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
                 if bank_config['name'] == 'Banregio':
