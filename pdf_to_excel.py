@@ -85,6 +85,11 @@ BANK_CONFIGS = {
         "name": "Scotiabank",
         "movements_start": "Detalledetusmovimientos",
         "movements_end": "LAS TASAS DE INTERES",
+        "movements_end_patterns": [  # Patrones adicionales como fallback
+            r'LAS\s+TASAS\s+DE\s+INTERES\s+ESTAN\s+EXPRESADAS\s+EN\s+TERMINOS\s+ANUALES\s+SIMPLES\.?',
+            r'LAS\s+TASAS\s+DE\s+INTERES.*?ESTAN.*?EXPRESADAS.*?EN.*?TERMINOS.*?ANUALES.*?SIMPLES\.?',
+            r'LAS.*?TASAS.*?DE.*?INTERES.*?ESTAN.*?EXPRESADAS.*?EN.*?TERMINOS.*?ANUALES.*?SIMPLES',
+        ],
         "columns": {
             "fecha": (56, 81),             # Operation Date column
             "descripcion": (92, 240),     # Description column
@@ -2229,14 +2234,18 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                     # Total MXN [cargos] MXN [abonos] - el segundo monto es el total de abonos
                     # Ejemplo: "Total MXN 3,115.30 MXN -3,305.40"
                     if not summary_data['total_abonos']:
-                        # Pattern: "Total MXN [amount1] MXN [amount2]"
-                        # Try multiple flexible patterns to handle variations
-                        total_patterns = [
-                            r'Total\s+MXN\s+([\d,\.\-]+)\s+MXN\s+([\d,\.\-]+)',  # "Total MXN 3,115.30 MXN -3,305.40"
-                            r'Total\s+([\d,\.\-]+)\s+([\d,\.\-]+)',  # "Total 3,115.30 -3,305.40" (fallback)
-                        ]
-                        for pattern in total_patterns:
-                            match = re.search(pattern, line, re.I)
+                        # Try patterns from BANK_CONFIGS if available
+                        clara_config = BANK_CONFIGS.get('Clara', {})
+                        total_patterns = clara_config.get('summary_total_patterns', [])
+                        if not total_patterns:
+                            # Fallback to default patterns if not in config
+                            total_patterns = [
+                                r'Total\s+MXN\s+([\d,\.\-]+)\s+MXN\s+([\d,\.\-]+)',  # "Total MXN 3,115.30 MXN -3,305.40"
+                                r'Total\s+([\d,\.\-]+)\s+([\d,\.\-]+)',  # "Total 3,115.30 -3,305.40" (fallback)
+                            ]
+                        for pattern_str in total_patterns:
+                            pattern = re.compile(pattern_str, re.I)
+                            match = pattern.search(line)
                             if match:
                                 # First amount is cargos, second amount is abonos
                                 cargos_amount = normalize_amount_str(match.group(1))
@@ -4927,31 +4936,28 @@ def main():
                         if movement_end_string and movement_end_string.lower() in all_text.lower():
                             match_found = True
                         else:
-                            # Try multiple flexible patterns for variations (fallback)
-                            scotiabank_end_patterns = [
-                                re.compile(r'LAS\s+TASAS\s+DE\s+INTERES\s+ESTAN\s+EXPRESADAS\s+EN\s+TERMINOS\s+ANUALES\s+SIMPLES\.?', re.I),
-                                re.compile(r'LAS\s+TASAS\s+DE\s+INTERES.*?ESTAN.*?EXPRESADAS.*?EN.*?TERMINOS.*?ANUALES.*?SIMPLES\.?', re.I),
-                                re.compile(r'LAS.*?TASAS.*?DE.*?INTERES.*?ESTAN.*?EXPRESADAS.*?EN.*?TERMINOS.*?ANUALES.*?SIMPLES', re.I),
-                            ]
-                            for pattern in scotiabank_end_patterns:
-                                if pattern.search(all_text):
-                                    match_found = True
-                                    break
+                            # Try patterns from BANK_CONFIGS if available (fallback)
+                            end_patterns = bank_config.get('movements_end_patterns', [])
+                            if end_patterns:
+                                for pattern_str in end_patterns:
+                                    pattern = re.compile(pattern_str, re.I)
+                                    if pattern.search(all_text):
+                                        match_found = True
+                                        break
                     elif bank_config['name'] == 'Clara':
                         # For Clara, check for "Total MXN" (movements_end string) or "Total MXN X MXN Y" pattern
                         # First check if movements_end string is present
                         if movement_end_string and movement_end_string.lower() in all_text.lower():
                             match_found = True
                         else:
-                            # Also check for "Total MXN" followed by amounts (can include negative)
-                            clara_end_patterns = [
-                                re.compile(r'\bTotal\s+MXN\s+[\d,\.]+\s+MXN\s+-?[\d,\.]+', re.I),  # "Total MXN X MXN Y" (Y can be negative)
-                                re.compile(r'\bTotal\s+MXN\b', re.I),  # Just "Total MXN" (movements_end string)
-                            ]
-                            for pattern in clara_end_patterns:
-                                if pattern.search(all_text):
-                                    match_found = True
-                                    break
+                            # Try patterns from BANK_CONFIGS if available (fallback)
+                            end_patterns = bank_config.get('movements_end_patterns', [])
+                            if end_patterns:
+                                for pattern_str in end_patterns:
+                                    pattern = re.compile(pattern_str, re.I)
+                                    if pattern.search(all_text):
+                                        match_found = True
+                                        break
                     elif bank_config['name'] == 'Santander' or bank_config['name'] == 'Banregio' or bank_config['name'] == 'Hey':
                         # For Santander/Banregio/Hey, use the pattern with 3 numeric amounts (already created in movement_end_pattern)
                         if movement_end_pattern.search(all_text):
