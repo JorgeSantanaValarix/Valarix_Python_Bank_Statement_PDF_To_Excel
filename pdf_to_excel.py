@@ -952,13 +952,13 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
         page_width_inches = page_width_pts / 72.0
         page_height_inches = page_height_pts / 72.0
         
-        # Use fixed zoom factor for optimal OCR quality (6.0x = 432 DPI)
-        # Target DPI: 432 DPI (6.0x zoom factor)
-        target_dpi = 432
-        zoom_factor = 6.0  # Fixed zoom for consistent OCR quality
+        # Use fixed zoom factor for optimal OCR quality (7.0x = 504 DPI)
+        # Target DPI: 504 DPI (7.0x zoom factor)
+        target_dpi = 504
+        zoom_factor = 7.0  # Fixed zoom for consistent OCR quality
         
         # Calculate effective DPI with fixed zoom
-        effective_dpi = 72.0 * zoom_factor  # 432 DPI
+        effective_dpi = 72.0 * zoom_factor  # 504 DPI
         
         # Calculate resulting image dimensions in pixels
         img_width_px = int(page_width_pts * zoom_factor)
@@ -2624,7 +2624,6 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
         # - "IVA" or variants (I.V.A., IVA., 1VA, INA, INVA, etc.) - OCR errors
         # - "COMISION"
         # Use regex pattern string to match IVA variants (case-insensitive)
-        iva_pattern_str = r'\b(IVA|I\.V\.A\.|IVA\.|1VA|INA|INVA|OVA.|LV.A.|IVA.)\b'
         df_for_cargos = df_for_totals[
             ~(df_for_totals['Descripción'].astype(str).str.contains('S.R. RETENIDO', case=False, na=False) )
         ]
