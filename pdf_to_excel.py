@@ -808,6 +808,21 @@ def fix_ocr_date_errors(date_text: str, bank_name: str = None) -> str:
         if 1 <= corrected_day <= 31:
             return re.sub(r'^([0-3])g', f'\\19', original_text, flags=re.IGNORECASE)
     
+    # Pattern 4: Digit followed by "/" at start (7 confused with /)
+    # Examples: "2/" → "27", "1/" → "17", "3/" → "37" (aunque 37 no es válido, se corrige por consistencia)
+    # This is a common OCR error where "7" is read as "/"
+    # The "/" can be followed by space, end of string, or any character (like "2/ PAGO" or "2/PAGO")
+    digit_slash_pattern = re.compile(r'^([1-3])/', re.IGNORECASE)
+    match = digit_slash_pattern.match(original_text)
+    if match:
+        digit = match.group(1)
+        # Only correct if the result is a valid day (17, 27)
+        corrected_day = int(f"{digit}7")
+        if 1 <= corrected_day <= 31:
+            # Replace "X/" with "X7" at the start
+            # Use \g<1> to reference the captured group, followed by literal "7"
+            return re.sub(r'^([1-3])/', r'\g<1>7', original_text, flags=re.IGNORECASE)
+    
     # Si el texto completo es solo "og" o variaciones
     if original_text.lower() in ['og', 'og.', 'og,', 'og:']:
         return '09'
@@ -3938,7 +3953,8 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                 # The date should be exactly 2 digits (01-31) at the start
                 # Extract the 2 digits and everything after as description
                 # Pattern updated to handle cases like "06_1V.A." where underscore or other chars separate date from description
-                hsbc_date_match = re.match(r'^(0[1-9]|[12][0-9]|3[01])([_\s]+.*)?', text)
+                # Also handle OCR errors like "2/" (should be "27") - the correction should have fixed it, but we check again
+                hsbc_date_match = re.match(r'^(0[1-9]|[12][0-9]|3[01])([_\s\/]+.*)?', text)
                 if hsbc_date_match:
                     date_text = hsbc_date_match.group(1)  # Just the 2 digits (01-31)
                     # Limpiar la fecha: quitar puntos, espacios y otros caracteres no numéricos
