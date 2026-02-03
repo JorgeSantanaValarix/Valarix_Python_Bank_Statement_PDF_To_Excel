@@ -3568,6 +3568,9 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
         elif bank_name == 'Base':
             # For Base, date format is DD/MM/YYYY (e.g., "30/04/2024")
             date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b')
+        elif bank_name == 'Banorte':
+            # Banorte: DD/MM/YYYY (e.g. 31/12/2024) and DIA-MES-AÑO (e.g. 12-ENE-23)
+            date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b|\b(\d{1,2}-[A-Z]{3}-\d{2,4})\b', re.I)
         else:
             date_pattern = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:[\/\-\s]\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
     
@@ -3651,6 +3654,25 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                     row_data['fecha'] = date_text
                     # Remove these words from sorted_words so they're not processed again
                     sorted_words = [w for w in sorted_words if w not in fecha_words]
+    
+    # For Banorte, first try to extract date (DD/MM/YYYY or DIA-MES-AÑO) from fecha column or from full row text
+    if bank_name == 'Banorte' and 'fecha' in columns and not row_data.get('fecha'):
+        banorte_date_re = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b|\b(\d{1,2}-[A-Z]{3}-\d{2,4})\b', re.I)
+        # Try fecha column range first
+        fecha_x0, fecha_x1 = columns['fecha']
+        fecha_words = [w for w in sorted_words if fecha_x0 <= (w.get('x0', 0) + w.get('x1', 0)) / 2 <= fecha_x1]
+        if fecha_words:
+            fecha_text = ' '.join([w.get('text', '').strip() for w in fecha_words])
+            m = banorte_date_re.search(fecha_text)
+            if m:
+                row_data['fecha'] = m.group(0)
+                sorted_words = [w for w in sorted_words if w not in fecha_words]
+        if not row_data.get('fecha'):
+            # Fallback: search in full row text (first word often contains "31/12/2024 CONCEPT...")
+            full_row_text = ' '.join([w.get('text', '').strip() for w in sorted_words])
+            m = banorte_date_re.search(full_row_text)
+            if m:
+                row_data['fecha'] = m.group(0)
     
     # For Clara, first try to reconstruct dates that might be split across multiple words
     if bank_name == 'Clara' and 'fecha' in columns:
@@ -4062,6 +4084,13 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                         row_data['descripcion'] = description_text
                 
                 continue  # Skip normal assignment for this word
+            else:
+                # Word is only the date (e.g. "31/12/2024") - assign to fecha and skip normal assignment
+                if not row_data['fecha']:
+                    row_data['fecha'] = date_text
+                elif date_text not in row_data['fecha']:
+                    row_data['fecha'] += ' ' + date_text
+                continue
         
         # Normal column assignment
         col_name = assign_word_to_column(x0, x1, columns)
@@ -4546,6 +4575,9 @@ def main():
     elif bank_config['name'] == 'Base':
         # For Base, date format is DD/MM/YYYY (e.g., "30/04/2024")
         date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b')
+    elif bank_config['name'] == 'Banorte':
+        # Banorte: DD/MM/YYYY (e.g. 31/12/2024) and DIA-MES-AÑO (e.g. 12-ENE-23)
+        date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b|\b(\d{1,2}-[A-Z]{3}-\d{2,4})\b', re.I)
     elif bank_config['name'] == 'Banbajío':
         # For BanBajío, date format is "DIA MES" (e.g., "3 ENE") without year
         date_pattern = re.compile(r'\b(0?[1-9]|[12][0-9]|3[01])\s+[A-Z]{3}\b', re.I)
@@ -4876,6 +4908,12 @@ def main():
         in_bbva_movements_section = False
         # 🔍 HSBC DEBUG: Buffer para guardar últimas 2 filas válidas antes de movements_end
         last_two_valid_rows = []
+        # Banorte DEBUG: one-time print of movements_start and movements_end
+        if bank_config['name'] == 'Banorte':
+            print(f"\n[BANORTE DEBUG] movements_start = {repr(bank_config.get('movements_start'))}")
+            print(f"[BANORTE DEBUG] movements_end = {repr(bank_config.get('movements_end'))}")
+            if bank_config.get('movements_end_secondary'):
+                print(f"[BANORTE DEBUG] movements_end_secondary = {repr(bank_config.get('movements_end_secondary'))}")
         for page_data in extracted_data:
             if extraction_stopped:
                 break
@@ -4924,11 +4962,21 @@ def main():
                 if not row_words or extraction_stopped:
                     continue
 
+                # Banorte DEBUG: track if this row will be added to Excel (set True only when we append)
+                banorte_added = False
+                all_row_text_banorte = ' '.join([w.get('text', '') for w in row_words])
+
                 # Skip movements_start pattern if it appears during coordinate-based extraction
                 # Headers will be automatically rejected by date validation
                 if movement_start_pattern:
                     all_row_text = ' '.join([w.get('text', '') for w in row_words])
                     if movement_start_pattern.search(all_row_text):
+                        # Banorte DEBUG: line is movements_start (skipped)
+                        if bank_config['name'] == 'Banorte':
+                            print(f"[BANORTE DEBUG] Page {page_num} Row {row_idx+1}: movements_start line (SKIPPED)")
+                            print(f"  original: {repr(all_row_text[:200])}{'...' if len(all_row_text) > 200 else ''}")
+                            print(f"  divided: N/A (header line)")
+                            print(f"  will be added to Excel: NO")
                         # For BBVA, activate movements section when start pattern is found
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                             in_bbva_movements_section = True
@@ -4993,6 +5041,12 @@ def main():
                                 #print(f"🛑 BanBajío: Fin de extracción detectado en página {page_num}, fila {row_idx+1}: {all_row_text[:100]}")
                     
                     if match_found:
+                        # Banorte DEBUG: line is movements_end (extraction stopped)
+                        if bank_config['name'] == 'Banorte':
+                            print(f"[BANORTE DEBUG] Page {page_num} Row {row_idx+1}: movements_end line (EXTRACTION STOPPED)")
+                            print(f"  original: {repr(all_text[:200])}{'...' if len(all_text) > 200 else ''}")
+                            print(f"  divided: N/A (end marker)")
+                            print(f"  will be added to Excel: NO")
                         # 🔍 HSBC DEBUG: Mostrar últimas 2 filas válidas antes de movements_end
                         if bank_config['name'] == 'HSBC' and last_two_valid_rows:
                             print(f"\n🔍 HSBC DEBUG: Últimas 2 filas válidas ANTES de movements_end:")
@@ -5065,6 +5119,10 @@ def main():
                         has_date = bool(banamex_date_pattern.search(fecha_val))
                     else:
                         has_date = bool(date_pattern.search(fecha_val))
+                        has_date_reason = (
+                            f"date_pattern.search(fecha_val) -> {has_date}, fecha_val={repr(fecha_val[:60])}{'...' if len(fecha_val) > 60 else ''}"
+                            if bank_config['name'] == 'Banorte' else None
+                        )
                         # For Inbursa, use strict date pattern: "MES. DD" or "MES DD" at start of line
                         # Valid months: ENE, FEB, MAR, ABR, MAY, JUN, JUL, AGO, SEP, OCT, NOV, DIC
                         # This prevents false positives like "01 BAL" or "IVA 16"
@@ -5093,6 +5151,16 @@ def main():
                                 date_match = konfio_full_date_pattern.search(all_row_text)
                                 if date_match:
                                     row_data['fecha'] = date_match.group()
+                        # For Banorte, if fecha is still empty, extract date from full row text (DD/MM/YYYY or DIA-MES-AÑO)
+                        if bank_config['name'] == 'Banorte' and not has_date:
+                            all_row_text_banorte = ' '.join([w.get('text', '') for w in row_words])
+                            date_match_banorte = date_pattern.search(all_row_text_banorte)
+                            if date_match_banorte:
+                                row_data['fecha'] = date_match_banorte.group(0)
+                                has_date = True
+                                has_date_reason = f"Banorte fallback: date found in full row text -> {repr(date_match_banorte.group(0))}"
+                            else:
+                                has_date_reason = "Banorte fallback: no date in full row text"
                         # Debug for Konfio
                         #if bank_config['name'] == 'Konfio' and not has_date and fecha_val:
                             #all_row_text = ' '.join([w.get('text', '') for w in row_words])
@@ -5120,6 +5188,9 @@ def main():
                             has_date = True  # Treat "SALDO INICIAL" as a valid row even without date
                             has_valid_data = True
                     
+                    # Banorte: print has_date and why for each movement line (between movements_start and movements_end)
+                    if bank_config['name'] == 'Banorte' and has_date_reason is not None:
+                        print(f"[BANORTE DEBUG] Page {page_num} Row {row_idx+1}: has_date={has_date} | why: {has_date_reason}")
 
                 if has_date:
                     # For BBVA, mark that we're in the movements section when we find the first date
@@ -5210,7 +5281,8 @@ def main():
                                 continue
                         
                         #row_data['page'] = page_num
-                        
+                        if bank_config['name'] == 'Banorte':
+                            banorte_added = True
                         movement_rows.append(row_data)
                 elif has_valid_data and bank_config['name'] == 'Banbajío':
                     # For BanBajío, also add rows without date if they contain "SALDO INICIAL"
@@ -5570,6 +5642,18 @@ def main():
                                     # Merge amounts list
                                     prev_amounts = prev.get('_amounts', [])
                                     prev['_amounts'] = prev_amounts + row_data.get('_amounts', [])
+
+                # Banorte DEBUG: for each row processed (original, divided, added or not)
+                if bank_config['name'] == 'Banorte':
+                    div_fecha = str(row_data.get('fecha') or '')
+                    div_desc = str(row_data.get('descripcion') or '')
+                    div_cargos = str(row_data.get('cargos') or '')
+                    div_abonos = str(row_data.get('abonos') or '')
+                    div_saldo = str(row_data.get('saldo') or '')
+                    print(f"[BANORTE DEBUG] Page {page_num} Row {row_idx+1}: checked")
+                    print(f"  original: {repr(all_row_text_banorte[:200])}{'...' if len(all_row_text_banorte) > 200 else ''}")
+                    print(f"  divided: fecha={repr(div_fecha)} descripcion={repr(div_desc[:80])}{'...' if len(div_desc) > 80 else ''} cargos={repr(div_cargos)} abonos={repr(div_abonos)} saldo={repr(div_saldo)}")
+                    print(f"  will be added to Excel: {'YES' if banorte_added else 'NO'}")
 
     # Process summary lines to format them properly
     def format_summary_line(line):
@@ -6181,6 +6265,10 @@ def main():
         # For Inbursa, preserve the date format "MES. DD" or "MES DD" (e.g., "ENE. 01" or "ABR 10") as-is
         df_mov['Fecha'] = df_mov['fecha'].astype(str)
         df_mov = df_mov.drop(columns=['fecha'])
+    elif bank_config['name'] == 'Banorte' and 'fecha' in df_mov.columns:
+        # For Banorte, preserve the date format DD/MM/YYYY or DIA-MES-AÑO as-is (don't use _extract_two_dates; it doesn't match DD/MM/YYYY)
+        df_mov['Fecha'] = df_mov['fecha'].astype(str)
+        df_mov = df_mov.drop(columns=['fecha'])
     elif bank_config['name'] == 'BBVA':
         # For BBVA, extract dates from separate 'fecha' and 'liq' columns
         fecha_oper_dates = None
@@ -6228,13 +6316,13 @@ def main():
             df_mov['Fecha Liq'] = dates.apply(lambda t: t[1])
 
     # Remove original 'fecha' if present (only if not already removed)
-    # Skip this for HSBC, Banregio, Base, Banbajío, and Inbursa - they already handled 'fecha' to 'Fecha' conversion
-    if 'fecha' in df_mov.columns and bank_config['name'] != 'HSBC' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base' and bank_config['name'] != 'Banbajío' and bank_config['name'] != 'Inbursa':
+    # Skip this for HSBC, Banregio, Base, Banbajío, Inbursa, and Banorte - they already handled 'fecha' to 'Fecha' conversion
+    if 'fecha' in df_mov.columns and bank_config['name'] != 'HSBC' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base' and bank_config['name'] != 'Banbajío' and bank_config['name'] != 'Inbursa' and bank_config['name'] != 'Banorte':
         df_mov = df_mov.drop(columns=['fecha'])
     
     # For non-BBVA banks, use only 'Fecha' column (based on Fecha Oper) and remove Fecha Liq
-    # Skip this for Banregio, Base, BanBajío, Inbursa, and HSBC (HSBC already has 'Fecha' from OCR or will be set below)
-    if bank_config['name'] != 'BBVA' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base' and bank_config['name'] != 'Banbajío' and bank_config['name'] != 'Inbursa' and bank_config['name'] != 'HSBC':
+    # Skip this for Banregio, Base, BanBajío, Inbursa, Banorte, and HSBC (they already have 'Fecha' set above or from OCR)
+    if bank_config['name'] != 'BBVA' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base' and bank_config['name'] != 'Banbajío' and bank_config['name'] != 'Inbursa' and bank_config['name'] != 'Banorte' and bank_config['name'] != 'HSBC':
         if 'Fecha Oper' in df_mov.columns:
             df_mov['Fecha'] = df_mov['Fecha Oper']
             df_mov = df_mov.drop(columns=['Fecha Oper', 'Fecha Liq'])
