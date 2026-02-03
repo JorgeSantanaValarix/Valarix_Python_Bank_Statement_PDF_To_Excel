@@ -192,7 +192,8 @@ BANK_CONFIGS = {
     "HSBC": {
         "name": "HSBC",
         "movements_start": "Día",  # String that marks the start of the movements section (table header)
-        "movements_end": "CoDi",                      # String that marks the end of the movements section
+        "movements_end": "Información CoDi",                      # String that marks the end of the movements section
+        "movements_end_secondary": "Información SPEI",            # Alternative end string in some HSBC PDFs
         "columns": {
             "fecha": (87, 103),             # Operation Date column
             "descripcion": (124, 505),      # Description column (expanded to capture better)
@@ -1058,7 +1059,7 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
         raise Exception(f"Error en Tesseract OCR: {e}")
 
 
-def filter_hsbc_movements_section(pages_data: list, start_string: str, end_string: str) -> list:
+def filter_hsbc_movements_section(pages_data: list, start_string: str, end_string: str, end_strings_also: list = None) -> list:
     """
     Filtra palabras que están entre start_string y end_string para HSBC.
     El string de inicio puede estar dividido en múltiples palabras, así que busca todas las palabras
@@ -1067,7 +1068,8 @@ def filter_hsbc_movements_section(pages_data: list, start_string: str, end_strin
     Args:
         pages_data: List of dictionaries with format [{"page": int, "words": list}, ...]
         start_string: String that marks the start of the section (e.g.: "DETALLE MOVIMIENTOS HSBC")
-        end_string: String that marks the end of the section (e.g.: "CoDi")
+        end_string: String that marks the end of the section (e.g.: "Información CoDi")
+        end_strings_also: Optional list of alternative end strings (e.g.: ["Información SPEI"])
     
     Returns:
         List of filtered words that are in the movements section
@@ -1078,7 +1080,9 @@ def filter_hsbc_movements_section(pages_data: list, start_string: str, end_strin
     # Normalize strings for search (case-insensitive)
     start_string_normalized = start_string.upper().strip()
     start_words_list = start_string_normalized.split()
-    end_string_normalized = end_string.upper().strip()
+    end_list = [end_string.upper().strip()]
+    if end_strings_also:
+        end_list.extend([s.upper().strip() for s in end_strings_also if s])
     
     for page_data in pages_data:
         page_num = page_data.get('page', 0)
@@ -1113,8 +1117,8 @@ def filter_hsbc_movements_section(pages_data: list, start_string: str, end_strin
                         word_text = word.get('text', '').strip()
                         word_text_upper = word_text.upper()
                         
-                        # Detect end (case-insensitive and partial search)
-                        if end_string_normalized in word_text_upper:
+                        # Detect end (case-insensitive and partial search; any of end_list)
+                        if any(e in word_text_upper for e in end_list):
                             # Stop completely (do not process more pages)
                             return filtered_words
                         
@@ -1134,8 +1138,8 @@ def filter_hsbc_movements_section(pages_data: list, start_string: str, end_strin
                 word_text = word.get('text', '').strip()
                 word_text_upper = word_text.upper()
                 
-                # Detect end (case-insensitive and partial search)
-                if end_string_normalized in word_text_upper:
+                # Detect end (case-insensitive and partial search; any of end_list)
+                if any(e in word_text_upper for e in end_list):
                     # Stop completely (do not process more pages)
                     return filtered_words
                 
@@ -4183,6 +4187,36 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
     # attach detected amounts for later disambiguation
     row_data['_amounts'] = amounts
     
+    # For HSBC: merge split saldo when it was parsed as "399" (description) + "344.88" (saldo) -> should be "399,344.88"
+    if bank_name == 'HSBC' and row_data.get('saldo') and 'saldo' in columns:
+        saldo_val = str(row_data.get('saldo', '')).strip()
+        # Saldo is only decimal part (e.g. "344.88")?
+        if re.match(r'^\d{1,3}\.\d{2}$', saldo_val):
+            full_row_text = ' '.join([w.get('text', '') for w in words])
+            # Look for "NNN DDD.DD" where DDD.DD is the current saldo (split amount)
+            split_saldo_pattern = re.compile(r'(\d{1,3})\s+(\d{1,3}\.\d{2})\b')
+            for m in split_saldo_pattern.finditer(full_row_text):
+                if m.group(2) == saldo_val:
+                    merged_saldo = m.group(1) + ',' + m.group(2)
+                    row_data['saldo'] = merged_saldo
+                    # Remove the trailing integer from description (e.g. "CGOF 31530 31531 399" -> "CGOF 31530 31531")
+                    desc = str(row_data.get('descripcion') or '').strip()
+                    parts = desc.rsplit(' ', 1)
+                    if len(parts) == 2 and parts[1] == m.group(1):
+                        row_data['descripcion'] = parts[0].strip()
+                    break
+    
+    # For HSBC: merge space-separated amounts in cargos/abonos/saldo (e.g. "27 416.60" -> "27,416.60", "$ 27 416.60" -> "$ 27,416.60")
+    if bank_name == 'HSBC':
+        _split_amount_re = re.compile(r'(\d{1,3})\s+(\d{1,3}\.\d{2})\b')
+        def _merge_split_amount(txt):
+            if not txt or not isinstance(txt, str):
+                return txt
+            return _split_amount_re.sub(r'\1,\2', txt)
+        for col in ('cargos', 'abonos', 'saldo'):
+            if col in row_data and row_data[col]:
+                row_data[col] = _merge_split_amount(str(row_data[col]))
+    
     # Debug for Banamex: print final state before returning
     if bank_name == 'Banamex':
         # Check if footer pattern is in any column
@@ -4706,9 +4740,10 @@ def main():
         # Obtener strings de inicio/fin desde BANK_CONFIGS
         start_string = bank_config.get('movements_start', 'ISR Retenido en el año')
         end_string = bank_config.get('movements_end', 'CoDi')
+        end_strings_also = [bank_config['movements_end_secondary']] if bank_config.get('movements_end_secondary') else None
         
-        # Filtrar palabras en la sección de movimientos
-        filtered_words = filter_hsbc_movements_section(extracted_data, start_string, end_string)
+        # Filtrar palabras en la sección de movimientos (para por "Información CoDi" o "Información SPEI")
+        filtered_words = filter_hsbc_movements_section(extracted_data, start_string, end_string, end_strings_also=end_strings_also)
         
         if not filtered_words:
             df_mov = pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
@@ -4862,6 +4897,17 @@ def main():
                         last_two_valid_rows.pop(0)  # Mantener solo las últimas 2
                     
                     movement_rows.append(row_data)
+                
+                # HSBC DEBUG (OCR path): for each row between movements_start and movements_end
+                page_num_ocr = row_words[0].get('page', 0) if row_words else 0
+                div_f = str(row_data.get('fecha') or '')
+                div_d = str(row_data.get('descripcion') or '')
+                div_c = str(row_data.get('cargos') or '')
+                div_a = str(row_data.get('abonos') or '')
+                div_s = str(row_data.get('saldo') or '')
+                print(f"[HSBC DEBUG] Page {page_num_ocr} Row {row_idx+1}: original: {repr(line_original[:150])}{'...' if len(line_original) > 150 else ''}")
+                print(f"  divided: fecha={repr(div_f)} descripcion={repr(div_d[:80])}{'...' if len(div_d) > 80 else ''} cargos={repr(div_c)} abonos={repr(div_a)} saldo={repr(div_s)}")
+                print(f"  will be added to Excel: {'YES' if is_valid else 'NO'}")
         
         df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
         
@@ -4904,6 +4950,12 @@ def main():
             banorte_secondary_end_string = bank_config.get('movements_end_secondary')
             if banorte_secondary_end_string:
                 banorte_secondary_end_pattern = re.compile(re.escape(banorte_secondary_end_string), re.I)
+        # For HSBC, create secondary pattern for "Información SPEI" (alternative to "Información CoDi")
+        hsbc_secondary_end_pattern = None
+        if bank_config['name'] == 'HSBC':
+            hsbc_secondary_end_string = bank_config.get('movements_end_secondary')
+            if hsbc_secondary_end_string:
+                hsbc_secondary_end_pattern = re.compile(re.escape(hsbc_secondary_end_string), re.I)
         
         extraction_stopped = False
         # For Banregio, initialize flag to track when we're in the commission zone
@@ -4962,11 +5014,17 @@ def main():
                 if not row_words or extraction_stopped:
                     continue
 
+                # HSBC DEBUG: track if this row will be added to Excel
+                hsbc_added = False
+                all_row_text_hsbc = ' '.join([w.get('text', '') for w in row_words])
+
                 # Skip movements_start pattern if it appears during coordinate-based extraction
                 # Headers will be automatically rejected by date validation
                 if movement_start_pattern:
                     all_row_text = ' '.join([w.get('text', '') for w in row_words])
                     if movement_start_pattern.search(all_row_text):
+                        if bank_config['name'] == 'HSBC':
+                            print(f"[HSBC DEBUG] Page {page_num} Row {row_idx+1}: movements_start line (SKIPPED) | original: {repr(all_row_text[:150])}{'...' if len(all_row_text) > 150 else ''} | divided: N/A | will be added to Excel: NO")
                         # For BBVA, activate movements section when start pattern is found
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                             in_bbva_movements_section = True
@@ -5026,14 +5084,22 @@ def main():
                         # If primary pattern not found, try secondary pattern ("CARGOS OBJETADOS EN EL PERÍODO")
                         elif banorte_secondary_end_pattern and banorte_secondary_end_pattern.search(all_text):
                             match_found = True
+                    elif bank_config['name'] == 'HSBC':
+                        # For HSBC, match "Información CoDi" (primary) or "Información SPEI" (secondary)
+                        if movement_end_pattern and movement_end_pattern.search(all_text):
+                            match_found = True
+                        elif hsbc_secondary_end_pattern and hsbc_secondary_end_pattern.search(all_text):
+                            match_found = True
                     else:
-                        # For other banks (Banamex, Santander, Konfio, Banbajío, HSBC, etc.), use the standard pattern
+                        # For other banks (Banamex, Santander, Konfio, Banbajío, etc.), use the standard pattern
                         if movement_end_pattern.search(all_text):
                             match_found = True
                             #if bank_config['name'] == 'Banbajío':
                                 #print(f"🛑 BanBajío: Fin de extracción detectado en página {page_num}, fila {row_idx+1}: {all_row_text[:100]}")
                     
                     if match_found:
+                        if bank_config['name'] == 'HSBC':
+                            print(f"[HSBC DEBUG] Page {page_num} Row {row_idx+1}: movements_end line (EXTRACTION STOPPED) | original: {repr(all_text[:150])}{'...' if len(all_text) > 150 else ''} | divided: N/A | will be added to Excel: NO")
                         # 🔍 HSBC DEBUG: Mostrar últimas 2 filas válidas antes de movements_end
                         if bank_config['name'] == 'HSBC' and last_two_valid_rows:
                             print(f"\n🔍 HSBC DEBUG: Últimas 2 filas válidas ANTES de movements_end:")
@@ -5257,6 +5323,8 @@ def main():
                                 continue
                         
                         #row_data['page'] = page_num
+                        if bank_config['name'] == 'HSBC':
+                            hsbc_added = True
                         movement_rows.append(row_data)
                 elif has_valid_data and bank_config['name'] == 'Banbajío':
                     # For BanBajío, also add rows without date if they contain "SALDO INICIAL"
@@ -5616,6 +5684,17 @@ def main():
                                     # Merge amounts list
                                     prev_amounts = prev.get('_amounts', [])
                                     prev['_amounts'] = prev_amounts + row_data.get('_amounts', [])
+
+                # HSBC DEBUG: for each row between movements_start and movements_end
+                if bank_config['name'] == 'HSBC':
+                    div_fecha = str(row_data.get('fecha') or '')
+                    div_desc = str(row_data.get('descripcion') or '')
+                    div_cargos = str(row_data.get('cargos') or '')
+                    div_abonos = str(row_data.get('abonos') or '')
+                    div_saldo = str(row_data.get('saldo') or '')
+                    print(f"[HSBC DEBUG] Page {page_num} Row {row_idx+1}: original: {repr(all_row_text_hsbc[:150])}{'...' if len(all_row_text_hsbc) > 150 else ''}")
+                    print(f"  divided: fecha={repr(div_fecha)} descripcion={repr(div_desc[:80])}{'...' if len(div_desc) > 80 else ''} cargos={repr(div_cargos)} abonos={repr(div_abonos)} saldo={repr(div_saldo)}")
+                    print(f"  will be added to Excel: {'YES' if hsbc_added else 'NO'}")
 
     # Process summary lines to format them properly
     def format_summary_line(line):
