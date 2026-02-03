@@ -4892,6 +4892,12 @@ def main():
                 # For other banks, use simple string matching
                 movement_end_pattern = re.compile(re.escape(movement_end_string), re.I)
         
+        # For Banregio, also match "3 numeric amounts followed by Total" (variation seen in some PDFs)
+        banregio_end_pattern_three_then_total = None
+        if bank_config['name'] == 'Banregio' and movement_end_string:
+            banregio_end_pattern_three_then_total = re.compile(
+                r'[\d,\.]+\s+[\d,\.]+\s+[\d,\.]+\s+' + re.escape(movement_end_string), re.I
+            )
         # For Banorte, create secondary pattern for alternative movements_end (from BANK_CONFIGS)
         banorte_secondary_end_pattern = None
         if bank_config['name'] == 'Banorte':
@@ -4900,6 +4906,11 @@ def main():
                 banorte_secondary_end_pattern = re.compile(re.escape(banorte_secondary_end_string), re.I)
         
         extraction_stopped = False
+        # Banregio DEBUG: one-time print of movements_end and pattern (to diagnose last-line Saldo over-parsing)
+        if bank_config['name'] == 'Banregio':
+            print(f"\n[BANREGIO DEBUG] movements_end = {repr(movement_end_string)}")
+            if movement_end_pattern:
+                print(f"[BANREGIO DEBUG] pattern 1: '{movement_end_string}' + 3 amounts. pattern 2: 3 amounts + '{movement_end_string}'")
         # For Banregio, initialize flag to track when we're in the commission zone
         in_comision_zone = False
         # For BanBajío, track detected rows for debugging
@@ -5010,6 +5021,13 @@ def main():
                         # For Santander/Banregio/Hey, use the pattern with 3 numeric amounts (already created in movement_end_pattern)
                         if movement_end_pattern.search(all_text):
                             match_found = True
+                        # Banregio: also match "3 amounts + Total" (e.g. "11,973.34 12,973.34 1,000.00 Total")
+                        if bank_config['name'] == 'Banregio' and banregio_end_pattern_three_then_total and banregio_end_pattern_three_then_total.search(all_text):
+                            match_found = True
+                        # Banregio DEBUG: every row checked for movements_end
+                        if bank_config['name'] == 'Banregio':
+                            row_preview = all_text[:120] + ('...' if len(all_text) > 120 else '')
+                            print(f"[BANREGIO DEBUG] Page {page_num} Row {row_idx+1}: movements_end check | match_found={match_found} | row_text={repr(row_preview)}")
                     elif bank_config['name'] == 'Banorte':
                         # For Banorte, try primary pattern first ("INVERSION ENLACE NEGOCIOS")
                         if movement_end_pattern and movement_end_pattern.search(all_text):
@@ -5025,6 +5043,9 @@ def main():
                                 #print(f"🛑 BanBajío: Fin de extracción detectado en página {page_num}, fila {row_idx+1}: {all_row_text[:100]}")
                     
                     if match_found:
+                        # Banregio DEBUG: movements_end detected, extraction will stop
+                        if bank_config['name'] == 'Banregio':
+                            print(f"[BANREGIO DEBUG] movements_end DETECTED at Page {page_num} Row {row_idx+1} -> extraction_stopped=True (full row: {repr(all_text[:150])}{'...' if len(all_text) > 150 else ''})")
                         # 🔍 HSBC DEBUG: Mostrar últimas 2 filas válidas antes de movements_end
                         if bank_config['name'] == 'HSBC' and last_two_valid_rows:
                             print(f"\n🔍 HSBC DEBUG: Últimas 2 filas válidas ANTES de movements_end:")
