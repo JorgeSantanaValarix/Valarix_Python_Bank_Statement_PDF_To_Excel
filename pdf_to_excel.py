@@ -101,7 +101,7 @@ BANK_CONFIGS = {
 
     "Inbursa": {
         "name": "Inbursa",
-        "movements_start": "DETALLE DE MOVIMIENTOS",
+        "movements_start": "FECHA REFERENCIA CONCEPTO CARGOS ABONOS SALDO",
         "movements_end": "Si desea recibir pagos",
         "columns": {
             "fecha": (11, 40),             # Operation Date column
@@ -3496,6 +3496,11 @@ def is_transaction_row(row_data, bank_name=None, debug_only_if_contains_iva=Fals
         # For Base, date format is DD/MM/YYYY (e.g., "30/04/2024")
         base_date_re = re.compile(r'^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})$')
         has_date = bool(base_date_re.match(fecha))
+    elif bank_name == 'Inbursa':
+        # For Inbursa: full "MES. DD" / "MES DD" or month-only when date is split across 2 lines (e.g. "Nov.", "NOV.")
+        inbursa_full_date_re = re.compile(r'^(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\.?\s+(0[1-9]|[12][0-9]|3[01])\b', re.I)
+        inbursa_month_only_re = re.compile(r'^(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\.?$', re.I)
+        has_date = bool(inbursa_full_date_re.match(fecha.strip()) or inbursa_month_only_re.match(fecha.strip()))
     else:
         # For other banks, use the general date pattern
         day_re = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:[\/\-\s]\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
@@ -4966,13 +4971,13 @@ def main():
         in_bbva_movements_section = False
         # 🔍 HSBC DEBUG: Buffer para guardar últimas 2 filas válidas antes de movements_end
         last_two_valid_rows = []
+        total_pages = len(extracted_data)
         for page_data in extracted_data:
             if extraction_stopped:
                 break
             
             page_num = page_data['page']
             words = page_data.get('words', [])
-            
             if not words:
                 continue
             
@@ -5009,19 +5014,21 @@ def main():
                     split_rows.extend(split_result)
                 
                 word_rows = split_rows
-            
+            # Inbursa only: skip next row when it was consumed as fecha day (e.g. "01") for previous line
+            inbursa_skip_next_row = False
             for row_idx, row_words in enumerate(word_rows):
                 if not row_words or extraction_stopped:
                     continue
-
+                if bank_config['name'] == 'Inbursa' and inbursa_skip_next_row:
+                    inbursa_skip_next_row = False
+                    continue
                 # HSBC DEBUG: track if this row will be added to Excel
                 hsbc_added = False
-                all_row_text_hsbc = ' '.join([w.get('text', '') for w in row_words])
-
+                all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                all_row_text_hsbc = all_row_text
                 # Skip movements_start pattern if it appears during coordinate-based extraction
                 # Headers will be automatically rejected by date validation
                 if movement_start_pattern:
-                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
                     if movement_start_pattern.search(all_row_text):
                         if bank_config['name'] == 'HSBC':
                             print(f"[HSBC DEBUG] Page {page_num} Row {row_idx+1}: movements_start line (SKIPPED) | original: {repr(all_row_text[:150])}{'...' if len(all_row_text) > 150 else ''} | divided: N/A | will be added to Excel: NO")
@@ -5029,10 +5036,9 @@ def main():
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                             in_bbva_movements_section = True
                         continue  # Skip the movements_start line
-                    
+                
                 # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
                 if bank_config['name'] == 'Banregio':
-                    all_row_text = ' '.join([w.get('text', '') for w in row_words])
                     if re.search(r'^del\s+01\s+al', all_row_text, re.I):
                         continue  # Skip irrelevant information rows
 
@@ -5090,6 +5096,17 @@ def main():
                             match_found = True
                         elif hsbc_secondary_end_pattern and hsbc_secondary_end_pattern.search(all_text):
                             match_found = True
+                    elif bank_config['name'] == 'Inbursa':
+                        # Inbursa: exact "Si desea recibir pagos" or flexible (phrase split/OCR) so we detect end on all PDFs
+                        if movement_end_pattern and movement_end_pattern.search(all_text):
+                            match_found = True
+                        else:
+                            # Flexible: row contains key phrase parts (handles line breaks / OCR)
+                            all_text_lower = all_text.lower()
+                            if 'si desea' in all_text_lower and 'recibir pagos' in all_text_lower:
+                                match_found = True
+                            elif 'si desea recibir' in all_text_lower or 'desea recibir pagos' in all_text_lower:
+                                match_found = True
                     else:
                         # For other banks (Banamex, Santander, Konfio, Banbajío, etc.), use the standard pattern
                         if movement_end_pattern.search(all_text):
@@ -5177,17 +5194,36 @@ def main():
                         # This prevents false positives like "01 BAL" or "IVA 16"
                         if bank_config['name'] == 'Inbursa':
                             inbursa_date_pattern = re.compile(r'^(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\.?\s+(0[1-9]|[12][0-9]|3[01])\b', re.I)
-                            # Check if fecha_val matches the pattern (must be at start)
+                            inbursa_month_only_re = re.compile(r'^(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\.?$', re.I)
+                            # Check if fecha_val matches full pattern (MES. DD) or month-only (date split across 2 lines)
                             has_date = bool(inbursa_date_pattern.match(fecha_val.strip()))
-                            # If fecha_val doesn't match, check all row text for the pattern
                             if not has_date:
                                 all_row_text = ' '.join([w.get('text', '') for w in row_words])
                                 if inbursa_date_pattern.search(all_row_text.strip()):
                                     has_date = True
-                                    # Extract the date and assign to fecha
                                     date_match = inbursa_date_pattern.search(all_row_text.strip())
                                     if date_match:
                                         row_data['fecha'] = date_match.group()
+                                else:
+                                    # Month-only: only valid if next line contains only the missing day (01-31)
+                                    month_match = inbursa_month_only_re.match(fecha_val.strip())
+                                    if month_match:
+                                        month_str = month_match.group(1)
+                                        next_has_only_day = False
+                                        next_day_val = None
+                                        if row_idx + 1 < len(word_rows):
+                                            next_row_text = ' '.join([w.get('text', '') for w in word_rows[row_idx + 1]]).strip()
+                                            day_only_match = re.match(r'^(0[1-9]|[12][0-9]|3[01])$', next_row_text)
+                                            if day_only_match:
+                                                next_has_only_day = True
+                                                next_day_val = next_row_text
+                                        if next_has_only_day and next_day_val is not None:
+                                            has_date = True
+                                            row_data['fecha'] = month_str.capitalize() + '. ' + next_day_val
+                                            inbursa_skip_next_row = True
+                                        else:
+                                            has_date = True
+                                            row_data['fecha'] = month_str.capitalize() + '.'
                         # For Konfio, if no date in fecha column, check all words in the row
                         # But use strict format: must be "DIA MES AÑO" (e.g., "14 mar 2023"), not just "14"
                         if bank_config['name'] == 'Konfio' and not has_date:
