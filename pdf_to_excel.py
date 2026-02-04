@@ -72,6 +72,8 @@ BANK_CONFIGS = {
         "name": "Santander",
         "movements_start": "DETALLEDEMOVIMIENTOSCUENTADECHEQUES",
         "movements_end": "TOTAL",
+        "metas_start": "DETALLE DE MOVIMIENTOS MIS METAS SANTANDER",
+        "metas_end": "INFORMACION FISCAL",
         "columns": {
             "fecha": (18, 52),             # Operation Date column
             "descripcion": (107, 149),     # Description column
@@ -3355,6 +3357,68 @@ def split_pages_into_lines(pages: list) -> list:
         lines = [" ".join(l.split()) for l in content.splitlines() if l and l.strip()]
         pages_lines.append({'page': p.get('page'), 'lines': lines})
     return pages_lines
+
+
+def extract_santander_metas_from_pdf(extracted_data, columns_config, metas_start, metas_end):
+    """Extract Santander METAS section (Mis Metas) using same coordinate-based logic as Movements.
+    Section starts with metas_start and ends with a line containing metas_end (e.g. TOTAL).
+    Returns a DataFrame with columns: Fecha, Descripción, Abonos, Cargos, Saldo (same structure as main movements)."""
+    if not extracted_data or not columns_config or not metas_start or not metas_end:
+        return None
+    date_pattern = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:[\/\-\s]\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
+    start_norm = re.sub(r'\s+', '', metas_start).upper()
+    end_word = metas_end.strip().upper()
+    metas_rows = []
+    in_metas = False
+    extraction_stopped = False
+    skip_next_line = False
+    for page_data in extracted_data:
+        if extraction_stopped:
+            break
+        page_num = page_data.get('page', 0)
+        words = page_data.get('words', [])
+        text = page_data.get('content', '') or ''
+        if not words and not text:
+            continue
+        if not in_metas:
+            text_norm = re.sub(r'\s+', '', text).upper()
+            if start_norm in text_norm:
+                in_metas = True
+                skip_next_line = True
+            else:
+                continue
+        if in_metas and words:
+            word_rows = group_words_by_row(words, y_tolerance=3)
+            for row_words in word_rows:
+                if not row_words:
+                    continue
+                all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                if skip_next_line:
+                    if start_norm in re.sub(r'\s+', '', all_row_text).upper() or re.search(r'DETALLE\s+DE\s+MOVIMIENTOS\s+MIS\s+METAS', all_row_text, re.I):
+                        skip_next_line = False
+                    continue
+                if re.search(r'\b' + re.escape(end_word) + r'\b', all_row_text, re.I):
+                    extraction_stopped = True
+                    break
+                row_data = extract_movement_row(row_words, columns_config, 'Santander', date_pattern)
+                fecha_val = str(row_data.get('fecha') or '').strip()
+                has_date = bool(date_pattern.search(fecha_val))
+                has_amount = any(row_data.get(k) for k in ('cargos', 'abonos', 'saldo') if row_data.get(k))
+                if has_date or has_amount:
+                    metas_rows.append(row_data)
+    if not metas_rows:
+        return None
+    df = pd.DataFrame([
+        {
+            'Fecha': str(r.get('fecha') or ''),
+            'Descripción': str(r.get('descripcion') or ''),
+            'Abonos': str(r.get('abonos') or ''),
+            'Cargos': str(r.get('cargos') or ''),
+            'Saldo': str(r.get('saldo') or ''),
+        }
+        for r in metas_rows
+    ])
+    return df
 
 
 def group_entries_from_lines(lines):
@@ -6805,6 +6869,14 @@ def main():
             df_transferencias = pd.concat([df_transferencias, total_df_transferencia], ignore_index=True)
             #print(f"✅ Fila de totales agregada a Transferencias")
     
+    # Extract Santander METAS section (Mis Metas) into a separate tab (same structure as Movements)
+    df_metas = None
+    if bank_config['name'] == 'Santander':
+        metas_start = bank_config.get('metas_start')
+        metas_end = bank_config.get('metas_end')
+        if metas_start and metas_end and columns_config:
+            df_metas = extract_santander_metas_from_pdf(extracted_data, columns_config, metas_start, metas_end)
+    
     # Extract summary from PDF and calculate totals for validation
     # IMPORTANT: Calculate totals AFTER removing DIGITEM rows and BEFORE adding the "Total" row
     #print("🔍 Extrayendo información de resumen del PDF para validación...")
@@ -6893,14 +6965,18 @@ def main():
         num_sheets += 1  # Add Transferencias sheet
     if df_digitem is not None and not df_digitem.empty:
         num_sheets += 1  # Add DIGITEM sheet
+    if df_metas is not None and not df_metas.empty:
+        num_sheets += 1  # Add METAS sheet (Santander)
     
-    # write sheets: summary, movements, validation, and optionally Transferencias and DIGITEM
+    # write sheets: summary, movements, validation, and optionally Transferencias, DIGITEM, METAS
     try:
         sheet_names = "Summary, Bank Statement Report, Data Validation"
         if df_transferencias is not None and not df_transferencias.empty:
             sheet_names += ", Transferencias"
         if df_digitem is not None and not df_digitem.empty:
             sheet_names += ", DIGITEM"
+        if df_metas is not None and not df_metas.empty:
+            sheet_names += ", METAS"
         #print(f"📝 Escribiendo Excel con {num_sheets} pestañas: {sheet_names}")
         # Clean amount columns for Banamex: extract only numeric amounts from mixed text
         if bank_config['name'] == 'Banamex':
@@ -6954,6 +7030,10 @@ def main():
                 # print("   - Escribiendo pestaña 'DIGITEM'...")
                 df_digitem.to_excel(writer, sheet_name='DIGITEM', index=False)
                 # print(f"   ✅ 'DIGITEM' sheet created successfully with {len(df_digitem)} rows")
+            
+            # Write METAS sheet if available (Santander Mis Metas section)
+            if df_metas is not None and not df_metas.empty:
+                df_metas.to_excel(writer, sheet_name='METAS', index=False)
             
             # Ensure validation DataFrame exists and is not empty
             #print("   - Escribiendo pestaña 'Data Validation'...")
