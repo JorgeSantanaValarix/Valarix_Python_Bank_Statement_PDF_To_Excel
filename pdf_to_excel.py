@@ -207,8 +207,8 @@ BANK_CONFIGS = {
     "HSBC": {
         "name": "HSBC",
         "movements_start": "Día",  # String that marks the start of the movements section (table header)
-        "movements_end": "Información CoDi",                      # String that marks the end of the movements section
-        "movements_end_secondary": "Información SPEI",            # Alternative end string in some HSBC PDFs
+        "movements_end": "procesada por CoDi",                      # String that marks the end of the movements section
+        "movements_end_secondary": "Enviados durante el periodo del",            # Alternative end string in some HSBC PDFs
         "columns": {
             "fecha": (87, 103),             # Operation Date column
             "descripcion": (124, 505),      # Description column (expanded to capture better)
@@ -2697,12 +2697,17 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
         # because these are not included in the summary totals on the PDF cover page
         # Exclude rows that contain ANY of these strings:
         # - "S.R. RETENIDO"
-        # - "IVA" or variants (I.V.A., IVA., 1VA, INA, INVA, etc.) - OCR errors
-        # - "COMISION"
-        # Use regex pattern string to match IVA variants (case-insensitive)
-        df_for_cargos = df_for_totals[
-            ~(df_for_totals['Descripción'].astype(str).str.contains('S.R. RETENIDO', case=False, na=False) )
-        ]
+        hsbc_cargos_excluded_mask = df_for_totals['Descripción'].astype(str).str.contains('S.R. RETENIDO', case=False, na=False)
+        df_for_cargos = df_for_totals[~hsbc_cargos_excluded_mask]
+        # Debug: print all lines that will NOT be summed for Total Cargos / Retiros (Valor Extraído)
+        if hsbc_cargos_excluded_mask.any():
+            excluded_for_cargos = df_for_totals[hsbc_cargos_excluded_mask]
+            print(f"[HSBC DEBUG Total Cargos] Lines NOT summed for 'Valor Extraído' (Total Cargos / Retiros): {len(excluded_for_cargos)} row(s)")
+            for idx, row in excluded_for_cargos.iterrows():
+                vals = {c: row.get(c, '') for c in excluded_for_cargos.columns}
+                print(f"  row {idx + 1}: {vals}")
+        else:
+            print(f"[HSBC DEBUG Total Cargos] No lines excluded from sum (all movement rows are summed).")
         
         # For HSBC, exclude "PAGO DE INTERES NOMINAL", "COMISION", and "REV" from Abonos calculation
         # because these are not included in the summary totals on the PDF cover page
@@ -3619,6 +3624,9 @@ def is_transaction_row(row_data, bank_name=None, debug_only_if_contains_iva=Fals
     # Must have at least one VALID numeric amount (must match DEC_AMOUNT_RE pattern)
     # This ensures we don't accept text like "15 de mayo de" or "al 15 de" as amounts
     has_valid_amount = False
+    has_valid_cargos = False
+    has_valid_abonos = False
+    has_valid_saldo = False
     
     # Pattern to validate amounts: must match DEC_AMOUNT_RE (digits with optional commas/periods)
     # Also accept amounts with $ sign at the start
@@ -3630,41 +3638,52 @@ def is_transaction_row(row_data, bank_name=None, debug_only_if_contains_iva=Fals
         cargos_clean = cargos.replace(' ', '').replace(',', '').replace('$', '').strip()
         if amount_validation_pattern.match(cargos_clean):
             has_valid_amount = True
+            has_valid_cargos = True
         elif DEC_AMOUNT_RE.search(cargos):
             has_valid_amount = True
+            has_valid_cargos = True
         if bank_name == 'HSBC' and not has_valid_amount:
             pass  # Debug removido
     
-    if not has_valid_amount and abonos:
-        # Check if abonos is a valid amount (not just any text)
+    if abonos:
         abonos_clean = abonos.replace(' ', '').replace(',', '').replace('$', '').strip()
         if amount_validation_pattern.match(abonos_clean):
             has_valid_amount = True
+            has_valid_abonos = True
         elif DEC_AMOUNT_RE.search(abonos):
             has_valid_amount = True
+            has_valid_abonos = True
     
-    if not has_valid_amount and saldo:
+    if saldo:
         # Check if saldo is a valid amount (not just any text)
         saldo_clean = saldo.replace(' ', '').replace(',', '').replace('$', '').strip()
         if amount_validation_pattern.match(saldo_clean):
             has_valid_amount = True
+            has_valid_saldo = True
         elif DEC_AMOUNT_RE.search(saldo):
             has_valid_amount = True
+            has_valid_saldo = True
     
-    # For HSBC, also require a non-empty description (to filter out invalid rows)
+    # For HSBC, require non-empty description only when other columns are not enough to validate the row
     has_valid_description = True
     if bank_name == 'HSBC':
-        # Description should not be empty and should have at least 3 characters
-        # For HSBC, descriptions can contain numbers if they are in the description coordinates
-        # Since words are already assigned to columns based on coordinates, if text is in descripcion column,
-        # it means it's in the correct coordinate range, so we accept it even if it's only numbers
+        # Allow empty/short description when Fecha and at least one of Cargos/Abonos/Saldo are valid
         if not descripcion or len(descripcion.strip()) < 3:
-            has_valid_description = False
+            if has_date and has_valid_amount:
+                has_valid_description = True  # other columns OK, accept row
+            else:
+                has_valid_description = False
         # For HSBC, we don't reject descriptions that only contain numbers/spaces
         # because if they're in the description column coordinates, they are valid descriptions
         # (e.g., reference numbers, transaction IDs, etc.)
     
-    return has_date and has_valid_amount and has_valid_description
+    # Normal case: date, amount and description must be valid
+    if has_date and has_valid_amount and has_valid_description:
+        return True
+    # HSBC only: if only fecha is failing (not 01-31) but all other columns are valid, accept the row
+    if bank_name == 'HSBC' and not has_date and has_valid_amount and has_valid_description and (fecha or '').strip():
+        return True
+    return False
 
 
 def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debug_only_if_contains_iva=False):
@@ -4336,15 +4355,40 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                     break
     
     # For HSBC: merge space-separated amounts in cargos/abonos/saldo (e.g. "27 416.60" -> "27,416.60", "$ 27 416.60" -> "$ 27,416.60")
+    # and remove extra space inside numbers (e.g. "4,697, 688.02" -> "4,697,688.02") so only space is between "$" and the number
+    # and fix OCR "/" between digits (e.g. "6,2/1.85" -> "6,271.85" where "/" was misread "7")
     if bank_name == 'HSBC':
         _split_amount_re = re.compile(r'(\d{1,3})\s+(\d{1,3}\.\d{2})\b')
+        _slash_between_digits_re = re.compile(r'(\d)/(\d)')
         def _merge_split_amount(txt):
             if not txt or not isinstance(txt, str):
                 return txt
             return _split_amount_re.sub(r'\1,\2', txt)
+        def _fix_slash_in_amount(txt):
+            if not txt or not isinstance(txt, str):
+                return txt
+            # "/" between digits is often OCR misread of "7"; fix only in amount columns
+            return _slash_between_digits_re.sub(r'\g<1>7\g<2>', txt)
+        def _normalize_amount_spaces(txt):
+            if not txt or not isinstance(txt, str):
+                return txt
+            s = _merge_split_amount(txt)
+            # Remove comma-space inside number so "4,697, 688.02" -> "4,697,688.02"
+            s = s.replace(', ', ',')
+            s = _fix_slash_in_amount(s)
+            return s
         for col in ('cargos', 'abonos', 'saldo'):
             if col in row_data and row_data[col]:
-                row_data[col] = _merge_split_amount(str(row_data[col]))
+                row_data[col] = _normalize_amount_spaces(str(row_data[col]))
+        # For HSBC: fecha is only day (01-31); if multiple numeric values ended up in fecha, keep only the first one
+        if row_data.get('fecha'):
+            fecha_val = str(row_data['fecha']).strip()
+            day_only_re = re.compile(r'^(0[1-9]|[12][0-9]|3[01])$')
+            parts = fecha_val.split()
+            for part in parts:
+                if day_only_re.match(part.strip()):
+                    row_data['fecha'] = part.strip()
+                    break
     
     # Debug for Banamex: print final state before returning
     if bank_name == 'Banamex':
@@ -5021,18 +5065,13 @@ def main():
                     if fecha_clean != fecha_original:
                         row_data['fecha'] = fecha_clean
                 
+                line_original = ' '.join([w.get('text', '') for w in row_words])
                 # Validar si es una transacción válida
                 is_valid = is_transaction_row(row_data, 'HSBC', debug_only_if_contains_iva=False)
                 
                 if is_valid:
                     # 🔍 HSBC DEBUG: Guardar últimas 2 filas válidas antes de movements_end
-                    # Construir texto original de la fila
-                    line_original = ' '.join([w.get('text', '') for w in row_words])
-                    
-                    # Obtener número de página de la primera palabra
                     page_num_ocr = row_words[0].get('page', 0) if row_words else 0
-                    
-                    # Guardar información de la fila (mantener solo últimas 2)
                     row_debug_info = {
                         'line_original': line_original,
                         'row_data': row_data.copy(),
@@ -5045,16 +5084,18 @@ def main():
                     
                     movement_rows.append(row_data)
                 
-                # HSBC DEBUG (OCR path) — prints removed to reduce console noise
-                # page_num_ocr = row_words[0].get('page', 0) if row_words else 0
-                # div_f = str(row_data.get('fecha') or '')
-                # div_d = str(row_data.get('descripcion') or '')
-                # div_c = str(row_data.get('cargos') or '')
-                # div_a = str(row_data.get('abonos') or '')
-                # div_s = str(row_data.get('saldo') or '')
-                # print(f"[HSBC DEBUG] Page {page_num_ocr} Row {row_idx+1}: original: ...")
-                # print(f"  divided: fecha=... descripcion=... cargos=... abonos=... saldo=...")
-                # print(f"  will be added to Excel: {'YES' if is_valid else 'NO'}")
+                # Debug: when line contains 1,952.42 on page 11 show full line, divided columns, and add-to-Excel decision
+                page_num_ocr = row_words[0].get('page', 0) if row_words else 0
+                if '1,952.42' in line_original and page_num_ocr == 11:
+                    div_f = str(row_data.get('fecha') or '')
+                    div_d = str(row_data.get('descripcion') or '')
+                    div_c = str(row_data.get('cargos') or '')
+                    div_a = str(row_data.get('abonos') or '')
+                    div_s = str(row_data.get('saldo') or '')
+                    print(f"[HSBC DEBUG 1,952.42] (OCR) Page {page_num_ocr} Row {row_idx+1}:")
+                    print(f"  complete line: {repr(line_original)}")
+                    print(f"  divided -> fecha={repr(div_f)} descripcion={repr(div_d)} cargos={repr(div_c)} abonos={repr(div_a)} saldo={repr(div_s)}")
+                    print(f"  will be added to Excel: {'YES' if is_valid else 'NO'}")
         
         df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
         
@@ -5166,6 +5207,7 @@ def main():
                     continue
                 # HSBC DEBUG: track if this row will be added to Excel
                 hsbc_added = False
+                row_was_added = False  # for 1,963.84 debug: set True before any movement_rows.append
                 all_row_text = ' '.join([w.get('text', '') for w in row_words])
                 all_row_text_hsbc = all_row_text
                 # Skip movements_start pattern if it appears during coordinate-based extraction
@@ -5434,6 +5476,7 @@ def main():
                             # This is a sub-row, skip it (it will be handled as continuation if needed)
                             continue
                         # Add row if it has date, even if description/amounts are empty (they'll be added in continuation rows)
+                        row_was_added = True
                         movement_rows.append(row_data)
                     elif bank_config['name'] == 'Banamex':
                         # For Banamex, if a row has a date, it ALWAYS starts a new movement
@@ -5493,6 +5536,7 @@ def main():
                         #row_data['page'] = page_num
                         if bank_config['name'] == 'HSBC':
                             hsbc_added = True
+                        row_was_added = True
                         movement_rows.append(row_data)
                 elif has_valid_data and bank_config['name'] == 'Banbajío':
                     # For BanBajío, also add rows without date if they contain "SALDO INICIAL"
@@ -5502,7 +5546,20 @@ def main():
                         has_cargos_abonos = bool(row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo'))
                         if has_amounts or has_cargos_abonos:
                             #row_data['page'] = page_num
+                            row_was_added = True
                             movement_rows.append(row_data)
+                
+                # Debug: when line contains 1,952.42 on page 11 show full line, divided columns, and add-to-Excel decision (coordinate path)
+                if bank_config['name'] == 'HSBC' and '1,952.42' in all_row_text_hsbc and page_num == 11 and row_data is not None:
+                    div_f = str(row_data.get('fecha') or '')
+                    div_d = str(row_data.get('descripcion') or '')
+                    div_c = str(row_data.get('cargos') or '')
+                    div_a = str(row_data.get('abonos') or '')
+                    div_s = str(row_data.get('saldo') or '')
+                    print(f"[HSBC DEBUG 1,952.42] (coords) Page {page_num} Row {row_idx+1}:")
+                    print(f"  complete line: {repr(all_row_text_hsbc)}")
+                    print(f"  divided -> fecha={repr(div_f)} descripcion={repr(div_d)} cargos={repr(div_c)} abonos={repr(div_a)} saldo={repr(div_s)}")
+                    print(f"  will be added to Excel: {'YES' if row_was_added else 'NO'}")
                 
                 # For Banregio, check if this is a monthly commission (last movement) - stop extraction
                 if bank_config['name'] == 'Banregio' and has_valid_data:
