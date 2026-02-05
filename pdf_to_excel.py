@@ -310,8 +310,11 @@ BANK_KEYWORDS = {
         r"\bHEY\b",
     ],
     "HSBC": [
+        r"\bHSBC\s",
         r"\bHSBC\s+BANCO\b",
         r"\bHSBC\s+M[EE]XICO\b",
+        r"\bCoDi\b",
+        r"\bHSBC\s+ADVANCE\b",
     ],
     "Base": [
         r"\bBASE\b",
@@ -545,9 +548,8 @@ def detect_bank_from_text(text: str) -> str:
         return DEFAULT_BANK
     
     # Pattern to detect numeric amounts with exactly 2 decimal places (to reject lines with monetary amounts, as they are likely movement rows, not bank headers)
-    # Matches amounts like: 300,000.00, 157,741.18, 1,234.56, etc. (must have exactly 2 decimals)
-    # This pattern only skips lines with monetary amounts (2 decimals), not other numeric values
-    amount_pattern = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
+    # Word boundary \b ensures we match standalone amounts (e.g. " 34.26", "$1,234.56") but not codes like "C34.26-03693-27-XFT"
+    amount_pattern = re.compile(r"\b\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
     
     # Split into lines and check each line
     lines = text.split('\n')
@@ -558,7 +560,6 @@ def detect_bank_from_text(text: str) -> str:
             continue
         
         # Skip lines that contain numeric amounts with exactly 2 decimal places (these are likely movement rows, not bank headers)
-        # Only skip if the amount has exactly 2 decimals (monetary format)
         if amount_pattern.search(line_clean):
             continue
         
@@ -571,7 +572,6 @@ def detect_bank_from_text(text: str) -> str:
         # Also check if line contains bank name directly (case insensitive)
         line_upper = line_clean.upper()
         for bank_name in BANK_KEYWORDS.keys():
-            # Check for exact bank name match (as whole word)
             if re.search(rf'\b{re.escape(bank_name.upper())}\b', line_upper):
                 return bank_name
     
@@ -1004,17 +1004,17 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
         img_width_px = int(page_width_pts * zoom_factor)
         img_height_px = int(page_height_pts * zoom_factor)
         
-        # Show DPI calculation info (only for first page to avoid spam)
-        print(f"[INFO] Page dimensions: {page_width_pts:.1f} x {page_height_pts:.1f} pts ({page_width_inches:.2f} x {page_height_inches:.2f} inches)")
-        print(f"[INFO] Target DPI: {target_dpi} DPI (zoom: {zoom_factor:.1f}x)")
-        print(f"[INFO] Using zoom: {zoom_factor:.1f}x → Effective DPI: {effective_dpi:.0f} DPI")
-        print(f"[INFO] Image size: {img_width_px} x {img_height_px} pixels")
-        if effective_dpi < 300:
-            print(f"[WARNING] DPI ({effective_dpi:.0f}) is below recommended 300 DPI for OCR")
-        elif effective_dpi > 500:
-            print(f"[INFO] DPI ({effective_dpi:.0f}) is high - may have diminishing returns beyond 400-500 DPI")
-        else:
-            print(f"[INFO] DPI ({effective_dpi:.0f}) is within optimal range for OCR accuracy")
+        # Show DPI calculation info (only for first page to avoid spam) — commented to reduce console noise
+        # print(f"[INFO] Page dimensions: {page_width_pts:.1f} x {page_height_pts:.1f} pts ({page_width_inches:.2f} x {page_height_inches:.2f} inches)")
+        # print(f"[INFO] Target DPI: {target_dpi} DPI (zoom: {zoom_factor:.1f}x)")
+        # print(f"[INFO] Using zoom: {zoom_factor:.1f}x → Effective DPI: {effective_dpi:.0f} DPI")
+        # print(f"[INFO] Image size: {img_width_px} x {img_height_px} pixels")
+        # if effective_dpi < 300:
+        #     print(f"[WARNING] DPI ({effective_dpi:.0f}) is below recommended 300 DPI for OCR")
+        # elif effective_dpi > 500:
+        #     print(f"[INFO] DPI ({effective_dpi:.0f}) is high - may have diminishing returns beyond 400-500 DPI")
+        # else:
+        #     print(f"[INFO] DPI ({effective_dpi:.0f}) is within optimal range for OCR accuracy")
         
         for page_num in range(len(doc)):
             page = doc[page_num]
@@ -5045,16 +5045,16 @@ def main():
                     
                     movement_rows.append(row_data)
                 
-                # HSBC DEBUG (OCR path): for each row between movements_start and movements_end
-                page_num_ocr = row_words[0].get('page', 0) if row_words else 0
-                div_f = str(row_data.get('fecha') or '')
-                div_d = str(row_data.get('descripcion') or '')
-                div_c = str(row_data.get('cargos') or '')
-                div_a = str(row_data.get('abonos') or '')
-                div_s = str(row_data.get('saldo') or '')
-                print(f"[HSBC DEBUG] Page {page_num_ocr} Row {row_idx+1}: original: {repr(line_original[:150])}{'...' if len(line_original) > 150 else ''}")
-                print(f"  divided: fecha={repr(div_f)} descripcion={repr(div_d[:80])}{'...' if len(div_d) > 80 else ''} cargos={repr(div_c)} abonos={repr(div_a)} saldo={repr(div_s)}")
-                print(f"  will be added to Excel: {'YES' if is_valid else 'NO'}")
+                # HSBC DEBUG (OCR path) — prints removed to reduce console noise
+                # page_num_ocr = row_words[0].get('page', 0) if row_words else 0
+                # div_f = str(row_data.get('fecha') or '')
+                # div_d = str(row_data.get('descripcion') or '')
+                # div_c = str(row_data.get('cargos') or '')
+                # div_a = str(row_data.get('abonos') or '')
+                # div_s = str(row_data.get('saldo') or '')
+                # print(f"[HSBC DEBUG] Page {page_num_ocr} Row {row_idx+1}: original: ...")
+                # print(f"  divided: fecha=... descripcion=... cargos=... abonos=... saldo=...")
+                # print(f"  will be added to Excel: {'YES' if is_valid else 'NO'}")
         
         df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
         
@@ -5172,8 +5172,8 @@ def main():
                 # Headers will be automatically rejected by date validation
                 if movement_start_pattern:
                     if movement_start_pattern.search(all_row_text):
-                        if bank_config['name'] == 'HSBC':
-                            print(f"[HSBC DEBUG] Page {page_num} Row {row_idx+1}: movements_start line (SKIPPED) | original: {repr(all_row_text[:150])}{'...' if len(all_row_text) > 150 else ''} | divided: N/A | will be added to Excel: NO")
+                        # if bank_config['name'] == 'HSBC':
+                        #     print(f"[HSBC DEBUG] Page {page_num} Row {row_idx+1}: movements_start line (SKIPPED) | ...")
                         # For BBVA, activate movements section when start pattern is found
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                             in_bbva_movements_section = True
@@ -5257,25 +5257,12 @@ def main():
                                 #print(f"🛑 BanBajío: Fin de extracción detectado en página {page_num}, fila {row_idx+1}: {all_row_text[:100]}")
                     
                     if match_found:
-                        if bank_config['name'] == 'HSBC':
-                            print(f"[HSBC DEBUG] Page {page_num} Row {row_idx+1}: movements_end line (EXTRACTION STOPPED) | original: {repr(all_text[:150])}{'...' if len(all_text) > 150 else ''} | divided: N/A | will be added to Excel: NO")
-                        # 🔍 HSBC DEBUG: Mostrar últimas 2 filas válidas antes de movements_end
-                        if bank_config['name'] == 'HSBC' and last_two_valid_rows:
-                            print(f"\n🔍 HSBC DEBUG: Últimas 2 filas válidas ANTES de movements_end:")
-                            print(f"   movements_end detectado en: Página {page_num}, Fila {row_idx + 1}")
-                            print(f"   Texto de movements_end: '{all_text}'")
-                            for i, row_info in enumerate(reversed(last_two_valid_rows), 1):
-                                print(f"\n   --- Fila {i} antes de movements_end ---")
-                                print(f"      📄 Texto original: '{row_info['line_original']}'")
-                                print(f"      📊 División en columnas (después del procesamiento):")
-                                print(f"         • Fecha: '{row_info['row_data'].get('fecha', '')}'")
-                                descripcion_full = str(row_info['row_data'].get('descripcion', ''))
-                                print(f"         • Descripción: '{descripcion_full[:100]}{'...' if len(descripcion_full) > 100 else ''}'")
-                                print(f"         • Cargos: '{row_info['row_data'].get('cargos', '')}'")
-                                print(f"         • Abonos: '{row_info['row_data'].get('abonos', '')}'")
-                                print(f"         • Saldo: '{row_info['row_data'].get('saldo', '')}'")
-                                if 'page_num' in row_info:
-                                    print(f"      📍 Ubicación: Página {row_info['page_num']}, Fila {row_info['row_idx'] + 1}")
+                        # HSBC DEBUG prints removed
+                        # if bank_config['name'] == 'HSBC':
+                        #     print(f"[HSBC DEBUG] Page {page_num} Row {row_idx+1}: movements_end line (EXTRACTION STOPPED) | ...")
+                        # if bank_config['name'] == 'HSBC' and last_two_valid_rows:
+                        #     print(f"\n🔍 HSBC DEBUG: Últimas 2 filas válidas ANTES de movements_end:")
+                        #     ...
                         
                         #print(f"🛑 Fin de tabla de movimientos detectado en página {page_num}")
                         # For BBVA, mark that we've left the movements section
@@ -5866,16 +5853,13 @@ def main():
                                     prev_amounts = prev.get('_amounts', [])
                                     prev['_amounts'] = prev_amounts + row_data.get('_amounts', [])
 
-                # HSBC DEBUG: for each row between movements_start and movements_end
-                if bank_config['name'] == 'HSBC':
-                    div_fecha = str(row_data.get('fecha') or '')
-                    div_desc = str(row_data.get('descripcion') or '')
-                    div_cargos = str(row_data.get('cargos') or '')
-                    div_abonos = str(row_data.get('abonos') or '')
-                    div_saldo = str(row_data.get('saldo') or '')
-                    print(f"[HSBC DEBUG] Page {page_num} Row {row_idx+1}: original: {repr(all_row_text_hsbc[:150])}{'...' if len(all_row_text_hsbc) > 150 else ''}")
-                    print(f"  divided: fecha={repr(div_fecha)} descripcion={repr(div_desc[:80])}{'...' if len(div_desc) > 80 else ''} cargos={repr(div_cargos)} abonos={repr(div_abonos)} saldo={repr(div_saldo)}")
-                    print(f"  will be added to Excel: {'YES' if hsbc_added else 'NO'}")
+                # HSBC DEBUG: for each row — prints removed to reduce console noise
+                # if bank_config['name'] == 'HSBC':
+                #     div_fecha = str(row_data.get('fecha') or '')
+                #     ...
+                #     print(f"[HSBC DEBUG] Page {page_num} Row {row_idx+1}: original: ...")
+                #     print(f"  divided: ...")
+                #     print(f"  will be added to Excel: ...")
 
     # Process summary lines to format them properly
     def format_summary_line(line):
