@@ -114,6 +114,19 @@ BANK_CONFIGS = {
         }
     },
 
+    "INTERCAM": {
+        "name": "INTERCAM",
+        "movements_start": "DÍA FOLIO CONCEPTO DEPÓSITOS RETIROS SALDO",
+        "movements_end": "Total",
+        "columns": {
+            "fecha": (40, 45),             # Day only (1-31)
+            "descripcion": (78, 390),      # Description column
+            "abonos": (430, 450),          # Credits (Depósitos)
+            "cargos": (480, 513),          # Charges (Retiros)
+            "saldo": (530, 572),           # Balance column
+        }
+    },
+
     "Konfio": {
         "name": "Konfio",
         "movements_start": "Historial de movimientos del titular",
@@ -277,6 +290,10 @@ BANK_KEYWORDS = {
     "Inbursa": [
         r"\bINBURSA\b",
         r"\bBANCO\s+INBURSA\b",
+    ],
+    "INTERCAM": [
+        r"\bINTERCAM\b",
+        r"\bINTERCAM\s+BANCO\b",
     ],
     "Santander": [
         r"\bSANTANDER\b",
@@ -2216,6 +2233,35 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                                     #print(f"✅ BanRegio: Encontrado saldo final: ${amount:,.2f} en línea {i+2}: {next_line[:80]}")
                                     summary_data['saldo_final'] = amount
             
+            elif bank_name == "INTERCAM":
+                # INTERCAM: Total Abonos from "+ Depósitos", Total Cargos from "- Retiros", Saldo Final from "Saldo Final"
+                for i, line in enumerate(all_lines):
+                    # Total Abonos: line with "+ Depósitos" (or "+ Depositos") followed by amount
+                    if not summary_data['total_abonos']:
+                        if re.search(r'\+\s*Dep[oó]sitos', line, re.I):
+                            match = re.search(r'\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})', line)
+                            if match:
+                                amount = normalize_amount_str(match.group(0))
+                                if amount > 0:
+                                    summary_data['total_abonos'] = amount
+                                    summary_data['total_depositos'] = amount
+                    # Total Cargos: line with "- Retiros" followed by amount
+                    if not summary_data['total_cargos']:
+                        if re.search(r'-\s*Retiros', line, re.I):
+                            match = re.search(r'\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})', line)
+                            if match:
+                                amount = normalize_amount_str(match.group(0))
+                                if amount > 0:
+                                    summary_data['total_cargos'] = amount
+                                    summary_data['total_retiros'] = amount
+                    # Saldo Final: line containing "Saldo Final" followed by amount
+                    if not summary_data['saldo_final']:
+                        if re.search(r'Saldo\s+Final', line, re.I):
+                            match = re.search(r'\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})', line)
+                            if match:
+                                amount = normalize_amount_str(match.group(0))
+                                summary_data['saldo_final'] = amount
+            
             elif bank_name == "Clara":
                 # Clara:
                 # "+ Saldo anterior 3,305.40"
@@ -3638,6 +3684,9 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
             # For Banregio, date is only 2 digits (01-31) at the start of the text
             # Pattern should match "04" or "04 TRA ..." but not "004" or "40"
             date_pattern = re.compile(r"^(0[1-9]|[12][0-9]|3[01])(?=\s|$)")
+        elif bank_name == 'INTERCAM':
+            # INTERCAM: fecha column is day only (1-31)
+            date_pattern = re.compile(r"^(0?[1-9]|[12][0-9]|3[01])$")
         elif bank_name == 'Base':
             # For Base, date format is DD/MM/YYYY (e.g., "30/04/2024")
             date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b')
@@ -3727,6 +3776,17 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                     row_data['fecha'] = date_text
                     # Remove these words from sorted_words so they're not processed again
                     sorted_words = [w for w in sorted_words if w not in fecha_words]
+    
+    # For INTERCAM, extract day (1-31) from fecha column range using same coordinate logic as other banks
+    if bank_name == 'INTERCAM' and 'fecha' in columns:
+        fecha_x0, fecha_x1 = columns['fecha']
+        fecha_words = [w for w in sorted_words if fecha_x0 <= (w.get('x0', 0) + w.get('x1', 0)) / 2 <= fecha_x1]
+        if fecha_words:
+            fecha_text = ' '.join([w.get('text', '').strip() for w in fecha_words])
+            intercam_day_match = re.match(r'^(0?[1-9]|[12][0-9]|3[01])\b', fecha_text.strip())
+            if intercam_day_match:
+                row_data['fecha'] = intercam_day_match.group(1)
+                sorted_words = [w for w in sorted_words if w not in fecha_words]
     
     # For Banorte, first try to extract date (DD/MM/YYYY or DIA-MES-AÑO) from fecha column or from full row text
     if bank_name == 'Banorte' and 'fecha' in columns and not row_data.get('fecha'):
@@ -4675,6 +4735,9 @@ def main():
     # For Banregio, date is only 2 digits (01-31) at the start
     if bank_config['name'] == 'Banregio':
         date_pattern = re.compile(r"^(0[1-9]|[12][0-9]|3[01])(?=\s|$)")
+    elif bank_config['name'] == 'INTERCAM':
+        # INTERCAM: fecha column is day only (1-31)
+        date_pattern = re.compile(r"^(0?[1-9]|[12][0-9]|3[01])$")
     elif bank_config['name'] == 'Base':
         # For Base, date format is DD/MM/YYYY (e.g., "30/04/2024")
         date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b')
@@ -4695,8 +4758,15 @@ def main():
     movement_start_pattern = None
     movement_start_string = bank_config.get('movements_start')
     if movement_start_string:
-        # Create pattern from movements_start string (escape special chars)
-        movement_start_pattern = re.compile(re.escape(movement_start_string), re.I)
+        # INTERCAM: header may appear as "DIA" or "DÍA" with variable spacing; normalize for match
+        if bank_config['name'] == 'INTERCAM':
+            movement_start_pattern = re.compile(
+                r'D[IÍ]A\s+FOLIO\s+CONCEPTO\s+DEP[OÓ]SITOS\s+RETIROS\s+SALDO',
+                re.I
+            )
+        else:
+            # Create pattern from movements_start string (escape special chars)
+            movement_start_pattern = re.compile(re.escape(movement_start_string), re.I)
     
     # Track if we've found the movements section start
     movement_section_found = False
@@ -4743,6 +4813,14 @@ def main():
                     # For Clara, start when we find a date
                     elif bank_config['name'] == 'Clara':
                         if day_re.search(ln):
+                            movement_start_found = True
+                            movement_start_page = p['page']
+                            movement_start_index = i
+                            movements_lines.extend(p['lines'][i:])
+                            break
+                    # For INTERCAM, fecha is day only (1-31); first data line starts with day number
+                    elif bank_config['name'] == 'INTERCAM':
+                        if re.match(r'^(0?[1-9]|[12][0-9]|3[01])\b', ln.strip()):
                             movement_start_found = True
                             movement_start_page = p['page']
                             movement_start_index = i
@@ -4994,8 +5072,8 @@ def main():
         if movement_end_string:
             # Create pattern from movements_end string (escape special chars)
             # For Santander, Banregio, Hey, and Clara, we need special handling for patterns with numbers
-            if bank_config['name'] == 'Santander' or bank_config['name'] == 'Banregio' or bank_config['name'] == 'Hey':
-                # Santander/Banregio/Hey: movements_end is "TOTAL"/"Total", but we need to match followed by 3 numeric amounts
+            if bank_config['name'] == 'Santander' or bank_config['name'] == 'Banregio' or bank_config['name'] == 'Hey' or bank_config['name'] == 'INTERCAM':
+                # Santander/Banregio/Hey/INTERCAM: movements_end is "TOTAL"/"Total", match followed by 3 numeric amounts
                 # Example: "TOTAL 821,646.20 820,238.73 1,417.18" or "Total 45,998.00 49,675.60 4,580.78"
                 movement_end_pattern = re.compile(re.escape(movement_end_string) + r'\s+[\d,\.]+\s+[\d,\.]+\s+[\d,\.]+', re.I)
             elif bank_config['name'] == 'Clara':
@@ -5243,6 +5321,9 @@ def main():
                     # For Banregio, use match() instead of search() since we want to verify the entire string is the date
                     if bank_config['name'] == 'Banregio':
                         has_date = bool(date_pattern.match(fecha_val))
+                    elif bank_config['name'] == 'INTERCAM':
+                        # INTERCAM: fecha column is day only (1-31)
+                        has_date = bool(date_pattern.match(fecha_val.strip()))
                     elif bank_config['name'] == 'Clara':
                         # For Clara, check if fecha contains a valid date pattern (e.g., "01 ENE" or "01 E N E")
                         clara_date_pattern = re.compile(r'\d{1,2}\s+[A-Z]{3}|\d{1,2}\s+[A-Z]\s+[A-Z]\s+[A-Z]', re.I)
@@ -6394,6 +6475,10 @@ def main():
     if bank_config['name'] == 'Banregio' and 'fecha' in df_mov.columns:
         df_mov['Fecha'] = df_mov['fecha'].astype(str)
         df_mov = df_mov.drop(columns=['fecha'])
+    elif bank_config['name'] == 'INTERCAM' and 'fecha' in df_mov.columns:
+        # INTERCAM: fecha is day only (1-31), preserve as-is
+        df_mov['Fecha'] = df_mov['fecha'].astype(str)
+        df_mov = df_mov.drop(columns=['fecha'])
     elif bank_config['name'] == 'Base' and 'fecha' in df_mov.columns:
         # For Base, preserve the date format DD/MM/YYYY as-is
         df_mov['Fecha'] = df_mov['fecha'].astype(str)
@@ -6457,13 +6542,13 @@ def main():
             df_mov['Fecha Liq'] = dates.apply(lambda t: t[1])
 
     # Remove original 'fecha' if present (only if not already removed)
-    # Skip this for HSBC, Banregio, Base, Banbajío, Inbursa, and Banorte - they already handled 'fecha' to 'Fecha' conversion
-    if 'fecha' in df_mov.columns and bank_config['name'] != 'HSBC' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base' and bank_config['name'] != 'Banbajío' and bank_config['name'] != 'Inbursa' and bank_config['name'] != 'Banorte':
+    # Skip this for HSBC, Banregio, Base, Banbajío, Inbursa, Banorte, and INTERCAM - they already handled 'fecha' to 'Fecha' conversion
+    if 'fecha' in df_mov.columns and bank_config['name'] != 'HSBC' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base' and bank_config['name'] != 'Banbajío' and bank_config['name'] != 'Inbursa' and bank_config['name'] != 'Banorte' and bank_config['name'] != 'INTERCAM':
         df_mov = df_mov.drop(columns=['fecha'])
     
     # For non-BBVA banks, use only 'Fecha' column (based on Fecha Oper) and remove Fecha Liq
     # Skip this for Banregio, Base, BanBajío, Inbursa, Banorte, and HSBC (they already have 'Fecha' set above or from OCR)
-    if bank_config['name'] != 'BBVA' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base' and bank_config['name'] != 'Banbajío' and bank_config['name'] != 'Inbursa' and bank_config['name'] != 'Banorte' and bank_config['name'] != 'HSBC':
+    if bank_config['name'] != 'BBVA' and bank_config['name'] != 'Banregio' and bank_config['name'] != 'Base' and bank_config['name'] != 'Banbajío' and bank_config['name'] != 'Inbursa' and bank_config['name'] != 'Banorte' and bank_config['name'] != 'HSBC' and bank_config['name'] != 'INTERCAM':
         if 'Fecha Oper' in df_mov.columns:
             df_mov['Fecha'] = df_mov['Fecha Oper']
             df_mov = df_mov.drop(columns=['Fecha Oper', 'Fecha Liq'])
@@ -6886,6 +6971,11 @@ def main():
         pdf_summary = extract_summary_from_pdf(pdf_path)
     # Si es HSBC con OCR, pdf_summary ya fue extraído arriba en extract_hsbc_summary_from_ocr_text
     extracted_totals = calculate_extracted_totals(df_mov, bank_config['name'])
+    
+    # For INTERCAM, use last Saldo from Bank Statement Report for validation "Valor en PDF" (Saldo Final), like other banks
+    if bank_config['name'] == 'INTERCAM' and extracted_totals.get('saldo_final') is not None:
+        if pdf_summary is not None:
+            pdf_summary['saldo_final'] = extracted_totals['saldo_final']
     
     # Add a "Total" row at the end summing only "Abonos" and "Cargos" columns
     # This is done AFTER calculating totals for validation
