@@ -539,44 +539,89 @@ def find_column_coordinates(pdf_path: str, page_number: int = 1):
         print(f"❌ Error: {e}")
 
 
+# Combined date pattern for bank detection: matches any bank date format (DD/MM/YYYY, DIA-MES-AÑO, "30 ENE", etc.)
+# Used to skip counting BANK_KEYWORDS when the match is on a movement row (line or neighbor has a date).
+BANK_DETECTION_DATE_PATTERN = re.compile(
+    r'\b(?:'
+    r'(?:0[1-9]|[12][0-9]|3[01])/(?:0[1-9]|1[0-2])/\d{4}'  # DD/MM/YYYY
+    r'|\d{1,2}-[A-Z]{3}-\d{2,4}'  # DIA-MES-AÑO (e.g. 12-ENE-23)
+    r'|(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:[\/\-\s]\d{2,4})?'
+    r'|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])(?:\s+\d{2,4})?'
+    r'|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4}'
+    r')\b',
+    re.I
+)
+
+
 def detect_bank_from_text(text: str) -> str:
     """
     Detect the bank from extracted text content.
-    Returns the bank name if detected, otherwise returns DEFAULT_BANK.
+    Phase 1: If BANK_KEYWORDS match in the first 20 lines, return that bank immediately (old logic).
+    Phase 2: Otherwise, search all lines, count matches per bank (excluding matches near a date),
+    and return the bank with the most occurrences.
     """
     if not text:
         return DEFAULT_BANK
     
-    # Pattern to detect numeric amounts with exactly 2 decimal places (to reject lines with monetary amounts, as they are likely movement rows, not bank headers)
-    # Word boundary \b ensures we match standalone amounts (e.g. " 34.26", "$1,234.56") but not codes like "C34.26-03693-27-XFT"
     amount_pattern = re.compile(r"\b\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
-    
-    # Split into lines and check each line
     lines = text.split('\n')
+    n_lines = len(lines)
     
-    for line in lines:
+    # Phase 1: Old logic on first 20 lines only — first match wins
+    first_20 = lines[:20]
+    for line in first_20:
         line_clean = line.strip()
         if not line_clean:
             continue
-        
-        # Skip lines that contain numeric amounts with exactly 2 decimal places (these are likely movement rows, not bank headers)
         if amount_pattern.search(line_clean):
             continue
-        
-        # Check each bank's keywords
         for bank_name, keywords in BANK_KEYWORDS.items():
             for keyword_pattern in keywords:
                 if re.search(keyword_pattern, line_clean, re.I):
                     return bank_name
-        
-        # Also check if line contains bank name directly (case insensitive)
         line_upper = line_clean.upper()
         for bank_name in BANK_KEYWORDS.keys():
             if re.search(rf'\b{re.escape(bank_name.upper())}\b', line_upper):
                 return bank_name
     
-    # If no bank detected, return default
-    return DEFAULT_BANK
+    # Phase 2: No match in first 20 lines — use new logic on all lines (count + filter near date)
+    bank_counts = {bank_name: 0 for bank_name in BANK_KEYWORDS.keys()}
+    for i, line in enumerate(lines):
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+        if amount_pattern.search(line_clean):
+            continue
+        
+        has_date_nearby = BANK_DETECTION_DATE_PATTERN.search(line_clean)
+        if not has_date_nearby:
+            for offset in (-2, -1, 1, 2):
+                j = i + offset
+                if 0 <= j < n_lines:
+                    neighbor = lines[j].strip()
+                    if neighbor and BANK_DETECTION_DATE_PATTERN.search(neighbor):
+                        has_date_nearby = True
+                        break
+        if has_date_nearby:
+            continue
+        
+        for bank_name, keywords in BANK_KEYWORDS.items():
+            matched = False
+            for keyword_pattern in keywords:
+                if re.search(keyword_pattern, line_clean, re.I):
+                    matched = True
+                    break
+            if not matched:
+                line_upper = line_clean.upper()
+                if re.search(rf'\b{re.escape(bank_name.upper())}\b', line_upper):
+                    matched = True
+            if matched:
+                bank_counts[bank_name] += 1
+    
+    max_count = max(bank_counts.values()) if bank_counts else 0
+    if max_count == 0:
+        return DEFAULT_BANK
+    return max(bank_counts, key=bank_counts.get)
 
 
 def detect_bank_from_pdf(pdf_path: str) -> str:
@@ -586,11 +631,9 @@ def detect_bank_from_pdf(pdf_path: str) -> str:
     """
     try:
         with pdfplumber.open(pdf_path) as pdf:
-            # Read first few pages (usually bank name appears early)
-            max_pages_to_check = min(3, len(pdf.pages))
-            
+            # Read all pages so BANK_KEYWORDS are checked across the entire PDF
             all_text = ""
-            for page_num in range(max_pages_to_check):
+            for page_num in range(len(pdf.pages)):
                 page = pdf.pages[page_num]
                 text = page.extract_text()
                 if text:
