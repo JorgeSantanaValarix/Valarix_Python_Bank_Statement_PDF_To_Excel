@@ -4288,9 +4288,12 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                 # Word is only the date (e.g. "31/12/2024") - assign to fecha and skip normal assignment
                 if not row_data['fecha']:
                     row_data['fecha'] = date_text
-                elif date_text not in row_data['fecha']:
+                    continue
+                elif bank_name != 'INTERCAM' and date_text not in row_data['fecha']:
                     row_data['fecha'] += ' ' + date_text
-                continue
+                    continue
+                # INTERCAM: fecha already set (day only); do not append. Fall through to normal column assignment so
+                # this word (e.g. "15" from "15 GRUPOS") is assigned to descripcion by X position.
         
         # Normal column assignment
         col_name = assign_word_to_column(x0, x1, columns)
@@ -5558,6 +5561,12 @@ def main():
                                 # This is footer information, skip it
                                 continue
                         
+                        # For INTERCAM, skip CFDI disclaimer and "Hoja de N" (page) metadata lines
+                        if bank_config['name'] == 'INTERCAM':
+                            all_row_text_intercam = ' '.join([w.get('text', '') for w in row_words])
+                            if re.search(r'DOCUMENTO ES UNA REPRESENTACIÓN IMPRESA DE UN CFDI|REPRESENTACIÓN IMPRESA.*CFDI|Hoja de\s*\d+|Número Cliente\s*R\.F\.C\.\s*Sucursal', all_row_text_intercam, re.I):
+                                continue
+                        
                         #row_data['page'] = page_num
                         if bank_config['name'] == 'HSBC':
                             hsbc_added = True
@@ -5737,7 +5746,11 @@ def main():
                                             # Only assign if the column is empty or if this is a better match
                                             existing = prev.get(col) or ''
                                             if not existing or amt_text not in existing:
-                                                if existing:
+                                                # INTERCAM: do not concatenate amounts when prev already has a value
+                                                # (continuation row is often a separate movement that failed date validation)
+                                                if existing and bank_config.get('name') == 'INTERCAM':
+                                                    pass
+                                                elif existing:
                                                     prev[col] = (existing + ' ' + amt_text).strip()
                                                 else:
                                                     prev[col] = amt_text
@@ -5758,7 +5771,9 @@ def main():
                                         if not descripcion_range or not (descripcion_range[0] <= center <= descripcion_range[1]):
                                             existing = prev.get(nearest) or ''
                                             if not existing or amt_text not in existing:
-                                                if existing:
+                                                if existing and bank_config.get('name') == 'INTERCAM':
+                                                    pass
+                                                elif existing:
                                                     prev[nearest] = (existing + ' ' + amt_text).strip()
                                                 else:
                                                     prev[nearest] = amt_text
