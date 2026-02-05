@@ -18,8 +18,8 @@ except ImportError:
 if sys.platform == 'win32':
     import io
     try:
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True)
     except AttributeError:
         # If already configured, ignore
         pass
@@ -400,7 +400,7 @@ def find_column_coordinates(pdf_path: str, page_number: int = 1):
         is_illegible, cid_ratio, ascii_ratio = is_pdf_text_illegible(pdf_path)
         
         if is_illegible and TESSERACT_AVAILABLE:
-            print(f"[INFO] PDF detected as illegible (CID ratio: {cid_ratio:.2%}, ASCII ratio: {ascii_ratio:.2%})")
+            print(f"[INFO] PDF detected as illegible (CID ratio: {cid_ratio:.2%}, ASCII ratio: {ascii_ratio:.2%})", flush=True)
             print(f"[INFO] Using OCR to analyze coordinates...")
             
             # Extract with OCR (now uses image_to_data() with real coordinates)
@@ -977,7 +977,7 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
     if not configure_tesseract():
         raise Exception("Tesseract OCR not found. Install Tesseract from: https://github.com/UB-Mannheim/tesseract/wiki")
     
-    print("[INFO] Extracting text with local Tesseract OCR (100% private)...")
+    print("[INFO] Extracting text with local Tesseract OCR (100% private)...", flush=True)
     
     extracted_data = []
     
@@ -1018,7 +1018,7 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
         
         for page_num in range(len(doc)):
             page = doc[page_num]
-            print(f"[INFO] Processing page {page_num + 1}/{len(doc)} with OCR...")
+            print(f"[INFO] Processing page {page_num + 1}/{len(doc)} with OCR...", flush=True)
             
             # Convert page to image (high resolution)
             # Coordinates will be normalized later to maintain compatibility with column ranges calibrated for 2.0x
@@ -1071,7 +1071,7 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
         
         doc.close()
         
-        print(f"[OK] OCR completed. Pages processed: {len(extracted_data)}")
+        print(f"[OK] OCR completed. Pages processed: {len(extracted_data)}", flush=True)
         return extracted_data
         
     except Exception as e:
@@ -2699,16 +2699,6 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
         # - "S.R. RETENIDO"
         hsbc_cargos_excluded_mask = df_for_totals['Descripción'].astype(str).str.contains('S.R. RETENIDO', case=False, na=False)
         df_for_cargos = df_for_totals[~hsbc_cargos_excluded_mask]
-        # Debug: print all lines that will NOT be summed for Total Cargos / Retiros (Valor Extraído)
-        if hsbc_cargos_excluded_mask.any():
-            excluded_for_cargos = df_for_totals[hsbc_cargos_excluded_mask]
-            print(f"[HSBC DEBUG Total Cargos] Lines NOT summed for 'Valor Extraído' (Total Cargos / Retiros): {len(excluded_for_cargos)} row(s)")
-            for idx, row in excluded_for_cargos.iterrows():
-                vals = {c: row.get(c, '') for c in excluded_for_cargos.columns}
-                print(f"  row {idx + 1}: {vals}")
-        else:
-            print(f"[HSBC DEBUG Total Cargos] No lines excluded from sum (all movement rows are summed).")
-        
         # For HSBC, exclude "PAGO DE INTERES NOMINAL", "COMISION", and "REV" from Abonos calculation
         # because these are not included in the summary totals on the PDF cover page
         df_for_abonos = df_for_totals[
@@ -2907,7 +2897,7 @@ def print_validation_summary(pdf_summary: dict, extracted_totals: dict, validati
     
     # Reusar código existente: si force_error es True, forzar que caiga en else
     if '✓' in overall_status and not force_error:
-        print("✅ VALIDATION: ALL CORRECT")
+        print("✅ VALIDATION: ALL CORRECT", flush=True)
     else:
         print("❌ VALIDATION: THERE ARE DIFFERENCES")
         pass
@@ -3339,9 +3329,9 @@ def extract_text_from_pdf(pdf_path: str) -> list:
     is_illegible, cid_ratio, ascii_ratio = is_pdf_text_illegible(pdf_path)
     
     if is_illegible and TESSERACT_AVAILABLE:
-        print(f"[INFO] PDF detected as illegible (CID ratio: {cid_ratio:.2%}, ASCII ratio: {ascii_ratio:.2%})")
-        print(f"[INFO] Using local Tesseract OCR as fallback...")
-        print(f"[INFO] Bank will be detected after processing with OCR...")
+        print(f"[INFO] PDF detected as illegible (CID ratio: {cid_ratio:.2%}, ASCII ratio: {ascii_ratio:.2%})", flush=True)
+        print(f"[INFO] Using local Tesseract OCR as fallback...", flush=True)
+        print(f"[INFO] Bank will be detected after processing with OCR...", flush=True)
         try:
             # Use Tesseract OCR
             extracted_data = extract_text_with_tesseract_ocr(pdf_path)
@@ -3395,7 +3385,7 @@ def export_to_excel(data: list, output_path: str):
     """
     df = pd.DataFrame(data)
     df.to_excel(output_path, index=False)
-    print(f"✅ Excel file created -> {output_path}")
+    print(f"✅ Excel file created -> {output_path}", flush=True)
 
 
 def split_pages_into_lines(pages: list) -> list:
@@ -4722,7 +4712,7 @@ def main():
         # If validation fails, continue (not critical)
         print(f"[WARNING] Could not validate disk space: {e}")
 
-    print("Reading PDF...")
+    print("Reading PDF...", flush=True)
     
     # Now extract full data
     extracted_data = extract_text_from_pdf(pdf_path)
@@ -4739,7 +4729,7 @@ def main():
         # If OCR was not used, detect bank from PDF (normal method)
         detected_bank = detect_bank_from_pdf(pdf_path)
     
-    print(f"🏦 Bank detected: {detected_bank}")
+    print(f"🏦 Bank detected: {detected_bank}", flush=True)
     
     is_hsbc = (detected_bank == "HSBC")
     
@@ -5083,19 +5073,6 @@ def main():
                         last_two_valid_rows.pop(0)  # Mantener solo las últimas 2
                     
                     movement_rows.append(row_data)
-                
-                # Debug: when line contains 1,952.42 on page 11 show full line, divided columns, and add-to-Excel decision
-                page_num_ocr = row_words[0].get('page', 0) if row_words else 0
-                if '1,952.42' in line_original and page_num_ocr == 11:
-                    div_f = str(row_data.get('fecha') or '')
-                    div_d = str(row_data.get('descripcion') or '')
-                    div_c = str(row_data.get('cargos') or '')
-                    div_a = str(row_data.get('abonos') or '')
-                    div_s = str(row_data.get('saldo') or '')
-                    print(f"[HSBC DEBUG 1,952.42] (OCR) Page {page_num_ocr} Row {row_idx+1}:")
-                    print(f"  complete line: {repr(line_original)}")
-                    print(f"  divided -> fecha={repr(div_f)} descripcion={repr(div_d)} cargos={repr(div_c)} abonos={repr(div_a)} saldo={repr(div_s)}")
-                    print(f"  will be added to Excel: {'YES' if is_valid else 'NO'}")
         
         df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
         
@@ -5548,18 +5525,6 @@ def main():
                             #row_data['page'] = page_num
                             row_was_added = True
                             movement_rows.append(row_data)
-                
-                # Debug: when line contains 1,952.42 on page 11 show full line, divided columns, and add-to-Excel decision (coordinate path)
-                if bank_config['name'] == 'HSBC' and '1,952.42' in all_row_text_hsbc and page_num == 11 and row_data is not None:
-                    div_f = str(row_data.get('fecha') or '')
-                    div_d = str(row_data.get('descripcion') or '')
-                    div_c = str(row_data.get('cargos') or '')
-                    div_a = str(row_data.get('abonos') or '')
-                    div_s = str(row_data.get('saldo') or '')
-                    print(f"[HSBC DEBUG 1,952.42] (coords) Page {page_num} Row {row_idx+1}:")
-                    print(f"  complete line: {repr(all_row_text_hsbc)}")
-                    print(f"  divided -> fecha={repr(div_f)} descripcion={repr(div_d)} cargos={repr(div_c)} abonos={repr(div_a)} saldo={repr(div_s)}")
-                    print(f"  will be added to Excel: {'YES' if row_was_added else 'NO'}")
                 
                 # For Banregio, check if this is a monthly commission (last movement) - stop extraction
                 if bank_config['name'] == 'Banregio' and has_valid_data:
@@ -7085,7 +7050,7 @@ def main():
     #print(f"✅ DataFrame de validación creado con {len(df_validation)} filas")
     #print(f"   Columnas: {list(df_validation.columns)}")
     
-    print("📊 Exporting to Excel...")
+    print("📊 Exporting to Excel...", flush=True)
     
     # Print validation summary to console
     print_validation_summary(pdf_summary, extracted_totals, df_validation, df_mov)
@@ -7210,7 +7175,7 @@ def main():
             print(f"❌ Error: El archivo Excel está vacío: {output_excel}")
             sys.exit(1)
         
-        print(f"✅ Excel file created successfully -> {output_excel} ({excel_size:,} bytes)")
+        print(f"✅ Excel file created successfully -> {output_excel} ({excel_size:,} bytes)", flush=True)
         sys.exit(0)
     except Exception as e:
         print(f"❌ Excel file not created -> {output_excel}")
