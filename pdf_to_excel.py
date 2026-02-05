@@ -4097,6 +4097,21 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                     if m:
                         amounts.append((m.group(), center))
 
+        # For Banorte: split word that starts with DIA-MES-AÑO with no space after (e.g. "13-FEB-24COMPRA" -> fecha="13-FEB-24", descripcion gets "COMPRA")
+        if bank_name == 'Banorte' and 'fecha' in columns and 'descripcion' in columns:
+            banorte_split = re.match(r'^(\d{1,2}-[A-Z]{3}-\d{2,4})(.*)$', text.strip(), re.I)
+            if banorte_split:
+                _date_text = banorte_split.group(1)
+                _rest = banorte_split.group(2).strip()
+                if not row_data.get('fecha'):
+                    row_data['fecha'] = _date_text
+                if _rest:
+                    if row_data.get('descripcion'):
+                        row_data['descripcion'] += ' ' + _rest
+                    else:
+                        row_data['descripcion'] = _rest
+                continue  # skip normal column assignment for this word
+        
         # Check if word contains a date followed by description text
         # For Banregio: date is only 2 digits at the start, e.g., "04 TRA ..."
         # For Banorte: date format is "DIA-MES-AÑO", e.g., "12-ENE-23EST EPIGMENIO"
@@ -5191,8 +5206,6 @@ def main():
                 # Headers will be automatically rejected by date validation
                 if movement_start_pattern:
                     if movement_start_pattern.search(all_row_text):
-                        # if bank_config['name'] == 'HSBC':
-                        #     print(f"[HSBC DEBUG] Page {page_num} Row {row_idx+1}: movements_start line (SKIPPED) | ...")
                         # For BBVA, activate movements section when start pattern is found
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                             in_bbva_movements_section = True
@@ -5276,14 +5289,6 @@ def main():
                                 #print(f"🛑 BanBajío: Fin de extracción detectado en página {page_num}, fila {row_idx+1}: {all_row_text[:100]}")
                     
                     if match_found:
-                        # HSBC DEBUG prints removed
-                        # if bank_config['name'] == 'HSBC':
-                        #     print(f"[HSBC DEBUG] Page {page_num} Row {row_idx+1}: movements_end line (EXTRACTION STOPPED) | ...")
-                        # if bank_config['name'] == 'HSBC' and last_two_valid_rows:
-                        #     print(f"\n🔍 HSBC DEBUG: Últimas 2 filas válidas ANTES de movements_end:")
-                        #     ...
-                        
-                        #print(f"🛑 Fin de tabla de movimientos detectado en página {page_num}")
                         # For BBVA, mark that we've left the movements section
                         if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
                             in_bbva_movements_section = False
