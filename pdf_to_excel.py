@@ -206,7 +206,7 @@ BANK_CONFIGS = {
 
     "HSBC": {
         "name": "HSBC",
-        "movements_start": "Día",  # String that marks the start of the movements section (table header)
+        "movements_start": "DETALLE MOVIMIENTOS",  # String that marks the start of the movements section (table header)
         "movements_end": "procesada por CoDi",                      # String that marks the end of the movements section
         "movements_end_secondary": "Enviados durante el periodo del",            # Alternative end string in some HSBC PDFs
         "columns": {
