@@ -4441,6 +4441,21 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                     row_data['fecha'] = part.strip()
                     break
     
+    # If fecha contains multiple date-like values (e.g. "02/ENE 01/ENE"): for BBVA (has liq column), first = Fecha Oper, second = Fecha Liq; else keep only the first
+    if row_data.get('fecha'):
+        fecha_val = str(row_data['fecha']).strip()
+        first_date_re = re.compile(
+            r'(?:0[1-9]|[12][0-9]|3[01])[/\-](?:0[1-9]|1[0-2]|[A-Za-z]{3})(?:[/\-]\d{2,4})?|'
+            r'(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}(?:\s+\d{2,4})?',
+            re.I
+        )
+        matches = first_date_re.findall(fecha_val)
+        if len(matches) >= 2:
+            row_data['fecha'] = matches[0].strip()
+            if columns and 'liq' in columns:
+                row_data['liq'] = (row_data.get('liq') or '').strip() or matches[1].strip()
+            # else: other banks keep only first (fecha already set)
+    
     # Debug for Banamex: print final state before returning
     if bank_name == 'Banamex':
         # Check if footer pattern is in any column
@@ -5120,6 +5135,11 @@ def main():
                 # Validar si es una transacción válida
                 is_valid = is_transaction_row(row_data, 'HSBC', debug_only_if_contains_iva=False)
                 
+                divided = {k: v for k, v in row_data.items() if k != '_amounts'}
+                print(f"[MOV DEBUG] (HSBC OCR) original={line_original!r}", flush=True)
+                print(f"[MOV DEBUG] (HSBC OCR) divided={divided}", flush=True)
+                print(f"[MOV DEBUG] (HSBC OCR) will_be_added_to_excel={'YES' if is_valid else 'NO'}", flush=True)
+                print("/n")
                 if is_valid:
                     # 🔍 HSBC DEBUG: Guardar últimas 2 filas válidas antes de movements_end
                     page_num_ocr = row_words[0].get('page', 0) if row_words else 0
@@ -5248,6 +5268,7 @@ def main():
                 row_was_added = False  # for 1,963.84 debug: set True before any movement_rows.append
                 all_row_text = ' '.join([w.get('text', '') for w in row_words])
                 all_row_text_hsbc = all_row_text
+                mov_debug_original = all_row_text
                 # Skip movements_start pattern if it appears during coordinate-based extraction
                 # Headers will be automatically rejected by date validation
                 if movement_start_pattern:
@@ -5255,11 +5276,13 @@ def main():
                         # For BBVA, activate movements section when start pattern is found
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                             in_bbva_movements_section = True
+                        print(f"[MOV DEBUG] original={mov_debug_original[:80]!r}... divided=(skipped - movements_start) will_be_added_to_excel=NO", flush=True)
                         continue  # Skip the movements_start line
                 
                 # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
                 if bank_config['name'] == 'Banregio':
                     if re.search(r'^del\s+01\s+al', all_row_text, re.I):
+                        print(f"[MOV DEBUG] original={mov_debug_original[:80]!r}... divided=(skipped - Banregio del 01 al) will_be_added_to_excel=NO", flush=True)
                         continue  # Skip irrelevant information rows
 
                 # Debug for Banamex: print all words in the row before processing
@@ -5338,6 +5361,7 @@ def main():
                         # For BBVA, mark that we've left the movements section
                         if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
                             in_bbva_movements_section = False
+                        print(f"[MOV DEBUG] original={all_row_text[:80]!r}... divided=(stopped - movements_end) will_be_added_to_excel=NO", flush=True)
                         extraction_stopped = True
                         break
 
@@ -5938,13 +5962,11 @@ def main():
                                     prev_amounts = prev.get('_amounts', [])
                                     prev['_amounts'] = prev_amounts + row_data.get('_amounts', [])
 
-                # HSBC DEBUG: for each row — prints removed to reduce console noise
-                # if bank_config['name'] == 'HSBC':
-                #     div_fecha = str(row_data.get('fecha') or '')
-                #     ...
-                #     print(f"[HSBC DEBUG] Page {page_num} Row {row_idx+1}: original: ...")
-                #     print(f"  divided: ...")
-                #     print(f"  will be added to Excel: ...")
+                # Debug: original line, divided (row_data), will be added to Excel
+                mov_divided = {k: v for k, v in row_data.items() if k != '_amounts'}
+                print(f"[MOV DEBUG] original={mov_debug_original[:100]!r}{'...' if len(mov_debug_original) > 100 else ''}", flush=True)
+                print(f"[MOV DEBUG] divided={mov_divided}", flush=True)
+                print(f"[MOV DEBUG] will_be_added_to_excel={'YES' if row_was_added else 'NO'}", flush=True)
 
     # Process summary lines to format them properly
     def format_summary_line(line):
@@ -6520,6 +6542,22 @@ def main():
 
     # Split combined fecha values into two separate columns: Fecha Oper and Fecha Liq
     # Works for coordinate-based extraction (column 'fecha') and for fallback raw lines ('raw').
+    # Normalize 'fecha' column: keep only the first date in each cell (so "02/ENE 01/ENE" -> "02/ENE") before any later logic
+    if 'fecha' in df_mov.columns:
+        _first_date_re = re.compile(
+            r'(?:0[1-9]|[12][0-9]|3[01])[/\-](?:0[1-9]|1[0-2]|[A-Za-z]{3})(?:[/\-]\d{2,4})?|'
+            r'(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}(?:\s+\d{2,4})?',
+            re.I
+        )
+        def _first_date_only(txt):
+            if not txt or not isinstance(txt, str) or str(txt).strip() in ('', 'nan', 'None'):
+                return txt
+            s = str(txt).strip()
+            matches = _first_date_re.findall(s)
+            if len(matches) >= 2:
+                return matches[0].strip()
+            return s
+        df_mov['fecha'] = df_mov['fecha'].astype(str).apply(_first_date_only)
     # Pattern for dates: supports multiple formats:
     # - "DIA MES" (01 ABR)
     # - "MES DIA" (ABR 01)
@@ -6586,8 +6624,8 @@ def main():
         # Extract first date from 'liq' column for Fecha Liq
         df_mov['Fecha Liq'] = fecha_liq_dates.apply(lambda t: t[0])
         
-        # For BBVA, create 'Fecha' from 'Fecha Liq' and remove both date columns
-        df_mov['Fecha'] = df_mov['Fecha Liq']
+        # For BBVA, create 'Fecha' from 'Fecha Liq'; when liq is empty (Fecha Liq is None), use Fecha Oper so we don't lose the date
+        df_mov['Fecha'] = df_mov['Fecha Liq'].fillna(df_mov['Fecha Oper'])
         df_mov = df_mov.drop(columns=['Fecha Oper', 'Fecha Liq'])
         
         # Remove original 'fecha' column (liq will be removed later when building description)
@@ -6609,6 +6647,16 @@ def main():
         if dates is not None:
             df_mov['Fecha Oper'] = dates.apply(lambda t: t[0])
             df_mov['Fecha Liq'] = dates.apply(lambda t: t[1])
+            # Fallback: if _extract_two_dates returned (None, None), keep raw 'fecha' as Fecha Oper so we don't lose values like "02/ENE"
+            if 'fecha' in df_mov.columns:
+                def _valid_fecha(s):
+                    if pd.isna(s):
+                        return False
+                    t = str(s).strip()
+                    return t != '' and t.lower() != 'nan'
+                mask = df_mov['Fecha Oper'].isna() & df_mov['fecha'].apply(_valid_fecha)
+                if mask.any():
+                    df_mov.loc[mask, 'Fecha Oper'] = df_mov.loc[mask, 'fecha'].astype(str).str.strip()
 
     # Remove original 'fecha' if present (only if not already removed)
     # Skip this for HSBC, Banregio, Base, Banbajío, Inbursa, Banorte, and INTERCAM - they already handled 'fecha' to 'Fecha' conversion
@@ -7174,7 +7222,13 @@ def main():
             
             # Special debug for "IVA SOBRE COMISIONES E INTERESES" row before exporting to Excel
             #print("   - Escribiendo pestaña 'Movements'...")
-            
+            # Debug: print each row exactly as it will be exported to Bank Statement Report
+            print("[EXCEL EXPORT DEBUG] Bank Statement Report — each row as written to Excel:", flush=True)
+            cols = list(df_mov.columns)
+            for i, row in df_mov.iterrows():
+                vals = {c: row[c] for c in cols}
+                print(f"  row {i}: {vals}", flush=True)
+                print("/n")
             
             df_mov.to_excel(writer, sheet_name='Bank Statement Report', index=False)
             
