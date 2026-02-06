@@ -5204,6 +5204,8 @@ def main():
                 hsbc_secondary_end_pattern = re.compile(re.escape(hsbc_secondary_end_string), re.I)
         
         extraction_stopped = False
+        # Debug: number each line in movements section (from movements_start until movements_end)
+        mov_section_line_num = 0
         # For Banregio, initialize flag to track when we're in the commission zone
         in_comision_zone = False
         # For BanBajío, track detected rows for debugging
@@ -5276,8 +5278,14 @@ def main():
                         # For BBVA, activate movements section when start pattern is found
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                             in_bbva_movements_section = True
+                        mov_section_line_num += 1
+                        print(f"[MOV SECTION] line {mov_section_line_num} (movements_start - skipped): {all_row_text[:120]!r}{'...' if len(all_row_text) > 120 else ''}", flush=True)
                         print(f"[MOV DEBUG] original={mov_debug_original[:80]!r}... divided=(skipped - movements_start) will_be_added_to_excel=NO", flush=True)
                         continue  # Skip the movements_start line
+                
+                # Debug: print every line in section (between movements_start and movements_end)
+                mov_section_line_num += 1
+                print(f"[MOV SECTION] line {mov_section_line_num}: {all_row_text[:120]!r}{'...' if len(all_row_text) > 120 else ''}", flush=True)
                 
                 # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
                 if bank_config['name'] == 'Banregio':
@@ -5361,6 +5369,7 @@ def main():
                         # For BBVA, mark that we've left the movements section
                         if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
                             in_bbva_movements_section = False
+                        print(f"[MOV SECTION] line {mov_section_line_num} (movements_end - stopped): {all_row_text[:120]!r}{'...' if len(all_row_text) > 120 else ''}", flush=True)
                         print(f"[MOV DEBUG] original={all_row_text[:80]!r}... divided=(stopped - movements_end) will_be_added_to_excel=NO", flush=True)
                         extraction_stopped = True
                         break
@@ -5431,22 +5440,49 @@ def main():
                                     if date_match:
                                         row_data['fecha'] = date_match.group()
                                 else:
-                                    # Month-only: only valid if next line contains only the missing day (01-31)
+                                    # Month-only: if next line has only numeric 01-31 (or starts with it), use as day to complete fecha
                                     month_match = inbursa_month_only_re.match(fecha_val.strip())
                                     if month_match:
                                         month_str = month_match.group(1)
-                                        next_has_only_day = False
                                         next_day_val = None
+                                        next_row_rest = None  # rest of next line after day (if any)
                                         if row_idx + 1 < len(word_rows):
                                             next_row_text = ' '.join([w.get('text', '') for w in word_rows[row_idx + 1]]).strip()
-                                            day_only_match = re.match(r'^(0[1-9]|[12][0-9]|3[01])$', next_row_text)
+                                            # Match exactly "01"-"31" or "1"-"9", or line starting with day then space and more
+                                            day_only_match = re.match(r'^(0?[1-9]|[12][0-9]|3[01])$', next_row_text)
                                             if day_only_match:
-                                                next_has_only_day = True
-                                                next_day_val = next_row_text
-                                        if next_has_only_day and next_day_val is not None:
+                                                next_day_val = day_only_match.group(0).zfill(2)  # normalize to 01, 02, ...
+                                            else:
+                                                day_start_match = re.match(r'^(0?[1-9]|[12][0-9]|3[01])\s+(.*)$', next_row_text)
+                                                if day_start_match:
+                                                    next_day_val = day_start_match.group(1).zfill(2)
+                                                    next_row_rest = day_start_match.group(2).strip()
+                                                else:
+                                                    # Day at end of next line (e.g. "something 30" -> use 30 as day)
+                                                    day_end_match = re.search(r'\b(0?[1-9]|[12][0-9]|3[01])$', next_row_text)
+                                                    if day_end_match:
+                                                        next_day_val = day_end_match.group(1).zfill(2)
+                                                        next_row_rest = next_row_text[:day_end_match.start()].strip()
+                                        if next_day_val is not None:
                                             has_date = True
                                             row_data['fecha'] = month_str.capitalize() + '. ' + next_day_val
                                             inbursa_skip_next_row = True
+                                            if next_row_rest:
+                                                # Merge next line into current row: get structured data (descripcion, cargos, abonos, saldo) from next row's words (without leading day)
+                                                next_row_words = word_rows[row_idx + 1]
+                                                if len(next_row_words) > 1 and re.match(r'^(0?[1-9]|[12][0-9]|3[01])$', (next_row_words[0].get('text') or '').strip()):
+                                                    words_without_day = next_row_words[1:]
+                                                    if words_without_day:
+                                                        next_row_data = extract_movement_row(words_without_day, columns_config, bank_config['name'], date_pattern)
+                                                        for k in ('descripcion', 'cargos', 'abonos', 'saldo'):
+                                                            if k in next_row_data and next_row_data.get(k) and not row_data.get(k):
+                                                                row_data[k] = next_row_data[k]
+                                                if not (row_data.get('descripcion') or row_data.get('cargos') or row_data.get('abonos') or row_data.get('saldo')):
+                                                    existing_desc = str(row_data.get('descripcion') or '').strip()
+                                                    row_data['descripcion'] = (existing_desc + ' ' + next_row_rest).strip() if existing_desc else next_row_rest
+                                                    amt_in_rest = DEC_AMOUNT_RE.findall(next_row_rest)
+                                                    if amt_in_rest:
+                                                        row_data['saldo'] = amt_in_rest[-1]
                                         else:
                                             has_date = True
                                             row_data['fecha'] = month_str.capitalize() + '.'
