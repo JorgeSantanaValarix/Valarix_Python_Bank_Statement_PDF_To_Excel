@@ -194,7 +194,7 @@ BANK_CONFIGS = {
     "Banamex": {
         "name": "Banamex",
         "movements_start": "DETALLE DE OPERACIONES",  # String that marks the start of the movements section
-        "movements_end": "SALDO MINIMO REQUERIDO",    # String that marks the end of the movements section
+        "movements_end": "SALDO PROMEDIO MINIMO REQUERIDO",    # String that marks the end of the movements section
         "columns": {
             "fecha": (17, 45),             # Operation Date column
             "descripcion": (55, 260),      # Description column (expanded to capture better)
@@ -7130,6 +7130,16 @@ def main():
         if pdf_summary is not None:
             pdf_summary['saldo_final'] = extracted_totals['saldo_final']
     
+    # For Banamex: move rows containing "EMP" to separate sheet "Banca Electrónica Empresarial"
+    df_banamex_emp = None
+    if bank_config['name'] == 'Banamex' and not df_mov.empty:
+        desc_col = 'Descripción' if 'Descripción' in df_mov.columns else 'descripcion'
+        if desc_col in df_mov.columns:
+            emp_mask = df_mov[desc_col].astype(str).str.contains('EMP', na=False)
+            if emp_mask.any():
+                df_banamex_emp = df_mov[emp_mask].copy()
+                df_mov = df_mov[~emp_mask].reset_index(drop=True)
+
     # Add a "Total" row at the end summing only "Abonos" and "Cargos" columns
     # This is done AFTER calculating totals for validation
     #print("📊 Agregando fila de totales...")
@@ -7204,6 +7214,8 @@ def main():
     
     # Determine number of sheets to write
     num_sheets = 3  # Summary, Movements, Data Validation
+    if df_banamex_emp is not None and not df_banamex_emp.empty:
+        num_sheets += 1  # Add Banca Electrónica Empresarial (Banamex EMP)
     if df_transferencias is not None and not df_transferencias.empty:
         num_sheets += 1  # Add Transferencias sheet
     if df_digitem is not None and not df_digitem.empty:
@@ -7214,6 +7226,8 @@ def main():
     # write sheets: summary, movements, validation, and optionally Transferencias, DIGITEM, METAS
     try:
         sheet_names = "Summary, Bank Statement Report, Data Validation"
+        if df_banamex_emp is not None and not df_banamex_emp.empty:
+            sheet_names += ", Banca Electrónica Empresarial"
         if df_transferencias is not None and not df_transferencias.empty:
             sheet_names += ", Transferencias"
         if df_digitem is not None and not df_digitem.empty:
@@ -7222,32 +7236,32 @@ def main():
             sheet_names += ", METAS"
         #print(f"📝 Escribiendo Excel con {num_sheets} pestañas: {sheet_names}")
         # Clean amount columns for Banamex: extract only numeric amounts from mixed text
+        def _banamex_extract_amount(value):
+            """Extract only the numeric amount from a string that may contain text."""
+            if pd.isna(value) or value == '':
+                return ''
+            value_str = str(value).strip()
+            amounts = DEC_AMOUNT_RE.findall(value_str)
+            if amounts:
+                amount = amounts[-1]
+                if '.' not in amount:
+                    amount = amount + '.00'
+                elif amount.count('.') == 1:
+                    parts = amount.split('.')
+                    if len(parts[1]) == 1:
+                        amount = amount + '0'
+                return amount
+            return ''
+
         if bank_config['name'] == 'Banamex':
             for col in ['Cargos', 'Abonos', 'Saldo']:
                 if col in df_mov.columns:
-                    def extract_amount(value):
-                        """Extract only the numeric amount from a string that may contain text."""
-                        if pd.isna(value) or value == '':
-                            return ''
-                        value_str = str(value).strip()
-                        # Find all amounts matching DEC_AMOUNT_RE pattern
-                        amounts = DEC_AMOUNT_RE.findall(value_str)
-                        if amounts:
-                            # Return the last amount found (usually the correct one)
-                            # Format: ensure it has proper decimal places
-                            amount = amounts[-1]
-                            # Normalize: ensure it has 2 decimal places
-                            if '.' not in amount:
-                                amount = amount + '.00'
-                            elif amount.count('.') == 1:
-                                parts = amount.split('.')
-                                if len(parts[1]) == 1:
-                                    amount = amount + '0'
-                            return amount
-                        return ''
-                    
-                    # Apply cleaning to the column
-                    df_mov[col] = df_mov[col].apply(extract_amount)
+                    df_mov[col] = df_mov[col].apply(_banamex_extract_amount)
+            # Apply same cleaning to Banca Electrónica Empresarial sheet if present
+            if df_banamex_emp is not None and not df_banamex_emp.empty:
+                for col in ['Cargos', 'Abonos', 'Saldo']:
+                    if col in df_banamex_emp.columns:
+                        df_banamex_emp[col] = df_banamex_emp[col].apply(_banamex_extract_amount)
         
         with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
             # Set author in Excel properties
@@ -7267,6 +7281,10 @@ def main():
                 print("/n")
             
             df_mov.to_excel(writer, sheet_name='Bank Statement Report', index=False)
+
+            # Write Banamex Banca Electrónica Empresarial (EMP) sheet if present
+            if df_banamex_emp is not None and not df_banamex_emp.empty:
+                df_banamex_emp.to_excel(writer, sheet_name='Banca Electrónica Empresarial', index=False)
             
             # Write Transferencias sheet if available
             if df_transferencias is not None and not df_transferencias.empty:
