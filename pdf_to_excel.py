@@ -5135,11 +5135,6 @@ def main():
                 # Validar si es una transacción válida
                 is_valid = is_transaction_row(row_data, 'HSBC', debug_only_if_contains_iva=False)
                 
-                divided = {k: v for k, v in row_data.items() if k != '_amounts'}
-                print(f"[MOV DEBUG] (HSBC OCR) original={line_original!r}", flush=True)
-                print(f"[MOV DEBUG] (HSBC OCR) divided={divided}", flush=True)
-                print(f"[MOV DEBUG] (HSBC OCR) will_be_added_to_excel={'YES' if is_valid else 'NO'}", flush=True)
-                print("/n")
                 if is_valid:
                     # 🔍 HSBC DEBUG: Guardar últimas 2 filas válidas antes de movements_end
                     page_num_ocr = row_words[0].get('page', 0) if row_words else 0
@@ -5270,7 +5265,6 @@ def main():
                 row_was_added = False  # for 1,963.84 debug: set True before any movement_rows.append
                 all_row_text = ' '.join([w.get('text', '') for w in row_words])
                 all_row_text_hsbc = all_row_text
-                mov_debug_original = all_row_text
                 # Skip movements_start pattern if it appears during coordinate-based extraction
                 # Headers will be automatically rejected by date validation
                 if movement_start_pattern:
@@ -5279,21 +5273,15 @@ def main():
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                             in_bbva_movements_section = True
                         mov_section_line_num += 1
-                        print(f"[MOV SECTION] line {mov_section_line_num} (movements_start - skipped): {all_row_text[:120]!r}{'...' if len(all_row_text) > 120 else ''}", flush=True)
-                        print(f"[MOV DEBUG] original={mov_debug_original[:80]!r}... divided=(skipped - movements_start) will_be_added_to_excel=NO", flush=True)
                         continue  # Skip the movements_start line
                 
-                # Debug: print every line in section (between movements_start and movements_end)
                 mov_section_line_num += 1
-                print(f"[MOV SECTION] line {mov_section_line_num}: {all_row_text[:120]!r}{'...' if len(all_row_text) > 120 else ''}", flush=True)
                 
                 # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
                 if bank_config['name'] == 'Banregio':
                     if re.search(r'^del\s+01\s+al', all_row_text, re.I):
-                        print(f"[MOV DEBUG] original={mov_debug_original[:80]!r}... divided=(skipped - Banregio del 01 al) will_be_added_to_excel=NO", flush=True)
                         continue  # Skip irrelevant information rows
 
-                # Debug for Banamex: print all words in the row before processing
                 # Check for end pattern (for Banamex, Santander, Banregio, Scotiabank, Konfio, Clara, etc.)
                 if movement_end_pattern:
                     all_text = ' '.join([w.get('text', '') for w in row_words])
@@ -5369,8 +5357,6 @@ def main():
                         # For BBVA, mark that we've left the movements section
                         if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
                             in_bbva_movements_section = False
-                        print(f"[MOV SECTION] line {mov_section_line_num} (movements_end - stopped): {all_row_text[:120]!r}{'...' if len(all_row_text) > 120 else ''}", flush=True)
-                        print(f"[MOV DEBUG] original={all_row_text[:80]!r}... divided=(stopped - movements_end) will_be_added_to_excel=NO", flush=True)
                         extraction_stopped = True
                         break
 
@@ -5997,12 +5983,6 @@ def main():
                                     # Merge amounts list
                                     prev_amounts = prev.get('_amounts', [])
                                     prev['_amounts'] = prev_amounts + row_data.get('_amounts', [])
-
-                # Debug: original line, divided (row_data), will be added to Excel
-                mov_divided = {k: v for k, v in row_data.items() if k != '_amounts'}
-                print(f"[MOV DEBUG] original={mov_debug_original[:100]!r}{'...' if len(mov_debug_original) > 100 else ''}", flush=True)
-                print(f"[MOV DEBUG] divided={mov_divided}", flush=True)
-                print(f"[MOV DEBUG] will_be_added_to_excel={'YES' if row_was_added else 'NO'}", flush=True)
 
     # Process summary lines to format them properly
     def format_summary_line(line):
@@ -7269,16 +7249,6 @@ def main():
             
             #print("   - Escribiendo pestaña 'Summary'...")
             df_summary.to_excel(writer, sheet_name='Summary', index=False)
-            
-            # Special debug for "IVA SOBRE COMISIONES E INTERESES" row before exporting to Excel
-            #print("   - Escribiendo pestaña 'Movements'...")
-            # Debug: print each row exactly as it will be exported to Bank Statement Report
-            print("[EXCEL EXPORT DEBUG] Bank Statement Report — each row as written to Excel:", flush=True)
-            cols = list(df_mov.columns)
-            for i, row in df_mov.iterrows():
-                vals = {c: row[c] for c in cols}
-                print(f"  row {i}: {vals}", flush=True)
-                print("/n")
             
             df_mov.to_excel(writer, sheet_name='Bank Statement Report', index=False)
 
