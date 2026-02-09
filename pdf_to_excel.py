@@ -4478,6 +4478,15 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                 desc = str(row_data.get('descripcion') or '').strip()
                 row_data['descripcion'] = (extra + ' ' + desc).strip() if desc else extra
 
+    # Banorte: cargos, abonos, saldo must be amount-like only; clear if they contain plain text (e.g. "nuestra")
+    if bank_name == 'Banorte':
+        for col in ('cargos', 'abonos', 'saldo'):
+            if col not in row_data:
+                continue
+            val = str(row_data.get(col) or '').strip()
+            if val and not DEC_AMOUNT_RE.fullmatch(val):
+                row_data[col] = ''
+
     return row_data
 
 
