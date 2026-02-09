@@ -3743,8 +3743,8 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
             # For Base, date format is DD/MM/YYYY (e.g., "30/04/2024")
             date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b')
         elif bank_name == 'Banorte':
-            # Banorte: DD/MM/YYYY (e.g. 31/12/2024) and DIA-MES-AÑO (e.g. 12-ENE-23)
-            date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b|\b(\d{1,2}-[A-Z]{3}-\d{2,4})\b', re.I)
+            # Banorte: DD/MM/YYYY (e.g. 31/12/2024) and DIA-MES-AÑO (e.g. 12-ENE-23) — hyphen form is DD-MMM-YY only
+            date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b|\b(\d{1,2}-[A-Z]{3}-\d{2})\b', re.I)
         else:
             date_pattern = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:[\/\-\s]\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
     
@@ -3842,7 +3842,7 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
     
     # For Banorte, first try to extract date (DD/MM/YYYY or DIA-MES-AÑO) from fecha column or from full row text
     if bank_name == 'Banorte' and 'fecha' in columns and not row_data.get('fecha'):
-        banorte_date_re = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b|\b(\d{1,2}-[A-Z]{3}-\d{2,4})\b', re.I)
+        banorte_date_re = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b|\b(\d{1,2}-[A-Z]{3}-\d{2})\b', re.I)
         # Try fecha column range first
         fecha_x0, fecha_x1 = columns['fecha']
         fecha_words = [w for w in sorted_words if fecha_x0 <= (w.get('x0', 0) + w.get('x1', 0)) / 2 <= fecha_x1]
@@ -4140,9 +4140,9 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                     if m:
                         amounts.append((m.group(), center))
 
-        # For Banorte: split word that starts with DIA-MES-AÑO with no space after (e.g. "13-FEB-24COMPRA" -> fecha="13-FEB-24", descripcion gets "COMPRA")
+        # For Banorte: split word that starts with DIA-MES-AÑO (DD-MMM-YY only) with no space after (e.g. "13-FEB-24COMPRA" or "27-FEB-2420..." -> fecha="13-FEB-24"/"27-FEB-24", rest to descripcion)
         if bank_name == 'Banorte' and 'fecha' in columns and 'descripcion' in columns:
-            banorte_split = re.match(r'^(\d{1,2}-[A-Z]{3}-\d{2,4})(.*)$', text.strip(), re.I)
+            banorte_split = re.match(r'^(\d{1,2}-[A-Z]{3}-\d{2})(.*)$', text.strip(), re.I)
             if banorte_split:
                 _date_text = banorte_split.group(1)
                 _rest = banorte_split.group(2).strip()
@@ -4227,12 +4227,10 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                     
                     continue  # Skip normal assignment for this word
             
-            # For Banorte format "DIA-MES-AÑO", check if the date pattern captured the full date
-            # Sometimes the pattern might only capture "30-ENE" and miss "-23"
-            # Try to find a more complete date match by looking for the full pattern
+            # For Banorte format "DIA-MES-AÑO", check if the date pattern captured the full date (DD-MMM-YY only)
             if bank_name == 'Banorte':
-                # Pattern specifically for Banorte: DIA-MES-AÑO (e.g., "30-ENE-23")
-                banorte_date_pattern = re.compile(r'(\d{1,2}-[A-Z]{3}-\d{2,4})', re.I)
+                # Pattern specifically for Banorte: DIA-MES-AÑO with 2-digit year only (e.g., "30-ENE-23"); \d{2} limits year to 2 digits so "27-FEB-2420..." yields "27-FEB-24"
+                banorte_date_pattern = re.compile(r'(\d{1,2}-[A-Z]{3}-\d{2})', re.I)
                 banorte_match = banorte_date_pattern.search(text)
                 if banorte_match:
                     date_text = banorte_match.group(1)  # Full date including year
@@ -4468,6 +4466,18 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
             str(row_data.get('saldo', ''))
         ])
     
+    # Banorte: fecha must be DD-MMM-YY only; if it has 4 digits after the month (e.g. 27-FEB-2420), keep DD-MMM-YY and move extra to descripcion
+    if bank_name == 'Banorte' and row_data.get('fecha'):
+        f = str(row_data['fecha']).strip()
+        banorte_fecha_4digit = re.match(r'^(\d{1,2}-[A-Z]{3}-)(\d{2})(\d{2})$', f, re.I)
+        if banorte_fecha_4digit:
+            prefix, yy, rest = banorte_fecha_4digit.groups()
+            row_data['fecha'] = prefix + yy
+            extra = rest.lstrip('0') or rest
+            if extra:
+                desc = str(row_data.get('descripcion') or '').strip()
+                row_data['descripcion'] = (extra + ' ' + desc).strip() if desc else extra
+
     return row_data
 
 
@@ -4852,8 +4862,8 @@ def main():
         # For Base, date format is DD/MM/YYYY (e.g., "30/04/2024")
         date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b')
     elif bank_config['name'] == 'Banorte':
-        # Banorte: DD/MM/YYYY (e.g. 31/12/2024) and DIA-MES-AÑO (e.g. 12-ENE-23)
-        date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b|\b(\d{1,2}-[A-Z]{3}-\d{2,4})\b', re.I)
+        # Banorte: DD/MM/YYYY (e.g. 31/12/2024) and DIA-MES-AÑO (e.g. 12-ENE-23) — hyphen form is DD-MMM-YY only
+        date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/(\d{4})\b|\b(\d{1,2}-[A-Z]{3}-\d{2})\b', re.I)
     elif bank_config['name'] == 'Banbajío':
         # For BanBajío, date format is "DIA MES" (e.g., "3 ENE") without year
         date_pattern = re.compile(r'\b(0?[1-9]|[12][0-9]|3[01])\s+[A-Z]{3}\b', re.I)
@@ -5273,6 +5283,11 @@ def main():
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                             in_bbva_movements_section = True
                         mov_section_line_num += 1
+                        if bank_config['name'] == 'Banorte':
+                            print(f"[Banorte MOV SECTION] line {mov_section_line_num} (movements_start - skipped): {all_row_text[:120]!r}{'...' if len(all_row_text) > 120 else ''}", flush=True)
+                            print(f"[Banorte MOV DEBUG] original={all_row_text[:100]!r}{'...' if len(all_row_text) > 100 else ''}", flush=True)
+                            print(f"[Banorte MOV DEBUG] divided=(skipped - movements_start) will_be_added_to_excel=NO", flush=True)
+                            print("\n", flush=True)
                         continue  # Skip the movements_start line
                 
                 mov_section_line_num += 1
@@ -5357,6 +5372,11 @@ def main():
                         # For BBVA, mark that we've left the movements section
                         if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
                             in_bbva_movements_section = False
+                        if bank_config['name'] == 'Banorte':
+                            print(f"[Banorte MOV SECTION] line {mov_section_line_num} (movements_end - stopped): {all_row_text[:120]!r}{'...' if len(all_row_text) > 120 else ''}", flush=True)
+                            print(f"[Banorte MOV DEBUG] original={all_row_text[:100]!r}{'...' if len(all_row_text) > 100 else ''}", flush=True)
+                            print(f"[Banorte MOV DEBUG] divided=(stopped - movements_end) will_be_added_to_excel=NO", flush=True)
+                            print("\n", flush=True)
                         extraction_stopped = True
                         break
 
@@ -5983,6 +6003,15 @@ def main():
                                     # Merge amounts list
                                     prev_amounts = prev.get('_amounts', [])
                                     prev['_amounts'] = prev_amounts + row_data.get('_amounts', [])
+
+                # Banorte debug: for each line in movements section, print original, divided, will_be_added_to_excel, then newline
+                if bank_config['name'] == 'Banorte':
+                    mov_divided = {k: v for k, v in row_data.items() if k != '_amounts'}
+                    print(f"[Banorte MOV SECTION] line {mov_section_line_num}: {all_row_text[:120]!r}{'...' if len(all_row_text) > 120 else ''}", flush=True)
+                    print(f"[Banorte MOV DEBUG] original={all_row_text[:100]!r}{'...' if len(all_row_text) > 100 else ''}", flush=True)
+                    print(f"[Banorte MOV DEBUG] divided={mov_divided}", flush=True)
+                    print(f"[Banorte MOV DEBUG] will_be_added_to_excel={'YES' if row_was_added else 'NO'}", flush=True)
+                    print("\n", flush=True)
 
     # Process summary lines to format them properly
     def format_summary_line(line):
