@@ -1751,12 +1751,11 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
     if not pages_data or len(pages_data) == 0:
         return summary_data
     
-    # Extract RFC, name, period from first 2 pages (HSBC)
-    pages_to_text = min(2, len(pages_data))
-    full_text = '\n'.join(pages_data[i].get('content', '') or '' for i in range(pages_to_text))
-    if full_text:
-        summary_data['period_text'] = extract_period_text_from_text(full_text)
-        rfc_val, name_val = extract_rfc_and_name_from_text(full_text, detected_bank='HSBC')
+    # Extract RFC, name, period from ALL pages (HSBC): search until we find "RFC" and a valid RFC value
+    full_text_all_pages = '\n'.join(pages_data[i].get('content', '') or '' for i in range(len(pages_data)))
+    if full_text_all_pages:
+        summary_data['period_text'] = extract_period_text_from_text(full_text_all_pages)
+        rfc_val, name_val = extract_rfc_and_name_from_text(full_text_all_pages, detected_bank='HSBC')
         summary_data['rfc'] = rfc_val
         summary_data['name'] = name_val
     
@@ -1900,6 +1899,10 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
         re.compile(r'Registro\s+Federal\s+de\s+Contribuyentes\s*:\s*' + rfc_value_re, re.IGNORECASE),
         re.compile(r'(?:R\.F\.C\.?|RFC)\s*:?\s*(?:Cliente\s+)?' + rfc_value_re, re.IGNORECASE),
     ]
+    only_rfc_pattern = re.compile(r'^([A-ZÑ]{3,4}\s*\d{6}\s*[A-Z0-9]{2,3})$', re.IGNORECASE)
+    # Line is "RFC" or "R.F.C." label only (no value on same line) - e.g. HSBC where value is on next line
+    rfc_label_only = re.compile(r'\b(?:R\.F\.C\.?|RFC)\s*$', re.IGNORECASE)
+
     for line in lines:
         line_stripped = line.strip()
         if not line_stripped:
@@ -1912,9 +1915,40 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                     break
             if rfc is not None:
                 break
+    # HSBC only: line contains "RFC" (anywhere), then value on same line or 1-2 lines after. Match first value with RFC structure.
+    # RFC structure (SAT): Persona física 13 chars (4 letters + 6 digits yymmdd + 3 homoclave), persona moral 12 chars (3 letters + 6 digits + 3 homoclave).
+    if rfc is None and detected_bank == 'HSBC':
+        # RFC label anywhere in line (not only at end), e.g. "... RFC > Plaza 26 XAXX010101000 ..."
+        hsbc_rfc_label_anywhere = re.compile(r'\b(?:R\.F\.C\.?|RFC)\b', re.IGNORECASE)
+        # Pattern for RFC substring: 3-4 letters, 6 digits, 3 alphanumeric (homoclave); optional spaces for OCR.
+        hsbc_rfc_substring = re.compile(r'\b([A-ZÑ]{3,4}\s*\d{6}\s*[A-Z0-9]{3})\b', re.IGNORECASE)
+        for i, line in enumerate(lines):
+            line_stripped = line.strip()
+            label_match = hsbc_rfc_label_anywhere.search(line_stripped) if line_stripped else None
+            rfc_label_found = label_match is not None
+            if not line_stripped:
+                continue
+            if rfc_label_found:
+                # First try same line: search for RFC value after the "RFC" label
+                after_label = line_stripped[label_match.end():] if label_match else line_stripped
+                m = hsbc_rfc_substring.search(after_label)
+                if m:
+                    rfc = re.sub(r'\s+', '', m.group(1)).upper()
+                    break
+                # Else search in the next 2 lines
+                for j in range(i + 1, min(i + 3, len(lines))):
+                    candidate = lines[j].strip()
+                    if not candidate:
+                        continue
+                    m = hsbc_rfc_substring.search(candidate)
+                    if m:
+                        rfc = re.sub(r'\s+', '', m.group(1)).upper()
+                        break
+                if rfc is not None:
+                    break
+                break
     # Fallback: whole line is just RFC value (no prefix)
     if rfc is None:
-        only_rfc_pattern = re.compile(r'^([A-ZÑ]{3,4}\s*\d{6}\s*[A-Z0-9]{2,3})$', re.IGNORECASE)
         for line in lines:
             line_stripped = line.strip()
             if 10 <= len(line_stripped) <= 14 and only_rfc_pattern.match(line_stripped):
@@ -1940,6 +1974,70 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                 continue
         name = line_stripped
         break
+
+    # HSBC-specific fallback: personal-name style line before address (e.g. "JUSEOG AN" followed by address)
+    if name is None and detected_bank == 'HSBC':
+        address_keywords = ['CLL', 'CALLE', 'SECCION', 'COL', 'PROV', 'AV.', 'AV ', 'NO ', 'NUM', 'C.P', 'CP ']
+        for idx, line in enumerate(lines):
+            line_stripped = line.strip()
+            if not line_stripped or len(line_stripped) < 3:
+                continue
+            line_upper = line_stripped.upper()
+            # Skip lines with digits (likely not pure name) or obvious bank/statement text
+            if any(ch.isdigit() for ch in line_upper):
+                continue
+            if 'HSBC' in line_upper or 'ESTADO DE CUENTA' in line_upper:
+                continue
+            # Exclude if matches bank keywords
+            if bank_keywords and any(re.search(pat, line_stripped, re.IGNORECASE) for pat in bank_keywords):
+                continue
+            # Check next few lines for address-like content: has digits and address keywords
+            has_address_below = False
+            for j in range(idx + 1, min(idx + 4, len(lines))):
+                nxt = lines[j].strip()
+                if not nxt:
+                    continue
+                nxt_upper = nxt.upper()
+                if any(k in nxt_upper for k in address_keywords) and any(ch.isdigit() for ch in nxt_upper):
+                    has_address_below = True
+                    break
+            if has_address_below:
+                name = line_stripped
+                break
+        # HSBC: name between "Estado de Cuenta" and "Subtotal" in same line (e.g. "Estado de Cuenta 283879 2 JUSEOG AN Subtotal:")
+        if name is None and detected_bank == 'HSBC':
+            hsbc_estado_subtotal = re.compile(
+                r'Estado\s+de\s+Cuenta\s*(?:\d+\s*)*\s*([A-Za-zÑñ\s]+?)\s*Subtotal',
+                re.IGNORECASE
+            )
+            for idx, line in enumerate(lines):
+                line_stripped = line.strip()
+                if not line_stripped or 'Estado de Cuenta' not in line_stripped or 'Subtotal' not in line_stripped:
+                    continue
+                m = hsbc_estado_subtotal.search(line_stripped)
+                if m:
+                    candidate = m.group(1).strip()
+                    if 2 <= len(candidate) <= 80 and not any(ch.isdigit() for ch in candidate) and 1 <= len(candidate.split()) <= 6:
+                        name = candidate
+                        break
+        # HSBC: name (company with DE CV / S.A. DE C.V.) after "Estado de Cuenta" in same line (e.g. "... Estado de Cuenta ... HK DASA DE CV. ...")
+        if name is None and detected_bank == 'HSBC':
+            hsbc_estado_company = re.compile(
+                r'Estado\s+de\s+Cuenta\s.*?\b([A-Za-zÑñ][A-Za-zÑñ\s]*(?:DE\s+CV|S\.A\.\s+DE\s+C\.V\.?))\s*\.?',
+                re.IGNORECASE
+            )
+            for idx, line in enumerate(lines):
+                line_stripped = line.strip()
+                if not line_stripped or 'Estado de Cuenta' not in line_stripped:
+                    continue
+                m = hsbc_estado_company.search(line_stripped)
+                if m:
+                    candidate = m.group(1).strip().rstrip('.')
+                    if 3 <= len(candidate) <= 80 and 'HSBC' not in candidate.upper():
+                        if bank_keywords and any(re.search(pat, candidate, re.IGNORECASE) for pat in bank_keywords):
+                            continue
+                        name = candidate
+                        break
 
     return (rfc, name)
 
