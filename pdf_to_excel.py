@@ -1742,11 +1742,23 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
         'total_abonos': None,
         'saldo_final': None,
         'total_movimientos': None,
-        'saldo_anterior': None
+        'saldo_anterior': None,
+        'rfc': None,
+        'name': None,
+        'period_text': None,
     }
     
     if not pages_data or len(pages_data) == 0:
         return summary_data
+    
+    # Extract RFC, name, period from first 2 pages (HSBC)
+    pages_to_text = min(2, len(pages_data))
+    full_text = '\n'.join(pages_data[i].get('content', '') or '' for i in range(pages_to_text))
+    if full_text:
+        summary_data['period_text'] = extract_period_text_from_text(full_text)
+        rfc_val, name_val = extract_rfc_and_name_from_text(full_text, detected_bank='HSBC')
+        summary_data['rfc'] = rfc_val
+        summary_data['name'] = name_val
     
     # Search in the first two pages (before the start of movements)
     pages_to_check = min(2, len(pages_data))
@@ -1834,6 +1846,104 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
     return summary_data
 
 
+def extract_period_text_from_text(full_text: str):
+    """
+    Extract period string from PDF text (e.g. "Corte al Día 29 - 29 Días", "Del 01 Oct. 2024 al 31 Oct. 2024").
+    Returns the first full match as shown in the PDF, or None.
+    """
+    if not full_text or not full_text.strip():
+        return None
+    patterns = [
+        (r'Corte al D[ií]a \d+ - \d+ D[ií]as', 0),
+        (r'Del \d{1,2} \w+\.? \d{4} al \d{1,2} \w+\.? \d{4}', 0),
+        (r'DEL \d{1,2}/\w+/\d{4} AL \d{1,2}/\w+/\d{4}', 0),
+        (r'\d{1,2}/\d{1,2}\d{0,2}/\d{2,4}\s+al\s+\d{1,2}/\d{1,2}/\d{2,4}', 0),
+        (r'Periodo del \d{1,2} \w{3} \d{4} al \d{1,2} \w{3} \d{4}', 0),
+        (r'Periodo \d{1,2}-\w{3}-\d{2}/\d{1,2}-\w{3}-\d{2}', 0),
+        (r'\d{1,2} AL \d{1,2} DE \w+ DE \d{4}', 0),
+        # RESUMEN DEL: 01/ENE/2020 AL 31/ENE/2020
+        (r'RESUMEN DEL:\s*\d{1,2}/\w{3}/\d{4}\s+AL\s+\d{1,2}/\w{3}/\d{4}', 0),
+        # Periodo 01/01/2023 - 31/01/2023
+        (r'Periodo\s+\d{1,2}/\d{1,2}/\d{4}\s*-\s*\d{1,2}/\d{1,2}/\d{4}', 0),
+        # Periodo DEL 01/06/2025 AL 30/06/2025
+        (r'Periodo\s+DEL\s+\d{1,2}/\d{1,2}/\d{4}\s+AL\s+\d{1,2}/\d{1,2}/\d{4}', 0),
+        # PERIODO: 1 DE ENERO AL 31 DE ENERO DE 2024
+        (r'PERIODO:\s*\d{1,2}\s+DE\s+\w+\s+AL\s+\d{1,2}\s+DE\s+\w+\s+DE\s+\d{4}', 0),
+        # PERIODO: 01  DE  ENE  DE  2025  AL  31  DE  ENE  DE  2025 (flexible spaces)
+        (r'PERIODO:\s*\d{1,2}\s+DE\s+\w+\s+DE\s+\d{4}\s+AL\s+\d{1,2}\s+DE\s+\w+\s+DE\s+\d{4}', 0),
+        (r'Periodo\s*.+', 0),
+        (r'(?:Del|DEL)\s+.+?\s+al\s+.+', 0),
+    ]
+    for pattern, _ in patterns:
+        m = re.search(pattern, full_text, re.IGNORECASE | re.DOTALL)
+        if m:
+            return m.group(0).strip()
+    return None
+
+
+def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
+    """
+    Extract RFC and name (razón social) from PDF text.
+    Returns (rfc, name). RFC is normalized (spaces removed). Name excludes lines that contain
+    both a company suffix (SA DE CV, etc.) and the detected bank's BANK_KEYWORDS.
+    """
+    rfc = None
+    name = None
+    if not full_text or not full_text.strip():
+        return (rfc, name)
+    lines = full_text.split('\n')
+    bank_keywords = BANK_KEYWORDS.get(detected_bank, []) if detected_bank else []
+
+    # RFC: try multiple patterns (RFC:, R.F.C., R.F.C , Registro Federal de Contribuyentes:, or line with only RFC value)
+    rfc_value_re = r'([A-ZÑ]{3,4}\s*\d{6}\s*[A-Z0-9]{2,3})'
+    rfc_patterns = [
+        re.compile(r'Registro\s+Federal\s+de\s+Contribuyentes\s*:\s*' + rfc_value_re, re.IGNORECASE),
+        re.compile(r'(?:R\.F\.C\.?|RFC)\s*:?\s*(?:Cliente\s+)?' + rfc_value_re, re.IGNORECASE),
+    ]
+    for line in lines:
+        line_stripped = line.strip()
+        if not line_stripped:
+            continue
+        if rfc is None:
+            for pat in rfc_patterns:
+                m = pat.search(line_stripped)
+                if m:
+                    rfc = re.sub(r'\s+', '', m.group(1)).upper()
+                    break
+            if rfc is not None:
+                break
+    # Fallback: whole line is just RFC value (no prefix)
+    if rfc is None:
+        only_rfc_pattern = re.compile(r'^([A-ZÑ]{3,4}\s*\d{6}\s*[A-Z0-9]{2,3})$', re.IGNORECASE)
+        for line in lines:
+            line_stripped = line.strip()
+            if 10 <= len(line_stripped) <= 14 and only_rfc_pattern.match(line_stripped):
+                rfc = re.sub(r'\s+', '', line_stripped).upper()
+                break
+
+    # Name: lines with company suffixes (SA DE CV, S.A. DE C.V., etc.), excluding bank's own name
+    company_suffixes = [
+        'SA DE CV', 'S.A. DE C.V.', 'S.A. DE C.V', 'S. DE R.L. DE C.V.', 'S. DE R.L. DE C.V',
+        'S.R.L.', 'S. DE R.L.', 'DE C.V.', 'DE CV',
+    ]
+    for line in lines:
+        line_stripped = line.strip()
+        if not line_stripped or len(line_stripped) < 5:
+            continue
+        line_upper = line_stripped.upper()
+        has_suffix = any(s in line_upper for s in company_suffixes)
+        if not has_suffix:
+            continue
+        # Exclude if line matches the detected bank's keywords (e.g. "HSBC México S.A. DE C.V.")
+        if bank_keywords:
+            if any(re.search(pat, line_stripped, re.IGNORECASE) for pat in bank_keywords):
+                continue
+        name = line_stripped
+        break
+
+    return (rfc, name)
+
+
 def extract_summary_from_pdf(pdf_path: str) -> dict:
     """
     Extract summary information from PDF (totals, deposits, withdrawals, balance, movement count).
@@ -1847,7 +1957,10 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
         'total_abonos': None,
         'saldo_final': None,
         'total_movimientos': None,
-        'saldo_anterior': None
+        'saldo_anterior': None,
+        'rfc': None,
+        'name': None,
+        'period_text': None,
     }
     
     try:
@@ -1908,6 +2021,14 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                     last_text = last_page.extract_text()
                     if last_text:
                         all_lines.extend(last_text.split('\n'))
+            
+            # Extract RFC, name, period from full text (all banks)
+            full_text = all_text if all_text else '\n'.join(all_lines)
+            if full_text:
+                summary_data['period_text'] = extract_period_text_from_text(full_text)
+                rfc_val, name_val = extract_rfc_and_name_from_text(full_text, detected_bank=bank_name)
+                summary_data['rfc'] = rfc_val
+                summary_data['name'] = name_val
             
             # Bank-specific extraction
             if bank_name == "BBVA":
@@ -7244,6 +7365,25 @@ def main():
     total_df = pd.DataFrame([total_row])
     df_mov = pd.concat([df_mov, total_df], ignore_index=True)
     #print(f"✅ Fila de totales agregada (solo Abonos y Cargos)")
+    
+    # Append blank row, then RFC, Name, Period (all banks)
+    _summary = pdf_summary or {}
+    col0 = df_mov.columns[0]
+    col1 = df_mov.columns[1]
+    row_blank = {c: '' for c in df_mov.columns}
+    row_rfc = {c: '' for c in df_mov.columns}
+    row_rfc[col0] = 'RFC'
+    row_rfc[col1] = _summary.get('rfc') or ''
+    row_name = {c: '' for c in df_mov.columns}
+    row_name[col0] = 'Name'
+    row_name[col1] = _summary.get('name') or ''
+    row_period = {c: '' for c in df_mov.columns}
+    row_period[col0] = 'Period:'
+    row_period[col1] = _summary.get('period_text') or ''
+    df_mov = pd.concat([
+        df_mov,
+        pd.DataFrame([row_blank, row_rfc, row_name, row_period]),
+    ], ignore_index=True)
     
     # Create validation sheet
     #print("📋 Creando pestaña de validación...")
