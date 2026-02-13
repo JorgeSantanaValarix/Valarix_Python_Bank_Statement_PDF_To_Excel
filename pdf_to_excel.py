@@ -2268,7 +2268,7 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                         match = re.search(r'[-\s]+RETIROS\s+([\d,\.]+)', section_text, re.I)
                         if match:
                             retiros = normalize_amount_str(match.group(1))
-                            print(f"✅ Santander: Found WITHDRAWALS: ${retiros:,.2f}")
+                            #print(f"✅ Santander: Found WITHDRAWALS: ${retiros:,.2f}")
                             if retiros > 0:
                                 summary_data['total_retiros'] = retiros
                                 summary_data['total_cargos'] = retiros
@@ -5552,8 +5552,6 @@ def main():
         banbajio_detected_rows = 0
         # For BBVA, track when we're in the movements section
         in_bbva_movements_section = False
-        # For Santander, track when we're between movements_start and movements_end (for debug prints)
-        santander_in_movements_section = False
         # 🔍 HSBC DEBUG: Buffer para guardar últimas 2 filas válidas antes de movements_end
         last_two_valid_rows = []
         total_pages = len(extracted_data)
@@ -5616,8 +5614,6 @@ def main():
                 # Headers will be automatically rejected by date validation
                 if movement_start_pattern:
                     if movement_start_pattern.search(all_row_text):
-                        if bank_config['name'] == 'Santander':
-                            santander_in_movements_section = True
                         # For BBVA, activate movements section when start pattern is found
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                             in_bbva_movements_section = True
@@ -5703,12 +5699,6 @@ def main():
                                 #print(f"🛑 BanBajío: Fin de extracción detectado en página {page_num}, fila {row_idx+1}: {all_row_text[:100]}")
                     
                     if match_found:
-                        if bank_config['name'] == 'Santander' and santander_in_movements_section:
-                            print(f"[Santander movements DEBUG] original_line={all_row_text!r}", flush=True)
-                            print(f"[Santander movements DEBUG] divided=(movements_end line, not split)", flush=True)
-                            print(f"[Santander movements DEBUG] added_to_excel=No (movements_end detected)", flush=True)
-                            print("\n", flush=True)
-                            santander_in_movements_section = False
                         # For BBVA, mark that we've left the movements section
                         if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
                             in_bbva_movements_section = False
@@ -5984,16 +5974,6 @@ def main():
                             #row_data['page'] = page_num
                             row_was_added = True
                             movement_rows.append(row_data)
-                
-                # Santander debug: for each line in movements section, print original line, how divided, added to excel or not
-                if bank_config['name'] == 'Santander' and santander_in_movements_section:
-                    row_data_debug = {k: v for k, v in row_data.items() if k != '_amounts'}
-                    if row_data.get('_amounts'):
-                        row_data_debug['_amounts_count'] = len(row_data['_amounts'])
-                    print(f"[Santander movements DEBUG] original_line={all_row_text!r}", flush=True)
-                    print(f"[Santander movements DEBUG] divided={row_data_debug!r}", flush=True)
-                    print(f"[Santander movements DEBUG] added_to_excel={'Yes' if row_was_added else 'No'}", flush=True)
-                    print("\n", flush=True)
                 
                 # For Banregio, check if this is a monthly commission (last movement) - stop extraction
                 if bank_config['name'] == 'Banregio' and has_valid_data:
