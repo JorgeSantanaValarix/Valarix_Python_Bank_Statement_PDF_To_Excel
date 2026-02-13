@@ -1858,6 +1858,14 @@ def extract_period_text_from_text(full_text: str):
     """
     if not full_text or not full_text.strip():
         return None
+    # Santander: "PERIODO DEL 01-ENE-2026 AL 31-ENE-2026" -> return only "01-ENE-2026 AL 31-ENE-2026"
+    santander_periodo = re.search(
+        r'(?i)PERIODO\s+DEL\s+(\d{1,2}-[A-Z]{3}-\d{2,4})\s+AL\s+(\d{1,2}-[A-Z]{3}-\d{2,4})',
+        full_text,
+    )
+    if santander_periodo:
+        return f"{santander_periodo.group(1)} AL {santander_periodo.group(2)}".strip()
+
     patterns = [
         (r'Corte al D[ií]a \d+ - \d+ D[ií]as', 0),
         (r'Del \d{1,2} \w+\.? \d{4} al \d{1,2} \w+\.? \d{4}', 0),
