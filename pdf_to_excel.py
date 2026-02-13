@@ -71,6 +71,7 @@ BANK_CONFIGS = {
     "Santander": {
         "name": "Santander",
         "movements_start": "DETALLEDEMOVIMIENTOSCUENTADECHEQUES",
+        "movements_start_secondary": "Detalles de movimientos",
         "movements_end": "TOTAL",
         "metas_start": "DETALLE DE MOVIMIENTOS MIS METAS SANTANDER",
         "metas_end": "INFORMACION FISCAL",
@@ -311,6 +312,7 @@ BANK_KEYWORDS = {
     ],
     "HSBC": [
         r"\bHSBC\s",
+        r"\bHSBC.\s",
         r"\bHSBC\s+BANCO\b",
         r"\bHSBC\s+M[EE]XICO\b",
         r"\bCoDi\b",
@@ -553,23 +555,26 @@ BANK_DETECTION_DATE_PATTERN = re.compile(
 )
 
 
-def detect_bank_from_text(text: str) -> str:
+def detect_bank_from_text(text: str, from_ocr: bool = False) -> str:
     """
     Detect the bank from extracted text content.
-    Phase 1: If BANK_KEYWORDS match in the first 20 lines, return that bank immediately (old logic).
+    Phase 1: If BANK_KEYWORDS match, return that bank immediately.
+      - When from_ocr=True (OCR path): check all lines of the text (full first page).
+      - Otherwise: check only the first 30 lines.
     Phase 2: Otherwise, search all lines, count matches per bank (excluding matches near a date),
     and return the bank with the most occurrences.
+    When from_ocr=True and no bank is detected (Phase 2 max_count=0), returns "HSBC" as fallback.
     """
     if not text:
-        return DEFAULT_BANK
+        return "HSBC" if from_ocr else DEFAULT_BANK
     
     amount_pattern = re.compile(r"\b\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
     lines = text.split('\n')
     n_lines = len(lines)
     
-    # Phase 1: Old logic on first 20 lines only — first match wins
-    first_20 = lines[:20]
-    for line in first_20:
+    # Phase 1: first match wins. OCR: check full first page; else first 30 lines only
+    phase1_lines = lines if from_ocr else lines[:30]
+    for line_idx, line in enumerate(phase1_lines):
         line_clean = line.strip()
         if not line_clean:
             continue
@@ -584,7 +589,7 @@ def detect_bank_from_text(text: str) -> str:
             if re.search(rf'\b{re.escape(bank_name.upper())}\b', line_upper):
                 return bank_name
     
-    # Phase 2: No match in first 20 lines — use new logic on all lines (count + filter near date)
+    # Phase 2: No match in Phase 1 — use new logic on all lines (count + filter near date)
     bank_counts = {bank_name: 0 for bank_name in BANK_KEYWORDS.keys()}
     for i, line in enumerate(lines):
         line_clean = line.strip()
@@ -620,7 +625,7 @@ def detect_bank_from_text(text: str) -> str:
     
     max_count = max(bank_counts.values()) if bank_counts else 0
     if max_count == 0:
-        return DEFAULT_BANK
+        return "HSBC" if from_ocr else DEFAULT_BANK
     return max(bank_counts, key=bank_counts.get)
 
 
@@ -5058,9 +5063,13 @@ def main():
     
     # Detect bank: from extracted text if OCR was used, otherwise from PDF
     if used_ocr:
-        # If OCR was used, detect bank from extracted text
-        all_text = '\n'.join([p.get('content', '') for p in extracted_data])  # All pages
-        detected_bank = detect_bank_from_text(all_text)
+        # If OCR was used, detect bank from extracted text.
+        # Use only the first page for bank detection so the header (bank name) wins;
+        # otherwise Phase 1 "first 20 lines" can match a different bank that appears
+        # early (e.g. in a table) and HSBC later in the doc would be ignored.
+        first_page_content = (extracted_data[0].get('content', '') if extracted_data else '')
+        all_text = '\n'.join([p.get('content', '') for p in extracted_data])  # All pages (for extraction)
+        detected_bank = detect_bank_from_text(first_page_content, from_ocr=True)
     else:
         # If OCR was not used, detect bank from PDF (normal method)
         detected_bank = detect_bank_from_pdf(pdf_path)
@@ -5135,14 +5144,27 @@ def main():
                 re.I
             )
         else:
-            # Create pattern from movements_start string (escape special chars)
-            movement_start_pattern = re.compile(re.escape(movement_start_string), re.I)
+            movement_start_secondary = bank_config.get('movements_start_secondary')
+            if movement_start_secondary:
+                # Match primary or secondary (e.g. Santander: "DETALLE..." or "Detalles de movimientos")
+                movement_start_pattern = re.compile(
+                    r'(?:%s|%s)' % (re.escape(movement_start_string), re.escape(movement_start_secondary)),
+                    re.I
+                )
+            else:
+                # Create pattern from movements_start string (escape special chars)
+                movement_start_pattern = re.compile(re.escape(movement_start_string), re.I)
+    
+    if bank_config['name'] == 'Santander' and movement_start_pattern:
+        print(f"[Santander movements_start DEBUG] Pattern ready. Text-line scan: {len(pages_lines)} pages.", flush=True)
     
     # Track if we've found the movements section start
     movement_section_found = False
     
     for p in pages_lines:
         if not movement_start_found:
+            if bank_config['name'] == 'Santander' and movement_start_pattern:
+                print(f"[Santander movements_start DEBUG] Scanning page {p['page']} ({len(p['lines'])} lines) for header.", flush=True)
             for i, ln in enumerate(p['lines']):
                 # Generic movement_start_pattern from BANK_CONFIGS (for all banks)
                 if movement_start_pattern and not movement_section_found:
@@ -5509,8 +5531,12 @@ def main():
                 # Check if this page contains the start pattern
                 page_text = ' '.join([w.get('text', '') for w in words])
                 if not movement_start_pattern.search(page_text):
+                    if bank_config['name'] == 'Santander':
+                        print(f"[Santander movements_start DEBUG] Coordinate path: page {page_num} skipped (no header in page text).", flush=True)
                     # Start pattern not found on this page, skip it
                     continue
+                if bank_config['name'] == 'Santander':
+                    print(f"[Santander movements_start DEBUG] Coordinate path: page {page_num} contains header, checking rows.", flush=True)
             
             # Check if this page contains movements (page >= movement_start_page if found)
             if movement_start_found and page_num < movement_start_page:
