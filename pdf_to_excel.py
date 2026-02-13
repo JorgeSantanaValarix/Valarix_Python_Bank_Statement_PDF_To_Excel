@@ -5519,14 +5519,8 @@ def main():
         if movement_end_string:
             # Create pattern from movements_end string (escape special chars)
             # For Santander, Banregio, Hey, and Clara, we need special handling for patterns with numbers
-            if bank_config['name'] == 'Santander':
-                # Santander: "TOTAL" may be followed by 2 amounts (DEPOSITOS, RETIROS) or 3 (e.g. + saldo)
-                # Example: "TOTAL 91,000.00 90,766.74" or "TOTAL 821,646.20 820,238.73 1,417.18"
-                movement_end_pattern = re.compile(
-                    re.escape(movement_end_string) + r'\s+[\d,\.]+\s+[\d,\.]+(?:\s+[\d,\.]+)?', re.I
-                )
-            elif bank_config['name'] == 'Banregio' or bank_config['name'] == 'Hey' or bank_config['name'] == 'INTERCAM':
-                # Banregio/Hey/INTERCAM: movements_end is "TOTAL"/"Total", match followed by 3 numeric amounts
+            if bank_config['name'] == 'Santander' or bank_config['name'] == 'Banregio' or bank_config['name'] == 'Hey' or bank_config['name'] == 'INTERCAM':
+                # Santander/Banregio/Hey/INTERCAM: movements_end is "TOTAL"/"Total", match followed by 3 numeric amounts
                 # Example: "TOTAL 821,646.20 820,238.73 1,417.18" or "Total 45,998.00 49,675.60 4,580.78"
                 movement_end_pattern = re.compile(re.escape(movement_end_string) + r'\s+[\d,\.]+\s+[\d,\.]+\s+[\d,\.]+', re.I)
             elif bank_config['name'] == 'Clara':
@@ -5674,12 +5668,8 @@ def main():
                                     if pattern.search(all_text):
                                         match_found = True
                                         break
-                    elif bank_config['name'] == 'Santander':
-                        # Santander: "TOTAL" + 2 or 3 amounts (movement_end_pattern already allows 2 or 3)
-                        if movement_end_pattern.search(all_text):
-                            match_found = True
-                    elif bank_config['name'] == 'Banregio' or bank_config['name'] == 'Hey':
-                        # For Banregio/Hey, use the pattern with 3 numeric amounts (already created in movement_end_pattern)
+                    elif bank_config['name'] == 'Santander' or bank_config['name'] == 'Banregio' or bank_config['name'] == 'Hey':
+                        # For Santander/Banregio/Hey, use the pattern with 3 numeric amounts (already created in movement_end_pattern)
                         if movement_end_pattern.search(all_text):
                             match_found = True
                         # Banregio: also match "3 amounts + Total" (e.g. "11,973.34 12,973.34 1,000.00 Total")
@@ -6012,6 +6002,9 @@ def main():
                 # If row has valid data but no date - treat as continuation or standalone row
                 if not has_date and has_valid_data:
                     # Row has valid data but no date - treat as continuation or standalone row
+                    # For Santander: do not merge rows without Fecha into previous movement (e.g. TOTAL line amounts)
+                    if bank_config['name'] == 'Santander':
+                        continue
                     
                     # Filter out footer information for Banamex (e.g., "000180.B61CHDA011.OD.0131.01")
                     if bank_config['name'] == 'Banamex':
