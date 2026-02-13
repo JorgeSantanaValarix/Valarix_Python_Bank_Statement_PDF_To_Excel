@@ -71,7 +71,8 @@ BANK_CONFIGS = {
     "Santander": {
         "name": "Santander",
         "movements_start": "DETALLEDEMOVIMIENTOSCUENTADECHEQUES",
-        "movements_start_secondary": "Detalles de movimientos",
+        # Only this duplicated-letter full phrase (no loose patterns: no "Detalles de movimientos", no d+e+ alone, no tertiary header)
+        "movements_start_secondary": r'D+e+t+a+l+l+e+\s+d+e+\s+m+o+v+i+m+i+e+n+t+o+s+\s+c+u+e+n+t+a+',
         "movements_end": "TOTAL",
         "metas_start": "DETALLE DE MOVIMIENTOS MIS METAS SANTANDER",
         "metas_end": "INFORMACION FISCAL",
@@ -3681,6 +3682,35 @@ def split_pages_into_lines(pages: list) -> list:
     return pages_lines
 
 
+def _santander_deduplicate_string(s: str) -> str:
+    """If s has every character repeated (e.g. '0066--EENNEE' -> '06-ENE'), return deduplicated string; else return s unchanged."""
+    if not s or len(s) < 2:
+        return s
+    n = len(s)
+    if n % 2 != 0:
+        return s
+    if all(s[i] == s[i + 1] for i in range(0, n - 1, 2)):
+        return s[0::2]
+    return s
+
+
+def _santander_sanitize_row_words_if_duplicated(row_words: list) -> list:
+    """For Santander: if any word text has every-char-repeated pattern, return new row_words with sanitized text; else return original."""
+    if not row_words:
+        return row_words
+    out = []
+    any_changed = False
+    for w in row_words:
+        text = (w.get('text') or '').strip()
+        dedup = _santander_deduplicate_string(text)
+        if dedup != text:
+            any_changed = True
+        tw = dict(w)
+        tw['text'] = dedup
+        out.append(tw)
+    return out if any_changed else row_words
+
+
 def extract_santander_metas_from_pdf(extracted_data, columns_config, metas_start, metas_end):
     """Extract Santander METAS section (Mis Metas) using same coordinate-based logic as Movements.
     Section starts with metas_start and ends with a line containing metas_end (e.g. TOTAL).
@@ -3722,7 +3752,8 @@ def extract_santander_metas_from_pdf(extracted_data, columns_config, metas_start
                 if re.search(r'\b' + re.escape(end_word) + r'\b', all_row_text, re.I):
                     extraction_stopped = True
                     break
-                row_data = extract_movement_row(row_words, columns_config, 'Santander', date_pattern)
+                row_words_sanitized = _santander_sanitize_row_words_if_duplicated(row_words)
+                row_data = extract_movement_row(row_words_sanitized, columns_config, 'Santander', date_pattern)
                 fecha_val = str(row_data.get('fecha') or '').strip()
                 has_date = bool(date_pattern.search(fecha_val))
                 has_amount = any(row_data.get(k) for k in ('cargos', 'abonos', 'saldo') if row_data.get(k))
@@ -5145,26 +5176,33 @@ def main():
             )
         else:
             movement_start_secondary = bank_config.get('movements_start_secondary')
-            if movement_start_secondary:
-                # Match primary or secondary (e.g. Santander: "DETALLE..." or "Detalles de movimientos")
+            movement_start_tertiary = bank_config.get('movements_start_tertiary')  # list of regex strings (e.g. OCR-duplicated)
+            if movement_start_secondary or movement_start_tertiary:
+                parts = [re.escape(movement_start_string)]
+                if movement_start_secondary:
+                    # Secondary can be a string (literal) or list of strings (literals and/or regex)
+                    sec_list = movement_start_secondary if isinstance(movement_start_secondary, list) else [movement_start_secondary]
+                    for s in sec_list:
+                        # Treat as regex if it contains '+' (one-or-more pattern) or other regex metacharacters we use
+                        if '+' in s or '(\s' in s or '+)' in s:
+                            parts.append(s)
+                        else:
+                            parts.append(re.escape(s))
+                if movement_start_tertiary:
+                    parts.extend(movement_start_tertiary)
                 movement_start_pattern = re.compile(
-                    r'(?:%s|%s)' % (re.escape(movement_start_string), re.escape(movement_start_secondary)),
+                    r'(?:%s)' % '|'.join(parts),
                     re.I
                 )
             else:
                 # Create pattern from movements_start string (escape special chars)
                 movement_start_pattern = re.compile(re.escape(movement_start_string), re.I)
     
-    if bank_config['name'] == 'Santander' and movement_start_pattern:
-        print(f"[Santander movements_start DEBUG] Pattern ready. Text-line scan: {len(pages_lines)} pages.", flush=True)
-    
     # Track if we've found the movements section start
     movement_section_found = False
     
     for p in pages_lines:
         if not movement_start_found:
-            if bank_config['name'] == 'Santander' and movement_start_pattern:
-                print(f"[Santander movements_start DEBUG] Scanning page {p['page']} ({len(p['lines'])} lines) for header.", flush=True)
             for i, ln in enumerate(p['lines']):
                 # Generic movement_start_pattern from BANK_CONFIGS (for all banks)
                 if movement_start_pattern and not movement_section_found:
@@ -5514,6 +5552,8 @@ def main():
         banbajio_detected_rows = 0
         # For BBVA, track when we're in the movements section
         in_bbva_movements_section = False
+        # For Santander, track when we're between movements_start and movements_end (for debug prints)
+        santander_in_movements_section = False
         # 🔍 HSBC DEBUG: Buffer para guardar últimas 2 filas válidas antes de movements_end
         last_two_valid_rows = []
         total_pages = len(extracted_data)
@@ -5531,12 +5571,8 @@ def main():
                 # Check if this page contains the start pattern
                 page_text = ' '.join([w.get('text', '') for w in words])
                 if not movement_start_pattern.search(page_text):
-                    if bank_config['name'] == 'Santander':
-                        print(f"[Santander movements_start DEBUG] Coordinate path: page {page_num} skipped (no header in page text).", flush=True)
                     # Start pattern not found on this page, skip it
                     continue
-                if bank_config['name'] == 'Santander':
-                    print(f"[Santander movements_start DEBUG] Coordinate path: page {page_num} contains header, checking rows.", flush=True)
             
             # Check if this page contains movements (page >= movement_start_page if found)
             if movement_start_found and page_num < movement_start_page:
@@ -5580,6 +5616,8 @@ def main():
                 # Headers will be automatically rejected by date validation
                 if movement_start_pattern:
                     if movement_start_pattern.search(all_row_text):
+                        if bank_config['name'] == 'Santander':
+                            santander_in_movements_section = True
                         # For BBVA, activate movements section when start pattern is found
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                             in_bbva_movements_section = True
@@ -5665,6 +5703,12 @@ def main():
                                 #print(f"🛑 BanBajío: Fin de extracción detectado en página {page_num}, fila {row_idx+1}: {all_row_text[:100]}")
                     
                     if match_found:
+                        if bank_config['name'] == 'Santander' and santander_in_movements_section:
+                            print(f"[Santander movements DEBUG] original_line={all_row_text!r}", flush=True)
+                            print(f"[Santander movements DEBUG] divided=(movements_end line, not split)", flush=True)
+                            print(f"[Santander movements DEBUG] added_to_excel=No (movements_end detected)", flush=True)
+                            print("\n", flush=True)
+                            santander_in_movements_section = False
                         # For BBVA, mark that we've left the movements section
                         if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
                             in_bbva_movements_section = False
@@ -5673,8 +5717,9 @@ def main():
 
                 # Extract structured row using coordinates
                 # Pass bank_name and date_pattern to enable date/description separation
-                
-                row_data = extract_movement_row(row_words, columns_config, bank_config['name'], date_pattern)
+                # Santander: sanitize duplicated-character lines before extraction
+                row_words_for_extract = _santander_sanitize_row_words_if_duplicated(row_words) if bank_config['name'] == 'Santander' else row_words
+                row_data = extract_movement_row(row_words_for_extract, columns_config, bank_config['name'], date_pattern)
                 
                 # Debug for Konfio: print row data after extraction (only first 3 pages)
                 if bank_config['name'] == 'Konfio' and page_num <= 3:
@@ -5939,6 +5984,16 @@ def main():
                             #row_data['page'] = page_num
                             row_was_added = True
                             movement_rows.append(row_data)
+                
+                # Santander debug: for each line in movements section, print original line, how divided, added to excel or not
+                if bank_config['name'] == 'Santander' and santander_in_movements_section:
+                    row_data_debug = {k: v for k, v in row_data.items() if k != '_amounts'}
+                    if row_data.get('_amounts'):
+                        row_data_debug['_amounts_count'] = len(row_data['_amounts'])
+                    print(f"[Santander movements DEBUG] original_line={all_row_text!r}", flush=True)
+                    print(f"[Santander movements DEBUG] divided={row_data_debug!r}", flush=True)
+                    print(f"[Santander movements DEBUG] added_to_excel={'Yes' if row_was_added else 'No'}", flush=True)
+                    print("\n", flush=True)
                 
                 # For Banregio, check if this is a monthly commission (last movement) - stop extraction
                 if bank_config['name'] == 'Banregio' and has_valid_data:
