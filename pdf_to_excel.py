@@ -245,6 +245,19 @@ BANK_CONFIGS = {
         }
     },
 
+    "Mercury": {
+        "name": "Mercury",
+        "movements_start": "Date (UTC) Description Type Amount End of Day Balance",
+        "movements_end": "Total",
+        "columns": {
+            "fecha": (47, 69),             # Month (3 chars) + day (1-31), e.g. "Jul 01"
+            "descripcion": (100, 350),     # Description column
+            "cargos": (430, 480),          # Shared with abonos (430-480). Negative amounts (e.g. –$1,199.00) -> Cargos only
+            "abonos": (430, 480),          # Shared with cargos (430-480). Positive amounts (e.g. $6,830.00) -> Abonos only
+            "saldo": (520, 570),           # End of day balance (can be negative)
+        }
+    },
+
     # Add more banks here as needed
 }
 
@@ -322,6 +335,11 @@ BANK_KEYWORDS = {
     "Base": [
         r"\bBASE\b",
         r"\bBANCO\s+BASE\b",
+    ],
+    "Mercury": [
+        r"\bMERCURY\b",
+        r"Mercury\s+Credit",
+        r"Mercury\s+IO",
     ],
 
 }
@@ -2320,6 +2338,31 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                             if saldo > 0:
                                 summary_data['saldo_final'] = saldo
             
+            elif bank_name == "Mercury":
+                # Mercury: Total Cargos from line containing "Total withdrawals" (absolute value, e.g. -$9,292.00 -> $9,292.00)
+                for line in all_lines:
+                    if not summary_data['total_cargos'] and 'Total withdrawals' in line.replace('\r', ' '):
+                        # Capture amount: optional minus before/after optional $ (e.g. -$9,292.00 or $-9,292.00 or $9,292.00)
+                        match = re.search(r'Total\s+withdrawals\s+([\-]?\s*\$?\s*[\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount is not None and amount != 0:
+                                summary_data['total_cargos'] = abs(amount)
+                                summary_data['total_retiros'] = summary_data['total_cargos']
+                    if not summary_data['total_abonos'] and 'Total deposits' in line.replace('\r', ' '):
+                        match = re.search(r'Total\s+deposits\s+\$?\s*([\d,\.\-]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount is not None and amount != 0:
+                                summary_data['total_abonos'] = abs(amount)
+                                summary_data['total_depositos'] = summary_data['total_abonos']
+                    if summary_data.get('saldo_final') is None and 'Statement balance' in line.replace('\r', ' '):
+                        match = re.search(r'Statement\s+balance\s+\$?\s*([\d,\.\-]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount is not None:
+                                summary_data['saldo_final'] = amount
+            
             elif bank_name == "Banorte":
                 # Banorte: 
                 # "Saldo inicial del periodo $ 2,284.38"
@@ -2803,6 +2846,30 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                             #print(f"✅ Scotiabank: Encontrado Saldo Final: {amount}")
                             if amount > 0:
                                 #print(f"✅ Scotiabank: Encontrado saldo final: ${amount:,.2f} en línea {i+1}: {line[:80]}")
+                                summary_data['saldo_final'] = amount
+            
+            elif bank_name == "Mercury":
+                # Mercury: Total Cargos from line containing "Total withdrawals" (absolute value, e.g. -$9,292.00 -> $9,292.00)
+                for i, line in enumerate(all_lines):
+                    if not summary_data['total_cargos'] and 'Total withdrawals' in line.replace('\r', ' '):
+                        match = re.search(r'Total\s+withdrawals\s+([\-]?\s*\$?\s*[\d,\.]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount is not None:
+                                summary_data['total_cargos'] = abs(amount)
+                                summary_data['total_retiros'] = summary_data['total_cargos']
+                    if not summary_data['total_abonos'] and 'Total deposits' in line.replace('\r', ' '):
+                        match = re.search(r'Total\s+deposits\s+\$?\s*([\d,\.\-]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount is not None:
+                                summary_data['total_abonos'] = abs(amount)
+                                summary_data['total_depositos'] = summary_data['total_abonos']
+                    if not summary_data['saldo_final'] and 'Statement balance' in line.replace('\r', ' '):
+                        match = re.search(r'Statement\s+balance\s+\$?\s*([\d,\.\-]+)', line, re.I)
+                        if match:
+                            amount = normalize_amount_str(match.group(1))
+                            if amount is not None:
                                 summary_data['saldo_final'] = amount
             
             else:
@@ -3926,6 +3993,10 @@ def is_transaction_row(row_data, bank_name=None, debug_only_if_contains_iva=Fals
         inbursa_full_date_re = re.compile(r'^(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\.?\s+(0[1-9]|[12][0-9]|3[01])\b', re.I)
         inbursa_month_only_re = re.compile(r'^(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\.?$', re.I)
         has_date = bool(inbursa_full_date_re.match(fecha.strip()) or inbursa_month_only_re.match(fecha.strip()))
+    elif bank_name == 'Mercury':
+        # Mercury: "Jul 01" - 3-letter month (Jan, Feb, Mar, ...) + space + day (1-31)
+        mercury_date_re = re.compile(r'^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(0?[1-9]|[12][0-9]|3[01])$', re.I)
+        has_date = bool(mercury_date_re.match(fecha.strip()))
     else:
         # For other banks, use the general date pattern
         day_re = re.compile(r"\b(?:(?:0[1-9]|[12][0-9]|3[01])(?:[\/\-\s])[A-Za-z]{3}(?:[\/\-\s]\d{2,4})?|[A-Za-z]{3}(?:[\/\-\s])(?:0[1-9]|[12][0-9]|3[01])|(?:0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4})\b", re.I)
@@ -4135,6 +4206,18 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
             m = banorte_date_re.search(full_row_text)
             if m:
                 row_data['fecha'] = m.group(0)
+    
+    # For Mercury, extract "Mon DD" (e.g. "Jul 01") from fecha column range (47-69)
+    if bank_name == 'Mercury' and 'fecha' in columns and not row_data.get('fecha'):
+        fecha_x0, fecha_x1 = columns['fecha']
+        fecha_words = [w for w in sorted_words if fecha_x0 <= (w.get('x0', 0) + w.get('x1', 0)) / 2 <= fecha_x1]
+        if fecha_words:
+            fecha_text = ' '.join([w.get('text', '').strip() for w in fecha_words])
+            mercury_date_re = re.compile(r'\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(0?[1-9]|[12][0-9]|3[01])\b', re.I)
+            m = mercury_date_re.search(fecha_text)
+            if m:
+                row_data['fecha'] = m.group(0)
+                sorted_words = [w for w in sorted_words if w not in fecha_words]
     
     # For Clara, first try to reconstruct dates that might be split across multiple words
     if bank_name == 'Clara' and 'fecha' in columns:
@@ -4611,6 +4694,40 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                         row_data[col_name] += ' ' + text
                     else:
                         row_data[col_name] = text
+            # For Mercury: Cargos and Abonos share coordinates (430-480). Differentiate only by sign:
+            # Negative (e.g. –$1,199.00, -$1,199.00) -> only Cargos. Positive (e.g. $6,830.00) -> only Abonos. No duplicates.
+            elif bank_name == 'Mercury' and col_name in ('cargos', 'abonos'):
+                is_amount = bool(DEC_AMOUNT_RE.search(text))
+                if is_amount:
+                    text_stripped = text.strip()
+                    is_negative = (
+                        text_stripped.startswith('-') or text_stripped.startswith('\u2013') or
+                        re.match(r'^[-\u2013]\s*\$', text_stripped) or
+                        re.search(r'\$\s*[-\u2013]', text_stripped) or
+                        (text_stripped.startswith('(') and text_stripped.endswith(')'))
+                    )
+                    target_col = 'cargos' if is_negative else 'abonos'
+                    other_col = 'abonos' if target_col == 'cargos' else 'cargos'
+                    # Put amount only in the column for its sign; never in both (ignore col_name from shared range)
+                    if row_data.get(target_col):
+                        row_data[target_col] += ' ' + text
+                    else:
+                        row_data[target_col] = text
+                    # Remove same amount from the other column so it never appears in both
+                    other_val = (row_data.get(other_col) or '').strip()
+                    if other_val:
+                        try:
+                            n_other = normalize_amount_str(other_val)
+                            n_this = normalize_amount_str(text_stripped)
+                            if n_other is not None and n_this is not None and abs(n_other) == abs(n_this):
+                                row_data[other_col] = ''
+                        except Exception:
+                            pass
+                else:
+                    if row_data.get('descripcion'):
+                        row_data['descripcion'] += ' ' + text
+                    else:
+                        row_data['descripcion'] = text
             # For BBVA, validate that amounts have 2 decimals before assigning to cargos/abonos/saldo
             elif bank_name == 'BBVA' and col_name in ('cargos', 'abonos', 'saldo'):
                 # Validate that the text is a valid amount with 2 decimals
@@ -4656,6 +4773,23 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
 
     # attach detected amounts for later disambiguation
     row_data['_amounts'] = amounts
+    
+    # Mercury: shared range (430-480) — amount must appear in only one of Cargos/Abonos (by sign). Remove duplicate.
+    if bank_name == 'Mercury':
+        c = (row_data.get('cargos') or '').strip()
+        a = (row_data.get('abonos') or '').strip()
+        if c and a:
+            try:
+                num_c = normalize_amount_str(c)
+                num_a = normalize_amount_str(a)
+                if num_c is not None and num_a is not None and abs(num_c) == abs(num_a):
+                    is_neg = (c.startswith('-') or c.startswith('\u2013') or re.match(r'^[-\u2013]\s*\$', c))
+                    if is_neg:
+                        row_data['abonos'] = ''
+                    else:
+                        row_data['cargos'] = ''
+            except Exception:
+                pass
     
     # For HSBC: merge split saldo when it was parsed as "399" (description) + "344.88" (saldo) -> should be "399,344.88"
     if bank_name == 'HSBC' and row_data.get('saldo') and 'saldo' in columns:
@@ -5165,6 +5299,9 @@ def main():
     elif bank_config['name'] == 'Banbajío':
         # For BanBajío, date format is "DIA MES" (e.g., "3 ENE") without year
         date_pattern = re.compile(r'\b(0?[1-9]|[12][0-9]|3[01])\s+[A-Z]{3}\b', re.I)
+    elif bank_config['name'] == 'Mercury':
+        # Mercury: "Jul 01" - 3-char month + space + day (1-31)
+        date_pattern = re.compile(r'\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(0?[1-9]|[12][0-9]|3[01])\b', re.I)
     else:
         date_pattern = day_re
     movement_start_found = False
@@ -5259,6 +5396,14 @@ def main():
                     # For INTERCAM, fecha is day only (1-31); first data line starts with day number
                     elif bank_config['name'] == 'INTERCAM':
                         if re.match(r'^(0?[1-9]|[12][0-9]|3[01])\b', ln.strip()):
+                            movement_start_found = True
+                            movement_start_page = p['page']
+                            movement_start_index = i
+                            movements_lines.extend(p['lines'][i:])
+                            break
+                    # For Mercury, first data line has "Mon DD" (e.g. "Jul 01")
+                    elif bank_config['name'] == 'Mercury':
+                        if date_pattern.search(ln):
                             movement_start_found = True
                             movement_start_page = p['page']
                             movement_start_index = i
@@ -5525,9 +5670,12 @@ def main():
                 movement_end_pattern = re.compile(re.escape(movement_end_string) + r'\s+[\d,\.]+\s+[\d,\.]+\s+[\d,\.]+', re.I)
             elif bank_config['name'] == 'Clara':
                 # Clara: movements_end is "Total MXN", followed by two amounts
-                # Pattern: movement_end_string followed by two amounts (second can be negative)
-                # Example: "Total MXN 3,115.30 MXN -3,305.40"
                 movement_end_pattern = re.compile(re.escape(movement_end_string) + r'\s+[\d,\.]+\s+[\d,\.\-]+', re.I)
+            elif bank_config['name'] == 'Mercury':
+                # Mercury: "Total" + 1 numeric value with 2 decimals (in Saldo column)
+                movement_end_pattern = re.compile(
+                    re.escape(movement_end_string) + r'\s+\$?[\d,\.\-]+\.\d{2}', re.I
+                )
             else:
                 # For other banks, use simple string matching
                 movement_end_pattern = re.compile(re.escape(movement_end_string), re.I)
@@ -5675,6 +5823,34 @@ def main():
                         # Banregio: also match "3 amounts + Total" (e.g. "11,973.34 12,973.34 1,000.00 Total")
                         if bank_config['name'] == 'Banregio' and banregio_end_pattern_three_then_total and banregio_end_pattern_three_then_total.search(all_text):
                             match_found = True
+                    elif bank_config['name'] == 'Mercury':
+                        # Mercury: "Total" + 1 numeric with 2 decimals (Saldo); or row with Total, no fecha, no descripcion, no Cargos/Abonos
+                        if movement_end_pattern.search(all_text):
+                            match_found = True
+                        # Also check: row with "Total", no fecha, no descripcion, no Cargos/Abonos, but has Saldo value
+                        if not match_found and movement_end_string and movement_end_string.upper() in all_text.upper() and columns_config:
+                            has_fecha = False
+                            has_descripcion = False
+                            has_cargos = False
+                            has_abonos = False
+                            has_saldo = False
+                            for w in row_words:
+                                text = (w.get('text') or '').strip()
+                                x0, x1 = w.get('x0', 0), w.get('x1', 0)
+                                col = assign_word_to_column(x0, x1, columns_config)
+                                if col == 'fecha' and date_pattern.search(text):
+                                    has_fecha = True
+                                elif col == 'descripcion' and text:
+                                    has_descripcion = True
+                                elif col == 'cargos' and DEC_AMOUNT_RE.search(text):
+                                    has_cargos = True
+                                elif col == 'abonos' and DEC_AMOUNT_RE.search(text):
+                                    has_abonos = True
+                                elif col == 'saldo' and DEC_AMOUNT_RE.search(text):
+                                    has_saldo = True
+                            # movements_end: Total + no fecha + no descripcion + no Cargos/Abonos + has Saldo
+                            if not has_fecha and not has_descripcion and not has_cargos and not has_abonos and has_saldo:
+                                match_found = True
                     elif bank_config['name'] == 'Banorte':
                         # For Banorte, try primary pattern first ("INVERSION ENLACE NEGOCIOS")
                         if movement_end_pattern and movement_end_pattern.search(all_text):
@@ -6002,8 +6178,29 @@ def main():
                 # If row has valid data but no date - treat as continuation or standalone row
                 if not has_date and has_valid_data:
                     # Row has valid data but no date - treat as continuation or standalone row
-                    # For Santander: do not merge rows without Fecha into previous movement (e.g. TOTAL line amounts)
+                    # For Santander: do not merge rows that contain "TOTAL" (no fecha) into previous movement
                     if bank_config['name'] == 'Santander':
+                        all_row_text_sant = ' '.join([w.get('text', '') for w in row_words])
+                        if 'TOTAL' in all_row_text_sant.upper():
+                            continue
+                    
+                    # For Mercury: rows without fecha share the last known fecha; add as new movement row (do not merge)
+                    if bank_config['name'] == 'Mercury' and movement_rows:
+                        prev = movement_rows[-1]
+                        last_fecha = (prev.get('fecha') or '').strip()
+                        if last_fecha:
+                            new_row = {
+                                'fecha': last_fecha,
+                                'descripcion': str(row_data.get('descripcion') or '').strip(),
+                                'cargos': str(row_data.get('cargos') or '').strip(),
+                                'abonos': str(row_data.get('abonos') or '').strip(),
+                                'saldo': str(row_data.get('saldo') or '').strip(),
+                            }
+                            if new_row.get('descripcion') or new_row.get('cargos') or new_row.get('abonos') or new_row.get('saldo'):
+                                if '_amounts' in row_data:
+                                    new_row['_amounts'] = row_data.get('_amounts', [])
+                                row_was_added = True
+                                movement_rows.append(new_row)
                         continue
                     
                     # Filter out footer information for Banamex (e.g., "000180.B61CHDA011.OD.0131.01")
@@ -6142,23 +6339,44 @@ def main():
                                 
                                 # Find which numeric column this amount belongs to
                                 assigned = False
-                                for col in ('cargos', 'abonos', 'saldo'):
-                                    if col in col_ranges:
-                                        x0, x1 = col_ranges[col]
+                                # Mercury: cargos/abonos share range; assign only by sign (positive -> abonos, negative -> cargos)
+                                if bank_config.get('name') == 'Mercury':
+                                    amt_stripped = (amt_text or '').strip()
+                                    is_neg = (
+                                        amt_stripped.startswith('-') or amt_stripped.startswith('\u2013') or
+                                        re.match(r'^[-\u2013]\s*\$', amt_stripped) or
+                                        re.search(r'\$\s*[-\u2013]', amt_stripped) or
+                                        (amt_stripped.startswith('(') and amt_stripped.endswith(')'))
+                                    )
+                                    target_col = 'cargos' if is_neg else 'abonos'
+                                    if target_col in col_ranges:
+                                        x0, x1 = col_ranges[target_col]
                                         if (x0 - tolerance) <= center <= (x1 + tolerance):
-                                            # Only assign if the column is empty or if this is a better match
-                                            existing = prev.get(col) or ''
+                                            existing = prev.get(target_col) or ''
                                             if not existing or amt_text not in existing:
-                                                # INTERCAM: do not concatenate amounts when prev already has a value
-                                                # (continuation row is often a separate movement that failed date validation)
-                                                if existing and bank_config.get('name') == 'INTERCAM':
-                                                    pass
-                                                elif existing:
-                                                    prev[col] = (existing + ' ' + amt_text).strip()
+                                                if existing:
+                                                    prev[target_col] = (existing + ' ' + amt_text).strip()
                                                 else:
-                                                    prev[col] = amt_text
+                                                    prev[target_col] = amt_text
                                             assigned = True
-                                            break
+                                if not assigned:
+                                    for col in ('cargos', 'abonos', 'saldo'):
+                                        if col in col_ranges:
+                                            x0, x1 = col_ranges[col]
+                                            if (x0 - tolerance) <= center <= (x1 + tolerance):
+                                                # Only assign if the column is empty or if this is a better match
+                                                existing = prev.get(col) or ''
+                                                if not existing or amt_text not in existing:
+                                                    # INTERCAM: do not concatenate amounts when prev already has a value
+                                                    # (continuation row is often a separate movement that failed date validation)
+                                                    if existing and bank_config.get('name') == 'INTERCAM':
+                                                        pass
+                                                    elif existing:
+                                                        prev[col] = (existing + ' ' + amt_text).strip()
+                                                    else:
+                                                        prev[col] = amt_text
+                                                assigned = True
+                                                break
                                 
                                 # If not assigned by range, use proximity as fallback
                                 if not assigned and col_ranges:
@@ -6171,6 +6389,16 @@ def main():
                                     
                                     if valid_cols:
                                         nearest = min(valid_cols.keys(), key=lambda c: valid_cols[c])
+                                        # Mercury: if amount landed in cargos/abonos by proximity, assign only by sign
+                                        if bank_config.get('name') == 'Mercury' and nearest in ('cargos', 'abonos'):
+                                            amt_stripped = (amt_text or '').strip()
+                                            is_neg = (
+                                                amt_stripped.startswith('-') or amt_stripped.startswith('\u2013') or
+                                                re.match(r'^[-\u2013]\s*\$', amt_stripped) or
+                                                re.search(r'\$\s*[-\u2013]', amt_stripped) or
+                                                (amt_stripped.startswith('(') and amt_stripped.endswith(')'))
+                                            )
+                                            nearest = 'cargos' if is_neg else 'abonos'
                                         if not descripcion_range or not (descripcion_range[0] <= center <= descripcion_range[1]):
                                             existing = prev.get(nearest) or ''
                                             if not existing or amt_text not in existing:
@@ -6180,6 +6408,23 @@ def main():
                                                     prev[nearest] = (existing + ' ' + amt_text).strip()
                                                 else:
                                                     prev[nearest] = amt_text
+                        
+                        # Mercury: after merging amounts into prev, ensure same value is not in both cargos and abonos
+                        if bank_config.get('name') == 'Mercury':
+                            c = (prev.get('cargos') or '').strip()
+                            a = (prev.get('abonos') or '').strip()
+                            if c and a:
+                                try:
+                                    num_c = normalize_amount_str(c)
+                                    num_a = normalize_amount_str(a)
+                                    if num_c is not None and num_a is not None and abs(num_c) == abs(num_a):
+                                        is_neg = (c.startswith('-') or c.startswith('\u2013') or re.match(r'^[-\u2013]\s*\$', c))
+                                        if is_neg:
+                                            prev['abonos'] = ''
+                                        else:
+                                            prev['cargos'] = ''
+                                except Exception:
+                                    pass
                         
                         # Also merge amounts list for later processing
                         prev_amounts = prev.get('_amounts', [])
@@ -6836,6 +7081,30 @@ def main():
                         if has_saldo:
                             r['saldo'] = amounts_list[0]
 
+        # Mercury: ensure no row has the same amount in both Cargos and Abonos (value must appear only in one by sign)
+        # Mercury: remove negative sign from Cargos in Excel (show e.g. $1,300.00 instead of –$1,300.00)
+        if bank_config.get('name') == 'Mercury' and movement_rows:
+            for r in movement_rows:
+                c = (r.get('cargos') or '').strip()
+                a = (r.get('abonos') or '').strip()
+                # Strip leading minus/en-dash from cargos so Excel shows positive amount
+                if c:
+                    c_clean = re.sub(r'^[-\u2013]\s*', '', c)
+                    if c_clean != c:
+                        r['cargos'] = c_clean
+                    c = (r.get('cargos') or '').strip()
+                if c and a:
+                    try:
+                        num_c = normalize_amount_str(c)
+                        num_a = normalize_amount_str(a)
+                        if num_c is not None and num_a is not None and abs(num_c) == abs(num_a):
+                            is_neg = (c.startswith('-') or c.startswith('\u2013') or re.match(r'^[-\u2013]\s*\$', c))
+                            if is_neg:
+                                r['abonos'] = ''
+                            else:
+                                r['cargos'] = ''
+                    except Exception:
+                        pass
         # Create df_mov from movement_rows if not already created
         if df_mov is None:
             df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])                
@@ -7462,10 +7731,14 @@ def main():
     # Si es HSBC con OCR, pdf_summary ya fue extraído arriba en extract_hsbc_summary_from_ocr_text
     extracted_totals = calculate_extracted_totals(df_mov, bank_config['name'])
     
-    # For INTERCAM, use last Saldo from Bank Statement Report for validation "Valor en PDF" (Saldo Final), like other banks
-    if bank_config['name'] == 'INTERCAM' and extracted_totals.get('saldo_final') is not None:
+    # For INTERCAM and Mercury, use last Saldo from Bank Statement Report for validation "Valor en PDF" (Saldo Final)
+    # When not in PDF we backfill; for Mercury always use last Saldo from report (like other banks) so Valor en PDF = last value in Saldo column
+    if bank_config['name'] in ('INTERCAM', 'Mercury') and extracted_totals.get('saldo_final') is not None:
         if pdf_summary is not None:
-            pdf_summary['saldo_final'] = extracted_totals['saldo_final']
+            if bank_config['name'] == 'Mercury':
+                pdf_summary['saldo_final'] = extracted_totals['saldo_final']
+            elif pdf_summary.get('saldo_final') is None:
+                pdf_summary['saldo_final'] = extracted_totals['saldo_final']
     
     # For Banamex: move rows containing "EMP" to separate sheet "Banca Electrónica Empresarial"
     df_banamex_emp = None
