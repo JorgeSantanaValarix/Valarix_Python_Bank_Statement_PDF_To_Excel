@@ -78,7 +78,7 @@ BANK_CONFIGS = {
         "metas_end": "INFORMACION FISCAL",
         "columns": {
             "fecha": (18, 52),             # Operation Date column
-            "descripcion": (107, 149),     # Description column
+            "descripcion": (107, 376),     # Description column (was 149; widened so full text e.g. "IVA POR COMISION MEMBRESIA" is captured)
             "cargos": (465, 492),          # Charges column
             "abonos": (377, 411),          # Credits column
             "saldo": (554, 573),           # Balance column
@@ -5450,6 +5450,9 @@ def main():
     movement_rows = []
     df_mov = None  # Initialize to avoid UnboundLocalError
     pdf_summary = None  # Initialize to avoid UnboundLocalError
+    # So trim block (later) can run for any path (e.g. HSBC OCR) without NameError
+    movement_end_string = bank_config.get('movements_end')
+    movement_end_pattern = None
     
     # Si es HSBC y se usó OCR, usar la misma lógica que otros bancos
     if is_hsbc and used_ocr:
@@ -6177,6 +6180,16 @@ def main():
                 
                 # If row has valid data but no date - treat as continuation or standalone row
                 if not has_date and has_valid_data:
+                    # Do not merge the movements_end line into the last movement: if this row contains
+                    # the end marker (e.g. "Total", "SALDO TOTAL"), stop extraction without appending.
+                    if movement_end_string and movement_end_string.strip():
+                        end_upper = movement_end_string.upper().strip()
+                        if end_upper in all_row_text.upper():
+                            extraction_stopped = True
+                            break
+                    if movement_end_pattern and movement_end_pattern.search(all_row_text):
+                        extraction_stopped = True
+                        break
                     # Row has valid data but no date - treat as continuation or standalone row
                     # For Santander: do not merge rows that contain "TOTAL" (no fecha) into previous movement
                     if bank_config['name'] == 'Santander':
@@ -6447,6 +6460,15 @@ def main():
                         # Remove decimal amounts (they belong to cargos/abonos/saldo)
                         cont_text = dec_amount_re.sub('', cont_text)
                         cont_text = ' '.join(cont_text.split()).strip()
+                        # Trim at movements_end so footer/summary line text is not appended to description
+                        if cont_text and movement_end_string and movement_end_string.strip():
+                            end_upper = movement_end_string.upper().strip()
+                            idx = cont_text.upper().find(end_upper)
+                            if idx != -1:
+                                cont_text = cont_text[:idx].strip()
+                        if movement_end_pattern and cont_text and movement_end_pattern.search(cont_text):
+                            m = movement_end_pattern.search(cont_text)
+                            cont_text = cont_text[:m.start()].strip()
 
                         if cont_text:
                             # append to previous 'descripcion' field
@@ -6454,6 +6476,16 @@ def main():
                                 prev['descripcion'] = (prev.get('descripcion') or '') + ' ' + cont_text
                             else:
                                 prev['descripcion'] = cont_text
+                            # Trim description at movements_end in case end marker leaked in
+                            if movement_end_string and movement_end_string.strip():
+                                d = prev['descripcion']
+                                idx = d.upper().find(movement_end_string.upper().strip())
+                                if idx != -1:
+                                    prev['descripcion'] = d[:idx].strip()
+                            if movement_end_pattern and prev.get('descripcion'):
+                                m = movement_end_pattern.search(prev['descripcion'])
+                                if m:
+                                    prev['descripcion'] = prev['descripcion'][:m.start()].strip()
                         
                     else:
                         # No previous movement and no date - skip this row
@@ -7105,6 +7137,20 @@ def main():
                                 r['cargos'] = ''
                     except Exception:
                         pass
+        # Trim any movement description that includes text after movements_end (footer/summary leakage)
+        if movement_rows and (movement_end_string or movement_end_pattern):
+            for r in movement_rows:
+                desc = r.get('descripcion')
+                if not desc:
+                    continue
+                if movement_end_string and movement_end_string.strip():
+                    idx = desc.upper().find(movement_end_string.upper().strip())
+                    if idx != -1:
+                        r['descripcion'] = desc[:idx].strip()
+                    desc = r.get('descripcion') or ''
+                if movement_end_pattern and desc and movement_end_pattern.search(desc):
+                    m = movement_end_pattern.search(desc)
+                    r['descripcion'] = desc[:m.start()].strip()
         # Create df_mov from movement_rows if not already created
         if df_mov is None:
             df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])                
