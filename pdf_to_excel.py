@@ -3044,11 +3044,23 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
         # - "I.V.A. ORDEN DE PAGO SPEI"
         # - "COMISION POR NO"
         # - "I.V.A. LIQ"
+        # - "COM. DISPERSION NOMINA"
+        # - "INTERESES EXENTO TASA"
+        # - "IVA" + "REGISTROS EXCEDIDOS" (e.g. "IVA 00010 REGISTROS EXCEDIDOS")
         df_for_cargos = df_for_totals[
-            ~(df_for_totals['Descripción'].astype(str).str.contains('COMISION ORDEN DE PAGO SPE', case=False, na=False) |
+            ~(df_for_totals['Descripción'].astype(str).str.contains('COMISION ORDEN DE PAGO SPEI', case=False, na=False) |
               df_for_totals['Descripción'].astype(str).str.contains('I.V.A. ORDEN DE PAGO SPEI', case=False, na=False) |
               df_for_totals['Descripción'].astype(str).str.contains('COMISION POR NO', case=False, na=False) |
-              df_for_totals['Descripción'].astype(str).str.contains('I.V.A. LIQ', case=False, na=False))
+              df_for_totals['Descripción'].astype(str).str.contains('I.V.A. LIQ', case=False, na=False) |
+              df_for_totals['Descripción'].astype(str).str.contains('I.V.A COM', case=False, na=False) |
+              df_for_totals['Descripción'].astype(str).str.contains('COMISION ENV', case=False, na=False) |
+              df_for_totals['Descripción'].astype(str).str.contains('IVA COM MEMB P.M', case=False, na=False) |
+              df_for_totals['Descripción'].astype(str).str.contains('IVA MEMB P.M', case=False, na=False) |
+              df_for_totals['Descripción'].astype(str).str.contains('COM MEMB', case=False, na=False) |
+              df_for_totals['Descripción'].astype(str).str.contains('COM. DISPERSION NOMINA', case=False, na=False) |
+              df_for_totals['Descripción'].astype(str).str.contains('INTERESES EXENTO TASA', case=False, na=False) |
+              (df_for_totals['Descripción'].astype(str).str.contains('IVA', case=False, na=False) &
+               df_for_totals['Descripción'].astype(str).str.contains('REGISTROS EXCEDIDOS', case=False, na=False)))
         ]
     elif bank_name == 'HSBC' and 'Descripción' in df_for_totals.columns:
         # For HSBC, exclude specific rows from Cargos calculation only (not from Abonos)
@@ -5690,7 +5702,7 @@ def main():
                     f.write("EXCEL: " + (rec.get('excel') or '') + "\n")
                     f.write("DISPOSITION: " + (rec.get('disposition') or '') + "\n")
                     f.write("\n")
-            print(f"Debug: movements debug written to -> {debug_path}", flush=True)
+            print(f"Debug: movements debug written to -> {debug_path}" + "\n", flush=True)
         
         # Extraer resumen desde texto OCR de la página 1
         pdf_summary = extract_hsbc_summary_from_ocr_text(extracted_data)
@@ -7261,11 +7273,6 @@ def main():
         # Create df_mov from movement_rows if not already created
         if df_mov is None:
             df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
-            # If coordinate extraction produced only one column (e.g. raw-only rows), ensure standard columns exist for downstream
-            if len(df_mov.columns) == 1 and 'raw' in df_mov.columns:
-                for c in ('fecha', 'descripcion', 'cargos', 'abonos', 'saldo'):
-                    if c not in df_mov.columns:
-                        df_mov[c] = ''
     else:
         # No coordinate-based extraction available, use raw text extraction
         movement_entries = group_entries_from_lines(movements_lines)
@@ -7970,7 +7977,7 @@ def main():
     # Append blank row, then RFC, Name, Period (all banks)
     _summary = pdf_summary or {}
     col0 = df_mov.columns[0]
-    col1 = df_mov.columns[1] if len(df_mov.columns) > 1 else col0  # defensive: single-column df (e.g. raw-only extraction)
+    col1 = df_mov.columns[1]
     row_blank = {c: '' for c in df_mov.columns}
     row_rfc = {c: '' for c in df_mov.columns}
     row_rfc[col0] = 'RFC'
