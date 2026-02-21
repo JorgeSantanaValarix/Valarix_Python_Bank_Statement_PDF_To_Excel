@@ -5165,6 +5165,8 @@ def main():
         sys.exit(1)
 
     pdf_path = sys.argv[1]
+    debug_mode = '--debug' in sys.argv
+    debug_path = os.path.splitext(pdf_path)[0] + "_movements_debug.txt" if debug_mode else None
     
     # Normalize PDF path (handles UNC paths, spaces, etc.)
     pdf_path = os.path.normpath(pdf_path)
@@ -5454,6 +5456,29 @@ def main():
     movement_end_string = bank_config.get('movements_end')
     movement_end_pattern = None
     
+    # Debug: collect (original_line, excel_cols_dict, disposition) for all banks (written to .txt at end)
+    debug_movements_lines = [] if debug_mode else None
+    def _debug_mov_line(line_text, excel_row, disposition):
+        if debug_movements_lines is None:
+            return
+        excel_row = excel_row or {}
+        parts = []
+        for k in ('fecha', 'descripcion', 'cargos', 'abonos', 'saldo'):
+            v = (excel_row.get(k) or '').strip()
+            parts.append(f"{k}={v[:80] + '...' if len(v) > 80 else v}")
+        excel_str = " | ".join(parts)
+        orig = (line_text or '')[:500]
+        debug_movements_lines.append({
+            'original': orig,
+            'excel': excel_str,
+            'disposition': disposition,
+        })
+        # Also print to console (same format as debug file)
+        print("ORIGINAL:", orig, flush=True)
+        print("EXCEL:", excel_str, flush=True)
+        print("DISPOSITION:", disposition, flush=True)
+        print(flush=True)
+    
     # Si es HSBC y se usó OCR, usar la misma lógica que otros bancos
     if is_hsbc and used_ocr:
         # Obtener columns_config desde BANK_CONFIGS
@@ -5649,9 +5674,22 @@ def main():
                     if len(last_two_valid_rows) > 2:
                         last_two_valid_rows.pop(0)  # Mantener solo las últimas 2
                     
+                    _debug_mov_line(line_original, row_data, "ADDED")
                     movement_rows.append(row_data)
+                else:
+                    _debug_mov_line(line_original, row_data, "SKIPPED (HSBC OCR invalid)")
         
         df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
+        
+        # Debug: write movements debug file for HSBC OCR path (same format as coordinate path)
+        if debug_path is not None and debug_movements_lines is not None and len(debug_movements_lines) > 0:
+            with open(debug_path, 'w', encoding='utf-8') as f:
+                for rec in debug_movements_lines:
+                    f.write("ORIGINAL: " + (rec.get('original') or '') + "\n")
+                    f.write("EXCEL: " + (rec.get('excel') or '') + "\n")
+                    f.write("DISPOSITION: " + (rec.get('disposition') or '') + "\n")
+                    f.write("\n")
+            print(f"Debug: movements debug written to -> {debug_path}", flush=True)
         
         # Extraer resumen desde texto OCR de la página 1
         pdf_summary = extract_hsbc_summary_from_ocr_text(extracted_data)
@@ -5768,6 +5806,8 @@ def main():
                 hsbc_added = False
                 row_was_added = False  # for 1,963.84 debug: set True before any movement_rows.append
                 all_row_text = ' '.join([w.get('text', '') for w in row_words])
+                all_row_text_orig = all_row_text  # for debug output
+                _disp = "SKIPPED"  # for debug: ADDED | MERGED | SKIPPED | END (...)
                 all_row_text_hsbc = all_row_text
                 # Skip movements_start pattern if it appears during coordinate-based extraction
                 # Headers will be automatically rejected by date validation
@@ -5777,6 +5817,8 @@ def main():
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                             in_bbva_movements_section = True
                         mov_section_line_num += 1
+                        _disp = "SKIPPED (movements_start header)"
+                        _debug_mov_line(all_row_text_orig, None, _disp)
                         continue  # Skip the movements_start line
                 
                 mov_section_line_num += 1
@@ -5784,6 +5826,8 @@ def main():
                 # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
                 if bank_config['name'] == 'Banregio':
                     if re.search(r'^del\s+01\s+al', all_row_text, re.I):
+                        _disp = "SKIPPED (Banregio del 01 al)"
+                        _debug_mov_line(all_row_text_orig, None, _disp)
                         continue  # Skip irrelevant information rows
 
                 # Check for end pattern (for Banamex, Santander, Banregio, Scotiabank, Konfio, Clara, etc.)
@@ -5889,6 +5933,8 @@ def main():
                         # For BBVA, mark that we've left the movements section
                         if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
                             in_bbva_movements_section = False
+                        _disp = "END (movements_end matched, not added)"
+                        _debug_mov_line(all_row_text_orig, None, _disp)
                         extraction_stopped = True
                         break
 
@@ -6072,6 +6118,8 @@ def main():
                         konfio_full_date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])\s+[A-Za-z]{3}\s+\d{2,4}\b', re.I)
                         if fecha_val_check and not konfio_full_date_pattern.search(fecha_val_check):
                             # Date is not in valid Konfio format (e.g., "14" instead of "14 mar 2023"), skip this row
+                            _disp = "SKIPPED (Konfio date format)"
+                            _debug_mov_line(all_row_text_orig, row_data, _disp)
                             continue
                         
                         # Check if this is a sub-row pattern (like "SBO 020902DX1 - 02 abr 2023 4316 FÍSICA")
@@ -6081,9 +6129,12 @@ def main():
                         # If the row starts with this pattern, it's a sub-row and should be skipped
                         if konfio_sub_row_pattern.match(all_row_text.strip()):
                             # This is a sub-row, skip it (it will be handled as continuation if needed)
+                            _disp = "SKIPPED (Konfio sub-row)"
+                            _debug_mov_line(all_row_text_orig, row_data, _disp)
                             continue
                         # Add row if it has date, even if description/amounts are empty (they'll be added in continuation rows)
                         row_was_added = True
+                        _disp = "ADDED"
                         movement_rows.append(row_data)
                     elif bank_config['name'] == 'Banamex':
                         # For Banamex, if a row has a date, it ALWAYS starts a new movement
@@ -6099,10 +6150,12 @@ def main():
                         banamex_footer_pattern = re.compile(r'\d+\.\w+\.OD\.\d+\.\d+', re.I)
                         if banamex_footer_pattern.search(all_row_text):
                             # This is footer information, skip it
+                            _disp = "SKIPPED (Banamex footer)"
+                            _debug_mov_line(all_row_text_orig, row_data, _disp)
                             continue
                         
                         #row_data['page'] = page_num
-                        
+                        _disp = "ADDED"
                         movement_rows.append(row_data)
                     elif has_description_or_amounts:
                         # For HSBC, validate row before adding
@@ -6126,6 +6179,8 @@ def main():
                             desc_val_check = str(row_data.get('descripcion') or '').strip()
                             if not (desc_val_check.startswith('TRA') or desc_val_check.startswith('DOC') or desc_val_check.startswith('INT') or desc_val_check.startswith('EFE')):
                                 # Skip this row - doesn't start with TRA or DOC or INT or EFE
+                                _disp = "SKIPPED (Banregio not TRA/DOC/INT/EFE)"
+                                _debug_mov_line(all_row_text_orig, row_data, _disp)
                                 continue
                         
                         # Filter out footer information for Banamex (e.g., "000180.B61CHDA011.OD.0131.01")
@@ -6138,18 +6193,23 @@ def main():
                             banamex_footer_pattern = re.compile(r'\d+\.\w+\.OD\.\d+\.\d+', re.I)
                             if banamex_footer_pattern.search(all_row_text):
                                 # This is footer information, skip it
+                                _disp = "SKIPPED (Banamex footer)"
+                                _debug_mov_line(all_row_text_orig, row_data, _disp)
                                 continue
                         
                         # For INTERCAM, skip CFDI disclaimer and "Hoja de N" (page) metadata lines
                         if bank_config['name'] == 'INTERCAM':
                             all_row_text_intercam = ' '.join([w.get('text', '') for w in row_words])
                             if re.search(r'DOCUMENTO ES UNA REPRESENTACIÓN IMPRESA DE UN CFDI|REPRESENTACIÓN IMPRESA.*CFDI|Hoja de\s*\d+|Número Cliente\s*R\.F\.C\.\s*Sucursal', all_row_text_intercam, re.I):
+                                _disp = "SKIPPED (INTERCAM CFDI/page)"
+                                _debug_mov_line(all_row_text_orig, row_data, _disp)
                                 continue
                         
                         #row_data['page'] = page_num
                         if bank_config['name'] == 'HSBC':
                             hsbc_added = True
                         row_was_added = True
+                        _disp = "ADDED"
                         movement_rows.append(row_data)
                 elif has_valid_data and bank_config['name'] == 'Banbajío':
                     # For BanBajío, also add rows without date if they contain "SALDO INICIAL"
@@ -6160,6 +6220,7 @@ def main():
                         if has_amounts or has_cargos_abonos:
                             #row_data['page'] = page_num
                             row_was_added = True
+                            _disp = "ADDED"
                             movement_rows.append(row_data)
                 
                 # For Banregio, check if this is a monthly commission (last movement) - stop extraction
@@ -6175,6 +6236,8 @@ def main():
                         in_comision_zone = True
                     elif in_comision_zone:
                         # We were in commission zone but this row is not a commission - stop extraction
+                        _disp = "END (Banregio commission zone)"
+                        _debug_mov_line(all_row_text_orig, row_data, _disp)
                         extraction_stopped = True
                         break  # Stop extraction - no more monthly commissions
                 
@@ -6185,9 +6248,13 @@ def main():
                     if movement_end_string and movement_end_string.strip():
                         end_upper = movement_end_string.upper().strip()
                         if end_upper in all_row_text.upper():
+                            _disp = "END (movements_end string in line)"
+                            _debug_mov_line(all_row_text_orig, row_data, _disp)
                             extraction_stopped = True
                             break
                     if movement_end_pattern and movement_end_pattern.search(all_row_text):
+                        _disp = "END (movements_end pattern)"
+                        _debug_mov_line(all_row_text_orig, row_data, _disp)
                         extraction_stopped = True
                         break
                     # Row has valid data but no date - treat as continuation or standalone row
@@ -6195,6 +6262,8 @@ def main():
                     if bank_config['name'] == 'Santander':
                         all_row_text_sant = ' '.join([w.get('text', '') for w in row_words])
                         if 'TOTAL' in all_row_text_sant.upper():
+                            _disp = "SKIPPED (Santander TOTAL)"
+                            _debug_mov_line(all_row_text_orig, row_data, _disp)
                             continue
                     
                     # For Mercury: rows without fecha share the last known fecha; add as new movement row (do not merge)
@@ -6213,7 +6282,9 @@ def main():
                                 if '_amounts' in row_data:
                                     new_row['_amounts'] = row_data.get('_amounts', [])
                                 row_was_added = True
+                                _disp = "ADDED"
                                 movement_rows.append(new_row)
+                        _debug_mov_line(all_row_text_orig, row_data, _disp)
                         continue
                     
                     # Filter out footer information for Banamex (e.g., "000180.B61CHDA011.OD.0131.01")
@@ -6226,6 +6297,8 @@ def main():
                         # For continuation rows, must have description AND it must not contain footer pattern
                         if not desc_val_check:
                             # No description - skip this continuation row
+                            _disp = "SKIPPED (Banamex continuation no description)"
+                            _debug_mov_line(all_row_text_orig, row_data, _disp)
                             continue
                         
                         # Check footer pattern in description and all row text (including amounts)
@@ -6242,6 +6315,8 @@ def main():
                         
                         if banamex_footer_pattern.search(all_row_text) or banamex_footer_pattern.search(all_row_text_with_values) or banamex_footer_partial.search(all_row_text) or has_od_pattern:
                             # This is footer information, skip it
+                            _disp = "SKIPPED (Banamex continuation footer)"
+                            _debug_mov_line(all_row_text_orig, row_data, _disp)
                             continue
                         
                         # Additional check: if saldo contains a value that looks like part of footer (e.g., "131.01")
@@ -6249,6 +6324,8 @@ def main():
                         if saldo_val_check and re.match(r'^\d+\.\d{2}$', saldo_val_check) and len(desc_val_check) < 10:
                             # Check if this value appears near footer-related words
                             if any('OD' in w.get('text', '') or re.search(r'\d+\.\w+', w.get('text', ''), re.I) for w in row_words):
+                                _disp = "SKIPPED (Banamex continuation footer 2)"
+                                _debug_mov_line(all_row_text_orig, row_data, _disp)
                                 continue
                     # For BanBajío, filter out informational rows like "1 DE ENERO AL 31 DE ENERO DE 2024 PERIODO:"
                     if bank_config['name'] == 'Banbajío':
@@ -6257,6 +6334,8 @@ def main():
                         # Check if row contains period information (e.g., "1 DE ENERO AL 31 DE ENERO DE 2024 PERIODO:")
                         if re.search(r'\bPERIODO\s*:?\s*$', all_row_text_check, re.I) or re.search(r'\d+\s+DE\s+[A-Z]+\s+AL\s+\d+\s+DE\s+[A-Z]+', all_row_text_check, re.I):
                             # Skip this row - it's period information, not a movement
+                            _disp = "SKIPPED (Banbajío PERIODO)"
+                            _debug_mov_line(all_row_text_orig, row_data, _disp)
                             continue
                     
                     # For Banregio, if we're in commission zone, check for irrelevant rows and stop extraction
@@ -6267,11 +6346,15 @@ def main():
                         
                         # Check if row contains "Total" (summary line)
                         if re.search(r'\bTotal\b', all_row_text_check, re.I):
+                            _disp = "END (Banregio commission Total)"
+                            _debug_mov_line(all_row_text_orig, row_data, _disp)
                             extraction_stopped = True
                             break  # Stop extraction - "Total" line detected
                         
                         # Check if text is too long (likely not part of a movement description)
                         if len(all_row_text_check) > 200:
+                            _disp = "END (Banregio commission text too long)"
+                            _debug_mov_line(all_row_text_orig, row_data, _disp)
                             extraction_stopped = True
                             break  # Stop extraction - text too long, likely irrelevant
                         
@@ -6286,10 +6369,14 @@ def main():
                         ]
                         all_row_text_upper = all_row_text_check.upper()
                         if any(keyword.upper() in all_row_text_upper for keyword in irrelevant_keywords):
+                            _disp = "END (Banregio commission irrelevant)"
+                            _debug_mov_line(all_row_text_orig, row_data, _disp)
                             extraction_stopped = True
                             break  # Stop extraction - irrelevant information detected
                         
                         # If none of the above, stop extraction anyway (we're past commissions)
+                        _disp = "END (Banregio commission past)"
+                        _debug_mov_line(all_row_text_orig, row_data, _disp)
                         extraction_stopped = True
                         break  # Stop extraction - no more monthly commissions
                     
@@ -6299,6 +6386,8 @@ def main():
                             desc_val_check = str(row_data.get('descripcion') or '').strip()
                             # Must have description to merge continuation row
                             if not desc_val_check:
+                                _disp = "SKIPPED (Banamex merge no description)"
+                                _debug_mov_line(all_row_text_orig, row_data, _disp)
                                 continue
                             
                             # Check if description contains footer pattern
@@ -6308,9 +6397,12 @@ def main():
                             has_od_pattern = any('OD' in w.get('text', '') and re.search(r'OD[\.\s]*\d+[\.\s]*\d+', w.get('text', ''), re.I) for w in row_words)
                             
                             if banamex_footer_pattern.search(desc_val_check) or banamex_footer_pattern.search(all_row_text) or banamex_footer_partial.search(desc_val_check) or has_od_pattern:
+                                _disp = "SKIPPED (Banamex merge footer)"
+                                _debug_mov_line(all_row_text_orig, row_data, _disp)
                                 continue
                         
                         # Continuation row: append description-like text and amounts to previous movement
+                        _disp = "MERGED"
                         prev = movement_rows[-1]
                         
                         # IMPORTANT: First, copy amounts that are already assigned to columns (cargos, abonos, saldo)
@@ -6617,6 +6709,20 @@ def main():
                                     # Merge amounts list
                                     prev_amounts = prev.get('_amounts', [])
                                     prev['_amounts'] = prev_amounts + row_data.get('_amounts', [])
+
+                # Debug: log this row (generic for all banks; skipped/break paths already logged above)
+                if debug_movements_lines is not None:
+                    _debug_mov_line(all_row_text_orig, row_data, _disp)
+
+        # Write debug file after coordinate-based extraction (all banks)
+        if debug_path is not None and debug_movements_lines is not None and len(debug_movements_lines) > 0:
+            with open(debug_path, 'w', encoding='utf-8') as f:
+                for rec in debug_movements_lines:
+                    f.write("ORIGINAL: " + (rec.get('original') or '') + "\n")
+                    f.write("EXCEL: " + (rec.get('excel') or '') + "\n")
+                    f.write("DISPOSITION: " + (rec.get('disposition') or '') + "\n")
+                    f.write("\n")
+            print(f"Debug: movements debug written to -> {debug_path}", flush=True)
 
     # Process summary lines to format them properly
     def format_summary_line(line):
