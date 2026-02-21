@@ -169,6 +169,7 @@ BANK_CONFIGS = {
      "Banorte": {
         "name": "Banorte",
         "movements_start": "DETALLE DE MOVIMIENTOS (PESOS)",
+        "movements_start_secondary": "DETALLE DE MOVIMIENTOS (DOLAR AMERICANO)",
         "movements_end": "INVERSION ENLACE NEGOCIOS",
         "movements_end_secondary": "CARGOS OBJETADOS EN EL PERÍODO",
         "columns": {
@@ -7259,7 +7260,12 @@ def main():
                     r['descripcion'] = desc[:m.start()].strip()
         # Create df_mov from movement_rows if not already created
         if df_mov is None:
-            df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])                
+            df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
+            # If coordinate extraction produced only one column (e.g. raw-only rows), ensure standard columns exist for downstream
+            if len(df_mov.columns) == 1 and 'raw' in df_mov.columns:
+                for c in ('fecha', 'descripcion', 'cargos', 'abonos', 'saldo'):
+                    if c not in df_mov.columns:
+                        df_mov[c] = ''
     else:
         # No coordinate-based extraction available, use raw text extraction
         movement_entries = group_entries_from_lines(movements_lines)
@@ -7964,7 +7970,7 @@ def main():
     # Append blank row, then RFC, Name, Period (all banks)
     _summary = pdf_summary or {}
     col0 = df_mov.columns[0]
-    col1 = df_mov.columns[1]
+    col1 = df_mov.columns[1] if len(df_mov.columns) > 1 else col0  # defensive: single-column df (e.g. raw-only extraction)
     row_blank = {c: '' for c in df_mov.columns}
     row_rfc = {c: '' for c in df_mov.columns}
     row_rfc[col0] = 'RFC'
