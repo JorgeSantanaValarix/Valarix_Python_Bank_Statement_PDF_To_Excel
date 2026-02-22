@@ -5908,7 +5908,12 @@ def main():
                     elif bank_config['name'] == 'Santander' or bank_config['name'] == 'Banregio' or bank_config['name'] == 'Hey':
                         # For Santander/Banregio/Hey, use the pattern with 3 numeric amounts (already created in movement_end_pattern)
                         if movement_end_pattern.search(all_text):
-                            match_found = True
+                            # Santander: valid movements_end is Total + 3 numeric values only; line must not contain % (resumen block has %)
+                            if bank_config['name'] == 'Santander':
+                                if '%' not in all_text:
+                                    match_found = True
+                            else:
+                                match_found = True
                         # Banregio: also match "3 amounts + Total" (e.g. "11,973.34 12,973.34 1,000.00 Total")
                         if bank_config['name'] == 'Banregio' and banregio_end_pattern_three_then_total and banregio_end_pattern_three_then_total.search(all_text):
                             match_found = True
@@ -6296,15 +6301,23 @@ def main():
                     if movement_end_string and movement_end_string.strip():
                         end_upper = movement_end_string.upper().strip()
                         if end_upper in all_row_text.upper():
-                            _disp = "END (movements_end string in line)"
+                            # Santander: TOTAL + numeric with % is resumen block, not valid movements_end
+                            if bank_config['name'] == 'Santander' and '%' in all_row_text:
+                                pass  # do not treat as end
+                            else:
+                                _disp = "END (movements_end string in line)"
+                                _debug_mov_line(all_row_text_orig, row_data, _disp)
+                                extraction_stopped = True
+                                break
+                    if movement_end_pattern and movement_end_pattern.search(all_row_text):
+                        # Santander: Total + 3 numeric with % is resumen block, not valid movements_end
+                        if bank_config['name'] == 'Santander' and '%' in all_row_text:
+                            pass  # do not treat as end
+                        else:
+                            _disp = "END (movements_end pattern)"
                             _debug_mov_line(all_row_text_orig, row_data, _disp)
                             extraction_stopped = True
                             break
-                    if movement_end_pattern and movement_end_pattern.search(all_row_text):
-                        _disp = "END (movements_end pattern)"
-                        _debug_mov_line(all_row_text_orig, row_data, _disp)
-                        extraction_stopped = True
-                        break
                     # Row has valid data but no date - treat as continuation or standalone row
                     # For Santander: do not merge rows that contain "TOTAL" (no fecha) into previous movement
                     if bank_config['name'] == 'Santander':
