@@ -7989,6 +7989,13 @@ def main():
     
     # Append blank row, then RFC, Name, Period (all banks)
     _summary = pdf_summary or {}
+    # Ensure at least 2 columns (e.g. HSBC OCR can yield single-column df when no valid movements)
+    if len(df_mov.columns) < 2:
+        default_mov_cols = ['Fecha', 'Descripción', 'Abonos', 'Cargos', 'Saldo']
+        for c in default_mov_cols:
+            if c not in df_mov.columns:
+                df_mov[c] = ''
+        df_mov = df_mov[[c for c in default_mov_cols if c in df_mov.columns]]
     col0 = df_mov.columns[0]
     col1 = df_mov.columns[1]
     row_blank = {c: '' for c in df_mov.columns}
