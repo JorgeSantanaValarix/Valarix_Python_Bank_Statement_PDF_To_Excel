@@ -2076,11 +2076,12 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
     return (rfc, name)
 
 
-def extract_summary_from_pdf(pdf_path: str) -> dict:
+def extract_summary_from_pdf(pdf_path: str, movement_start_page: int = None) -> dict:
     """
     Extract summary information from PDF (totals, deposits, withdrawals, balance, movement count).
     Uses bank-specific patterns to extract summary data accurately.
     Returns a dictionary with extracted values or None if not found.
+    For INTERCAM, when movement_start_page is provided, Saldo Final is taken only from that page.
     """
     summary_data = {
         'total_depositos': None,
@@ -2140,19 +2141,35 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                         all_lines.extend(text.split('\n'))
             else:
                 # Collect text from first pages
+                # For INTERCAM, keep lines per page so Saldo Final can be taken from movements_start page only
+                lines_by_page = {} if bank_name == "INTERCAM" else None
                 for page_num in range(pages_to_check):
                     page = pdf.pages[page_num]
                     text = page.extract_text()
                     if text:
                         all_text += text + "\n"
-                        all_lines.extend(text.split('\n'))
+                        page_lines = text.split('\n')
+                        all_lines.extend(page_lines)
+                        if lines_by_page is not None:
+                            lines_by_page[page_num + 1] = page_lines  # 1-based page number
                 
                 # Also check last page for Santander and BanRegio
                 if len(pdf.pages) > pages_to_check:
                     last_page = pdf.pages[-1]
                     last_text = last_page.extract_text()
                     if last_text:
-                        all_lines.extend(last_text.split('\n'))
+                        last_lines = last_text.split('\n')
+                        all_lines.extend(last_lines)
+                        if lines_by_page is not None:
+                            lines_by_page[len(pdf.pages)] = last_lines  # 1-based last page number
+                
+                # For INTERCAM, ensure we have the movements_start page for Saldo Final (may be beyond first pages)
+                if lines_by_page is not None and movement_start_page is not None:
+                    if 1 <= movement_start_page <= len(pdf.pages) and movement_start_page not in lines_by_page:
+                        page = pdf.pages[movement_start_page - 1]
+                        text = page.extract_text()
+                        if text:
+                            lines_by_page[movement_start_page] = text.split('\n')
             
             # Extract RFC, name, period from full text (all banks)
             full_text = all_text if all_text else '\n'.join(all_lines)
@@ -2570,6 +2587,10 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
             
             elif bank_name == "INTERCAM":
                 # INTERCAM: Total Abonos from "+ Depósitos", Total Cargos from "- Retiros", Saldo Final from "Saldo Final"
+                # For Saldo Final, use only the page where movements_start was found (when movement_start_page is provided)
+                saldo_lines = all_lines
+                if movement_start_page is not None and lines_by_page is not None:
+                    saldo_lines = lines_by_page.get(movement_start_page, all_lines)
                 for i, line in enumerate(all_lines):
                     # Total Abonos: line with "+ Depósitos" (or "+ Depositos") followed by amount
                     if not summary_data['total_abonos']:
@@ -2589,13 +2610,14 @@ def extract_summary_from_pdf(pdf_path: str) -> dict:
                                 if amount > 0:
                                     summary_data['total_cargos'] = amount
                                     summary_data['total_retiros'] = amount
-                    # Saldo Final: line containing "Saldo Final" followed by amount
-                    if not summary_data['saldo_final']:
-                        if re.search(r'Saldo\s+Final', line, re.I):
-                            match = re.search(r'\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})', line)
-                            if match:
-                                amount = normalize_amount_str(match.group(0))
-                                summary_data['saldo_final'] = amount
+                # Saldo Final: only from lines on the movements_start page (when provided), else all lines
+                for i, line in enumerate(saldo_lines):
+                    if not summary_data['saldo_final'] and re.search(r'Saldo\s+Final', line, re.I):
+                        match = re.search(r'\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})', line)
+                        if match:
+                            amount = normalize_amount_str(match.group(0))
+                            summary_data['saldo_final'] = amount
+                            break
             
             elif bank_name == "Clara":
                 # Clara:
@@ -7905,7 +7927,7 @@ def main():
     # Para HSBC con OCR, el resumen ya fue extraído desde el texto OCR arriba
     # Para otros casos, extraer desde PDF
     if not (is_hsbc and used_ocr):
-        pdf_summary = extract_summary_from_pdf(pdf_path)
+        pdf_summary = extract_summary_from_pdf(pdf_path, movement_start_page=movement_start_page)
     # Si es HSBC con OCR, pdf_summary ya fue extraído arriba en extract_hsbc_summary_from_ocr_text
     extracted_totals = calculate_extracted_totals(df_mov, bank_config['name'])
     
@@ -8150,7 +8172,7 @@ def main():
             print(f"❌ Error: El archivo Excel está vacío: {output_excel}")
             sys.exit(1)
         
-        print(f"✅ Excel file created successfully -> {output_excel} ({excel_size:,} bytes)", flush=True)
+        print(f"✅ Excel file created successfully -> {output_excel} ({excel_size:,} bytes)" + "\n", flush=True)
         sys.exit(0)
     except Exception as e:
         print(f"❌ Excel file not created -> {output_excel}")
