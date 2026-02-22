@@ -198,6 +198,7 @@ BANK_CONFIGS = {
         "name": "Banamex",
         "movements_start": "DETALLE DE OPERACIONES",  # String that marks the start of the movements section
         "movements_end": "SALDO PROMEDIO MINIMO REQUERIDO",    # String that marks the end of the movements section
+        "movements_end_secondary": "SALDO MINIMO REQUERIDO",    # Alternative end string in some Banamex PDFs
         "columns": {
             "fecha": (17, 45),             # Operation Date column
             "descripcion": (55, 260),      # Description column (expanded to capture better)
@@ -5752,6 +5753,12 @@ def main():
             hsbc_secondary_end_string = bank_config.get('movements_end_secondary')
             if hsbc_secondary_end_string:
                 hsbc_secondary_end_pattern = re.compile(re.escape(hsbc_secondary_end_string), re.I)
+        # For Banamex, create secondary pattern for "SALDO MINIMO REQUERIDO" (alternative to "SALDO PROMEDIO MINIMO REQUERIDO")
+        banamex_secondary_end_pattern = None
+        if bank_config['name'] == 'Banamex':
+            banamex_secondary_end_string = bank_config.get('movements_end_secondary')
+            if banamex_secondary_end_string:
+                banamex_secondary_end_pattern = re.compile(re.escape(banamex_secondary_end_string), re.I)
         
         extraction_stopped = False
         # Debug: number each line in movements section (from movements_start until movements_end)
@@ -5935,8 +5942,14 @@ def main():
                                 match_found = True
                             elif 'si desea recibir' in all_text_lower or 'desea recibir pagos' in all_text_lower:
                                 match_found = True
+                    elif bank_config['name'] == 'Banamex':
+                        # For Banamex, try primary ("SALDO PROMEDIO MINIMO REQUERIDO") then secondary ("SALDO MINIMO REQUERIDO")
+                        if movement_end_pattern and movement_end_pattern.search(all_text):
+                            match_found = True
+                        elif banamex_secondary_end_pattern and banamex_secondary_end_pattern.search(all_text):
+                            match_found = True
                     else:
-                        # For other banks (Banamex, Santander, Konfio, Banbajío, etc.), use the standard pattern
+                        # For other banks (Santander, Konfio, Banbajío, etc.), use the standard pattern
                         if movement_end_pattern.search(all_text):
                             match_found = True
                             #if bank_config['name'] == 'Banbajío':
