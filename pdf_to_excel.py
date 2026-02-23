@@ -5445,15 +5445,11 @@ def main():
                         if len(combined_banamex) <= 100 and re.search(r"DESGLOSE\s+DE\s+MOVIMIENTOS", combined_banamex, re.I):
                             movement_section_found = True
                             banamex_new_format = True
-                            print("[Banamex new format] movements_start line:", combined_banamex, flush=True)
-                            print(flush=True)
                             continue
                         # OCR may split "CARGOS, ABONOS Y COMPRAS REGULARES" across lines; check combined chunk
                         if len(combined_banamex) <= 120 and re.search(r"CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES", combined_banamex, re.I):
                             movement_section_found = True
                             banamex_new_format = True
-                            print("[Banamex new format] movements_start line (combined):", combined_banamex[:80], flush=True)
-                            print(flush=True)
                             continue
                     if movement_start_pattern.search(ln):
                         ln_stripped = (ln or '').strip()
@@ -5473,8 +5469,6 @@ def main():
                         if is_banamex_short_header:
                             movement_section_found = True
                             banamex_new_format = True
-                            print("[Banamex new format] movements_start line:", ln_stripped, flush=True)
-                            print(flush=True)
                             continue
                         if is_other_bank_or_classic:
                             movement_section_found = True
@@ -5488,8 +5482,6 @@ def main():
                             if not re.search(r'Pagina|Número de tarjeta|MENSAJES ADICIONALES', (ln or ''), re.I):
                                 movement_section_found = True
                                 banamex_new_format = True
-                                print("[Banamex new format] movements_start line (long):", (ln or '').strip()[:80], flush=True)
-                                print(flush=True)
                                 continue
                         # Long line that matched (e.g. paragraph or page header) - don't set section start, keep looking for real header
                         continue
@@ -5579,7 +5571,6 @@ def main():
         full_text = ' '.join((p.get('content') or '') for p in extracted_data)
         if re.search(r"DESGLOSE\s+DE\s+MOVIMIENTOS", full_text, re.I) or re.search(r"CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES", full_text, re.I):
             banamex_new_format = True
-            print("[Banamex new format] detected from full content (OCR)", flush=True)
 
     # Banamex new format: use columns_new_format, date DD-mon-YYYY (e.g. 13-oct-2025), and movements_end_new_format
     if banamex_new_format and bank_config.get('columns_new_format'):
@@ -5601,7 +5592,7 @@ def main():
     movement_rows = []
     df_mov = None  # Initialize to avoid UnboundLocalError
     pdf_summary = None  # Initialize to avoid UnboundLocalError
-    banamex_new_fmt_totals = {}  # Total cargos/abonos from "Cargos regulares (no a meses)" and "Pagos y abonos" for validation (Banamex new format only)
+    banamex_new_fmt_totals = {}  # Total cargos/abonos from "Total +" and "Total" lines for Valor en PDF (Banamex new format only)
     # So trim block (later) can run for any path (e.g. HSBC OCR) without NameError
     movement_end_string = bank_config.get('movements_end')
     movement_end_pattern = None
@@ -5610,23 +5601,8 @@ def main():
     debug_movements_lines = [] if debug_mode else None
 
     def _banamex_new_fmt_log(orig, row_data, disp):
-        """Print line info for Banamex new format only (normal operation, not gated by --debug)."""
-        if not banamex_new_format:
-            return
-        orig_short = (orig or '')[:500]
-        if disp and ('END' in disp or 'movements_end' in disp.lower()):
-            print("[Banamex new format] movements_end line:", orig_short, flush=True)
-            print(flush=True)
-            return
-        parts = []
-        for k in ('fecha', 'descripcion', 'cargos', 'abonos', 'saldo'):
-            v = (row_data.get(k) or '') if row_data else ''
-            v = str(v).strip()[:80]
-            parts.append(f"{k}={v}")
-        print("[Banamex new format] ORIGINAL:", orig_short, flush=True)
-        print("[Banamex new format] DIVIDED:", " | ".join(parts), flush=True)
-        print("[Banamex new format] DISPOSITION:", disp, flush=True)
-        print(flush=True)
+        """No-op for Banamex new format (debug prints removed)."""
+        return
 
     def _debug_mov_line(line_text, excel_row, disposition):
         row_for_banamex = excel_row if excel_row is not None else {}
@@ -6006,24 +5982,6 @@ def main():
                 
                 mov_section_line_num += 1
                 
-                # Banamex new format only: capture Total Abonos/Cargos from summary lines for Valor en PDF validation
-                # "Pagos y abonos" (-) $438.55 -> total_abonos; "Cargos regulares (no a meses)" (+) $1,127.00 -> total_cargos
-                # OCR may output "(no meses)" without "a"; full multi-row scan is done later over all pages
-                if bank_config['name'] == 'Banamex' and banamex_new_format and all_row_text_orig:
-                    _amt_in_line = re.search(r'\$\s*([\d,]+\.\d{2})|(?<!\d)(\d{1,3}(?:,\d{3})*\.\d{2})(?=\s|$|[^\d])', all_row_text_orig)
-                    if _amt_in_line:
-                        _val = _amt_in_line.group(1) or _amt_in_line.group(2)
-                        try:
-                            _num = normalize_amount_str(_val)
-                        except Exception:
-                            _num = None
-                        if _num is not None:
-                            _norm = ' '.join(all_row_text_orig.split())
-                            if re.search(r'Pagos\s+(?:\w+\s+)*y?\s+(?:\w+\s+)*abonos', _norm, re.I) and banamex_new_fmt_totals.get('total_abonos') is None:
-                                banamex_new_fmt_totals['total_abonos'] = _num
-                            if re.search(r'Cargos\s+regulares\s*\(?\s*no\s+a?\s*meses?', _norm, re.I) and banamex_new_fmt_totals.get('total_cargos') is None:
-                                banamex_new_fmt_totals['total_cargos'] = _num
-                
                 # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
                 if bank_config['name'] == 'Banregio':
                     if re.search(r'^del\s+01\s+al', all_row_text, re.I):
@@ -6145,7 +6103,7 @@ def main():
                         # For BBVA, mark that we've left the movements section
                         if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
                             in_bbva_movements_section = False
-                        # Banamex new format: validation totals from "Pagos y abonos" / "Cargos regulares (no a meses)" only; treat movements_end like other banks
+                        # Banamex new format: validation totals from "Total +" / "Total" lines only; treat movements_end like other banks
                         _disp = "END (movements_end matched, not added)"
                         _debug_mov_line(all_row_text_orig, None, _disp)
                         extraction_stopped = True
@@ -8143,35 +8101,21 @@ def main():
     # Para otros casos, extraer desde PDF
     if not (is_hsbc and used_ocr):
         pdf_summary = extract_summary_from_pdf(pdf_path, movement_start_page=movement_start_page)
-    # Banamex new format only: Valor en PDF from (1) "Total +" line → Total Cargos, (2) "Total" line (after "Total +") → Total Abonos.
-    # Fallback: "Pagos y abonos" / "Cargos regulares (no a meses)" in RESUMEN block. Scan ALL PDF pages.
-    if bank_config['name'] == 'Banamex':
-        print(f"[Banamex new format Valor en PDF] banamex_new_format={banamex_new_format}, pages={len(extracted_data) if extracted_data else 0}", flush=True)
+    # Banamex new format only: Valor en PDF from "Total +" line → Total Cargos, "Total" line (e.g. "$438.55 Total") → Total Abonos. Scan ALL PDF pages.
     if bank_config['name'] == 'Banamex' and banamex_new_format and extracted_data:
         need_abonos = banamex_new_fmt_totals.get('total_abonos') is None
         need_cargos = banamex_new_fmt_totals.get('total_cargos') is None
-        # Always print so user sees Banamex new format Valor en PDF block ran (normal and --debug)
-        print(f"[Banamex new format Valor en PDF] total_abonos={banamex_new_fmt_totals.get('total_abonos')}, total_cargos={banamex_new_fmt_totals.get('total_cargos')} | need_scan={need_abonos or need_cargos}, pages={len(extracted_data)}", flush=True)
         if need_abonos or need_cargos:
             re_amt = re.compile(r'\$\s*([\d,]+\.\d{2})|(?<!\d)(\d{1,3}(?:,\d{3})*\.\d{2})(?=\s|$|[^\d])')
             re_total_plus = re.compile(r'Total\s*\+', re.I)
             # Amount followed by "Total" (e.g. "$438.55 Total") for Total Abonos; avoids matching "Total de Movimientos" etc.
             re_amount_total = re.compile(r'[\d,]+\.\d{2}\s+Total(?:\s|$)', re.I)
             WINDOW_SIZE = 4
-            debug_val = debug_mode
-            # Always print in normal and --debug: confirm scan runs and what we need
-            print(f"[Banamex new format Valor en PDF] Scanning {len(extracted_data)} pages for Total Cargos ('Total +') and Total Abonos ('Total')...", flush=True)
-            if debug_val:
-                print(f"[Banamex new format Valor en PDF] need_abonos={need_abonos}, need_cargos={need_cargos}", flush=True)
             for page_data in extracted_data:
                 words = page_data.get('words', [])
                 if not words:
-                    if debug_val:
-                        print(f"[Banamex new format Valor en PDF] Page {page_data.get('page')}: no words, skip", flush=True)
                     continue
                 word_rows = group_words_by_row(words, y_tolerance=3)
-                if debug_val:
-                    print(f"[Banamex new format Valor en PDF] Page {page_data.get('page')}: {len(word_rows)} rows", flush=True)
                 for r in range(len(word_rows)):
                     if not need_abonos and not need_cargos:
                         break
@@ -8194,50 +8138,24 @@ def main():
                         continue
                     has_total_plus = bool(re_total_plus.search(block_norm))
                     has_total_not_plus = bool(re_amount_total.search(block_norm)) and not re_total_plus.search(block_norm)
-                    has_pagos_abonos = 'Pagos' in block_norm and 'abonos' in block_norm
-                    has_cargos_regulares = 'Cargos' in block_norm and 'regulares' in block_norm and 'no' in block_norm and 'meses' in block_norm
-                    if debug_val and (has_total_plus or has_total_not_plus or has_pagos_abonos or has_cargos_regulares):
-                        snippet = (block_norm[:120] + '...') if len(block_norm) > 120 else block_norm
-                        print(f"[Banamex new format Valor en PDF] Page {page_data.get('page')} window r={r}: amounts={all_amts} | Total+={has_total_plus} Total={has_total_not_plus} | snippet: {snippet!r}", flush=True)
-                    # Primary: "Total +" line (e.g. "$1,127.00 Total +") → Total Cargos
+                    # "Total +" line (e.g. "$1,127.00 Total +") → Total Cargos
                     if need_cargos and has_total_plus:
                         banamex_new_fmt_totals['total_cargos'] = all_amts[0]
                         need_cargos = False
-                        print(f"[Banamex new format Valor en PDF] Total Cargos (Valor en PDF) set to {banamex_new_fmt_totals['total_cargos']} from line containing 'Total +'", flush=True)
-                    # Primary: "Total" line after "Total +" (e.g. "$438.55 Total") → Total Abonos
+                    # "Total" line (e.g. "$438.55 Total", not "Total +") → Total Abonos
                     if need_abonos and has_total_not_plus:
                         banamex_new_fmt_totals['total_abonos'] = all_amts[-1]
                         need_abonos = False
-                        print(f"[Banamex new format Valor en PDF] Total Abonos (Valor en PDF) set to {banamex_new_fmt_totals['total_abonos']} from line containing 'Total'", flush=True)
-                    # Fallback: RESUMEN block "Pagos y abonos" / "Cargos regulares (no a meses)" — last match wins (main RESUMEN usually last on page 1 or only occurrence)
-                    # Skip zero for Total Abonos so we don't take $0.00 from another row; keep scanning so last non-zero wins
-                    if need_abonos and has_pagos_abonos and all_amts[-1] != 0:
-                        banamex_new_fmt_totals['total_abonos'] = all_amts[-1]
-                        print(f"[Banamex new format Valor en PDF] Total Abonos (Valor en PDF) set to {banamex_new_fmt_totals['total_abonos']} from line(s) containing 'Pagos y abonos'", flush=True)
-                    if need_abonos and has_pagos_abonos and all_amts[-1] == 0 and banamex_new_fmt_totals.get('total_abonos') is None:
-                        banamex_new_fmt_totals['total_abonos'] = 0.0
-                    if need_cargos and has_cargos_regulares:
-                        banamex_new_fmt_totals['total_cargos'] = all_amts[0]
-                        print(f"[Banamex new format Valor en PDF] Total Cargos (Valor en PDF) set to {banamex_new_fmt_totals['total_cargos']} from line(s) containing 'Cargos regulares (no a meses)'", flush=True)
-                    # Do not break early: keep scanning all pages so last occurrence wins (main RESUMEN often appears once or last)
-                # No early break for fallback; we scan all pages so last match wins
-            # Always print result when something is missing (normal and --debug)
-            if banamex_new_fmt_totals.get('total_abonos') is None or banamex_new_fmt_totals.get('total_cargos') is None:
-                print(f"[Banamex new format Valor en PDF] After scan: total_abonos={banamex_new_fmt_totals.get('total_abonos')}, total_cargos={banamex_new_fmt_totals.get('total_cargos')} (missing = not found in any page)", flush=True)
-            else:
-                print(f"[Banamex new format Valor en PDF] After scan: total_abonos={banamex_new_fmt_totals.get('total_abonos')}, total_cargos={banamex_new_fmt_totals.get('total_cargos')}", flush=True)
+                if not need_abonos and not need_cargos:
+                    break
     # Banamex new format: write summary-line totals into pdf_summary for Valor en PDF validation
     if bank_config['name'] == 'Banamex' and banamex_new_format and banamex_new_fmt_totals:
         if pdf_summary is None:
             pdf_summary = {}
         if banamex_new_fmt_totals.get('total_cargos') is not None:
             pdf_summary['total_cargos'] = banamex_new_fmt_totals['total_cargos']
-            if debug_mode:
-                print(f"[Banamex new format Valor en PDF] pdf_summary['total_cargos'] = {pdf_summary['total_cargos']}", flush=True)
         if banamex_new_fmt_totals.get('total_abonos') is not None:
             pdf_summary['total_abonos'] = banamex_new_fmt_totals['total_abonos']
-            if debug_mode:
-                print(f"[Banamex new format Valor en PDF] pdf_summary['total_abonos'] = {pdf_summary['total_abonos']}", flush=True)
     # Si es HSBC con OCR, pdf_summary ya fue extraído arriba en extract_hsbc_summary_from_ocr_text
     extracted_totals = calculate_extracted_totals(df_mov, bank_config['name'])
     
