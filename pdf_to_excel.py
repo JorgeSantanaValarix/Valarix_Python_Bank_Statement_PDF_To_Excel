@@ -443,8 +443,8 @@ def find_column_coordinates(pdf_path: str, page_number: int = 1):
             elif is_illegible:
                 print(f"[INFO] Using OCR to analyze coordinates...")
             
-            # Extract with OCR (now uses image_to_data() with real coordinates)
-            pages_data = extract_text_with_tesseract_ocr(pdf_path)
+            # Extract with OCR (only requested page when in --find mode)
+            pages_data = extract_text_with_tesseract_ocr(pdf_path, pages=[page_number])
             
             # Detect bank from OCR text
             all_text = '\n'.join([p.get('content', '') for p in pages_data[:3]])
@@ -1053,7 +1053,7 @@ def convert_ocr_text_to_words_format(ocr_text: str, page_number: int = 1) -> lis
     return words
 
 
-def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> list:
+def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages: list = None) -> list:
     """
     Extracts text from PDF using local Tesseract OCR.
     100% private - does not send data to external servers.
@@ -1062,6 +1062,7 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
     Args:
         pdf_path: Path to PDF file
         lang: Language for OCR (default: 'spa+eng' for Spanish+English)
+        pages: Optional 1-based page numbers to process (e.g. [1, 3]). If None, all pages are processed.
     
     Returns:
         List of dictionaries with format: [{"page": int, "content": str, "words": list}, ...]
@@ -1116,9 +1117,18 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng') -> lis
         # else:
         #     print(f"[INFO] DPI ({effective_dpi:.0f}) is within optimal range for OCR accuracy")
         
-        for page_num in range(len(doc)):
+        total_pages = len(doc)
+        if pages is not None:
+            page_indices = [p - 1 for p in pages if 1 <= p <= total_pages]
+        else:
+            page_indices = list(range(total_pages))
+        
+        for page_num in page_indices:
             page = doc[page_num]
-            print(f"[INFO] Processing page {page_num + 1}/{len(doc)} with OCR...", flush=True)
+            if pages is not None:
+                print(f"[INFO] Processing page {page_num + 1} with OCR...", flush=True)
+            else:
+                print(f"[INFO] Processing page {page_num + 1}/{total_pages} with OCR...", flush=True)
             
             # Convert page to image (high resolution)
             # Coordinates will be normalized later to maintain compatibility with column ranges calibrated for 2.0x
