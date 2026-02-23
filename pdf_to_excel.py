@@ -444,7 +444,11 @@ def find_column_coordinates(pdf_path: str, page_number: int = 1):
                 print(f"[INFO] Using OCR to analyze coordinates...")
             
             # Extract with OCR (only requested page when in --find mode)
-            pages_data = extract_text_with_tesseract_ocr(pdf_path, pages=[page_number])
+            try:
+                pages_data = extract_text_with_tesseract_ocr(pdf_path, pages=[page_number])
+            except ValueError as e:
+                print(f"❌ {e}", flush=True)
+                return
             
             # Detect bank from OCR text
             all_text = '\n'.join([p.get('content', '') for p in pages_data[:3]])
@@ -507,8 +511,8 @@ def find_column_coordinates(pdf_path: str, page_number: int = 1):
         is_konfio = (detected_bank == "Konfio")
         
         with pdfplumber.open(pdf_path) as pdf:
-            if page_number > len(pdf.pages):
-                # print(f"❌ PDF only has {len(pdf.pages)} pages")
+            if page_number < 1 or page_number > len(pdf.pages):
+                print(f"❌ Page {page_number} does not exist. PDF has {len(pdf.pages)} page(s).", flush=True)
                 return
             
             page = pdf.pages[page_number - 1]
@@ -1119,7 +1123,11 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
         
         total_pages = len(doc)
         if pages is not None:
-            page_indices = [p - 1 for p in pages if 1 <= p <= total_pages]
+            invalid = [p for p in pages if p < 1 or p > total_pages]
+            if invalid:
+                doc.close()
+                raise ValueError(f"Page(s) {invalid} do not exist. PDF has {total_pages} page(s).")
+            page_indices = [p - 1 for p in pages]
         else:
             page_indices = list(range(total_pages))
         
