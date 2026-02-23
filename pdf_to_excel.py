@@ -197,14 +197,23 @@ BANK_CONFIGS = {
     "Banamex": {
         "name": "Banamex",
         "movements_start": "DETALLE DE OPERACIONES",  # String that marks the start of the movements section
+        "movements_start_secondary": "DESGLOSE DE MOVIMIENTOS",  # New format (mixed text/image); OCR may output as separate words (--find row Y≈852)
+        "movements_start_tertiary": [r"CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES"],  # Flexible match for OCR (comma optional, whitespace)
         "movements_end": "SALDO PROMEDIO MINIMO REQUERIDO",    # String that marks the end of the movements section
         "movements_end_secondary": "SALDO MINIMO REQUERIDO",    # Alternative end string in some Banamex PDFs
+        "movements_end_new_format": "Total cargos +",           # End for new format (do not parse the numeric value after)
         "columns": {
             "fecha": (17, 45),             # Operation Date column
             "descripcion": (55, 260),      # Description column (expanded to capture better)
             "cargos": (275, 316),          # Charges column (slightly expanded)
             "abonos": (345, 395),          # Credits column (slightly expanded)
             "saldo": (425, 472),           # Balance column (slightly expanded)
+        },
+        # New format: Fecha de cargo, Descripción del movimiento, Monto (- = Abono, + = Cargo). Calibrate with --find if needed.
+        "columns_new_format": {
+            "fecha": (50, 130),            # Fecha de cargo column (use this date)
+            "descripcion": (140, 450),     # Descripción del movimiento
+            "monto": (460, 550),           # Monto: "-" prefix = Abono, "+" prefix = Cargo
         }
     },
 
@@ -416,15 +425,23 @@ def fix_duplicated_chars(text_str):
 def find_column_coordinates(pdf_path: str, page_number: int = 1):
     """Extract all words from a page and show their coordinates.
     Helps user find exact X ranges for columns.
-    Automatically detects if OCR should be used for illegible PDFs.
+    Automatically detects if OCR should be used for illegible PDFs or Banamex mixed format.
     """
     try:
-        # STEP 1: Detect if PDF is illegible
+        # STEP 1: Detect if PDF is illegible or Banamex mixed (needs OCR for coordinates)
         is_illegible, cid_ratio, ascii_ratio = is_pdf_text_illegible(pdf_path)
+        detected_bank_early = detect_bank_from_pdf(pdf_path)
+        use_ocr_banamex_mixed = (
+            detected_bank_early == 'Banamex' and ascii_ratio < 0.99 and TESSERACT_AVAILABLE
+        )
         
-        if is_illegible and TESSERACT_AVAILABLE:
-            print(f"[INFO] PDF detected as illegible (CID ratio: {cid_ratio:.2%}, ASCII ratio: {ascii_ratio:.2%})", flush=True)
-            print(f"[INFO] Using OCR to analyze coordinates...")
+        if (is_illegible or use_ocr_banamex_mixed) and TESSERACT_AVAILABLE:
+            if is_illegible:
+                print(f"[INFO] PDF detected as illegible (CID ratio: {cid_ratio:.2%}, ASCII ratio: {ascii_ratio:.2%})", flush=True)
+            if use_ocr_banamex_mixed:
+                print(f"[INFO] Banamex PDF with mixed content (ASCII ratio: {ascii_ratio:.2%} < 99%). Using OCR for coordinates...", flush=True)
+            elif is_illegible:
+                print(f"[INFO] Using OCR to analyze coordinates...")
             
             # Extract with OCR (now uses image_to_data() with real coordinates)
             pages_data = extract_text_with_tesseract_ocr(pdf_path)
@@ -3312,17 +3329,20 @@ def print_validation_summary(pdf_summary: dict, extracted_totals: dict, validati
     # print("=" * 80 + "\n")
 
 
-def extract_digitem_section(pdf_path: str, columns_config: dict) -> pd.DataFrame:
+def extract_digitem_section(pdf_path: str, columns_config: dict, extracted_data: list = None) -> pd.DataFrame:
     """
     Extract DIGITEM section from Banamex PDF using the same coordinate-based extraction as Movements.
     Section starts with "DIGITEM" and ends with "TRANSFERENCIA ELECTRONICA DE FONDOS".
     Returns a DataFrame with columns: Fecha, Descripción, Importe
+
+    If extracted_data is provided (e.g. from main flow), it is used to avoid re-opening/re-OCR of the PDF.
     """
     digitem_rows = []
     
     try:
-        # Use the same extraction method as Movements
-        extracted_data = extract_text_from_pdf(pdf_path)
+        # Use provided extracted data to avoid second PDF extraction (and second OCR for Banamex mixed)
+        if extracted_data is None:
+            extracted_data = extract_text_from_pdf(pdf_path)
         # Pattern for dates: supports multiple formats:
         # - "DIA MES" (01 ABR)
         # - "MES DIA" (ABR 01)
@@ -3720,9 +3740,20 @@ def extract_text_from_pdf(pdf_path: str) -> list:
     """
     # STEP 1: Detect if PDF has illegible text
     is_illegible, cid_ratio, ascii_ratio = is_pdf_text_illegible(pdf_path)
+    if '--debug' in sys.argv:
+        print(f"[DEBUG] is_pdf_text_illegible: is_illegible={is_illegible}, cid_ratio={cid_ratio:.2%}, ascii_ratio={ascii_ratio:.2%}", flush=True)
     
-    if is_illegible and TESSERACT_AVAILABLE:
-        print(f"[INFO] PDF detected as illegible (CID ratio: {cid_ratio:.2%}, ASCII ratio: {ascii_ratio:.2%})", flush=True)
+    # Banamex mixed format: if bank is Banamex and ascii_ratio < 99%, use OCR for movements (some content is embedded as images)
+    detected_bank_early = detect_bank_from_pdf(pdf_path)
+    use_ocr_banamex_mixed = (
+        detected_bank_early == 'Banamex' and ascii_ratio < 0.99 and TESSERACT_AVAILABLE
+    )
+    if use_ocr_banamex_mixed:
+        print(f"[INFO] Banamex PDF with mixed content (ASCII ratio: {ascii_ratio:.2%} < 99%). Using OCR for movements...", flush=True)
+    
+    if (is_illegible or use_ocr_banamex_mixed) and TESSERACT_AVAILABLE:
+        if is_illegible:
+            print(f"[INFO] PDF detected as illegible (CID ratio: {cid_ratio:.2%}, ASCII ratio: {ascii_ratio:.2%})", flush=True)
         print(f"[INFO] Using local Tesseract OCR as fallback...", flush=True)
         print(f"[INFO] Bank will be detected after processing with OCR...", flush=True)
         try:
@@ -3731,6 +3762,9 @@ def extract_text_from_pdf(pdf_path: str) -> list:
             # Mark that OCR was used
             for page_data in extracted_data:
                 page_data['_used_ocr'] = True
+            # When OCR was triggered for Banamex mixed, keep Banamex as bank (OCR text may not detect it or may match HSBC fallback)
+            if use_ocr_banamex_mixed and extracted_data:
+                extracted_data[0]['_force_bank'] = 'Banamex'
             return extracted_data
         except Exception as e:
             print(f"[WARNING] Error with Tesseract OCR: {e}")
@@ -4942,6 +4976,14 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
         if row_data.get('fecha'):
             row_data['fecha'] = fix_ocr_date_errors(str(row_data['fecha']).strip(), bank_name)
 
+    # Banamex new format: single "monto" column; "-" prefix = Abono, "+" prefix = Cargo
+    if bank_name == 'Banamex' and 'monto' in row_data:
+        m = (row_data.get('monto') or '').strip()
+        row_data['cargos'] = m if m.startswith('+') else ''
+        row_data['abonos'] = m if m.startswith('-') else ''
+        row_data['saldo'] = ''
+        del row_data['monto']
+
     return row_data
 
 
@@ -5271,9 +5313,13 @@ def main():
     
     # Detectar si se usó OCR
     used_ocr = any(p.get('_used_ocr', False) for p in extracted_data)
+    # When OCR was triggered for Banamex mixed, keep the pre-OCR bank (Banamex) instead of re-detecting from OCR text
+    force_bank = (extracted_data[0].get('_force_bank') if extracted_data else None)
     
     # Detect bank: from extracted text if OCR was used, otherwise from PDF
-    if used_ocr:
+    if force_bank:
+        detected_bank = force_bank
+    elif used_ocr:
         # If OCR was used, detect bank from extracted text.
         # Use only the first page for bank detection so the header (bank name) wins;
         # otherwise Phase 1 "first 20 lines" can match a different bank that appears
@@ -5383,15 +5429,51 @@ def main():
     
     # Track if we've found the movements section start
     movement_section_found = False
+    # Banamex new format: "DESGLOSE DE MOVIMIENTOS" (--find row Y≈802) or "CARGOS, ABONOS Y COMPRAS REGULARES"; single Monto column (- = Abono, + = Cargo)
+    banamex_new_format = False
     
     for p in pages_lines:
         if not movement_start_found:
             for i, ln in enumerate(p['lines']):
                 # Generic movement_start_pattern from BANK_CONFIGS (for all banks)
                 if movement_start_pattern and not movement_section_found:
+                    # Banamex new format: OCR may put "DESGLOSE", "DE", "MOVIMIENTOS" on separate lines (--find row Y≈802); try joined line
+                    combined_banamex = None
+                    if bank_config['name'] == 'Banamex' and not movement_section_found:
+                        chunk = p['lines'][i:i+3]
+                        combined_banamex = ' '.join((l or '').strip() for l in chunk).strip()
+                        if len(combined_banamex) <= 100 and re.search(r"DESGLOSE\s+DE\s+MOVIMIENTOS", combined_banamex, re.I):
+                            movement_section_found = True
+                            banamex_new_format = True
+                            print("[Banamex new format] movements_start line:", combined_banamex, flush=True)
+                            print(flush=True)
+                            continue
                     if movement_start_pattern.search(ln):
-                        movement_section_found = True
-                        continue  # Skip the movements_start line itself
+                        ln_stripped = (ln or '').strip()
+                        # Banamex new format: "DESGLOSE DE MOVIMIENTOS" (--find row Y≈802) or "CARGOS, ABONOS Y COMPRAS REGULARES"; only when line is short
+                        is_banamex_short_header = (
+                            bank_config['name'] == 'Banamex'
+                            and len(ln_stripped) <= 80
+                            and (
+                                re.search(r"DESGLOSE\s+DE\s+MOVIMIENTOS", ln, re.I)
+                                or re.search(r"CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES", ln, re.I)
+                            )
+                        )
+                        is_other_bank_or_classic = (
+                            bank_config['name'] != 'Banamex'
+                            or re.search(r"DETALLE\s+DE\s+OPERACIONES", ln, re.I)
+                        ) and len(ln_stripped) <= 120
+                        if is_banamex_short_header:
+                            movement_section_found = True
+                            banamex_new_format = True
+                            print("[Banamex new format] movements_start line:", ln_stripped, flush=True)
+                            print(flush=True)
+                            continue
+                        if is_other_bank_or_classic:
+                            movement_section_found = True
+                            continue
+                        # Long line that matched (e.g. paragraph containing "CARGOS...REGULARES") - don't set section start, keep looking for real header
+                        continue
                 
                 # After finding movements_start, look for first valid movement row (date)
                 if movement_section_found:
@@ -5473,6 +5555,11 @@ def main():
             else:
                 movements_lines.extend(p['lines'])
 
+    # Banamex new format: use columns_new_format, date DD-mon-YYYY (e.g. 13-oct-2025), and movements_end_new_format
+    if banamex_new_format and bank_config.get('columns_new_format'):
+        columns_config = bank_config['columns_new_format'].copy()
+        date_pattern = re.compile(r'\b(0?[1-9]|[12][0-9]|3[01])-[a-z]{3}-\d{4}\b', re.I)  # 13-oct-2025
+
     # build summary from first page (lines before movements start if movements begin on page 1)
     if pages_lines:
         first_page = pages_lines[0]
@@ -5488,32 +5575,57 @@ def main():
     movement_rows = []
     df_mov = None  # Initialize to avoid UnboundLocalError
     pdf_summary = None  # Initialize to avoid UnboundLocalError
+    banamex_new_fmt_totals = {}  # Total cargos/abonos from "Cargos regulares (no a meses)" and "Pagos y abonos" for validation (Banamex new format only)
     # So trim block (later) can run for any path (e.g. HSBC OCR) without NameError
     movement_end_string = bank_config.get('movements_end')
     movement_end_pattern = None
     
     # Debug: collect (original_line, excel_cols_dict, disposition) for all banks (written to .txt at end)
     debug_movements_lines = [] if debug_mode else None
-    def _debug_mov_line(line_text, excel_row, disposition):
-        if debug_movements_lines is None:
+
+    def _banamex_new_fmt_log(orig, row_data, disp):
+        """Print line info for Banamex new format only (normal operation, not gated by --debug)."""
+        if not banamex_new_format:
             return
-        excel_row = excel_row or {}
+        orig_short = (orig or '')[:500]
+        if disp and ('END' in disp or 'movements_end' in disp.lower()):
+            print("[Banamex new format] movements_end line:", orig_short, flush=True)
+            print(flush=True)
+            return
         parts = []
         for k in ('fecha', 'descripcion', 'cargos', 'abonos', 'saldo'):
-            v = (excel_row.get(k) or '').strip()
-            parts.append(f"{k}={v[:80] + '...' if len(v) > 80 else v}")
-        excel_str = " | ".join(parts)
-        orig = (line_text or '')[:500]
-        debug_movements_lines.append({
-            'original': orig,
-            'excel': excel_str,
-            'disposition': disposition,
-        })
-        # Also print to console (same format as debug file)
-        print("ORIGINAL:", orig, flush=True)
-        print("EXCEL:", excel_str, flush=True)
-        print("DISPOSITION:", disposition, flush=True)
+            v = (row_data.get(k) or '') if row_data else ''
+            v = str(v).strip()[:80]
+            parts.append(f"{k}={v}")
+        print("[Banamex new format] ORIGINAL:", orig_short, flush=True)
+        print("[Banamex new format] DIVIDED:", " | ".join(parts), flush=True)
+        print("[Banamex new format] DISPOSITION:", disp, flush=True)
         print(flush=True)
+
+    def _debug_mov_line(line_text, excel_row, disposition):
+        row_for_banamex = excel_row if excel_row is not None else {}
+        if debug_movements_lines is None:
+            pass  # skip debug file
+        else:
+            excel_row = excel_row or {}
+            parts = []
+            for k in ('fecha', 'descripcion', 'cargos', 'abonos', 'saldo'):
+                v = (excel_row.get(k) or '').strip()
+                parts.append(f"{k}={v[:80] + '...' if len(v) > 80 else v}")
+            excel_str = " | ".join(parts)
+            orig = (line_text or '')[:500]
+            debug_movements_lines.append({
+                'original': orig,
+                'excel': excel_str,
+                'disposition': disposition,
+            })
+            # Also print to console (same format as debug file)
+            print("ORIGINAL:", orig, flush=True)
+            print("EXCEL:", excel_str, flush=True)
+            print("DISPOSITION:", disposition, flush=True)
+            print(flush=True)
+        # Banamex new format: always log in normal operation (not gated by --debug)
+        _banamex_new_fmt_log(line_text, row_for_banamex, disposition)
     
     # Si es HSBC y se usó OCR, usar la misma lógica que otros bancos
     if is_hsbc and used_ocr:
@@ -5737,7 +5849,7 @@ def main():
         # Pattern to detect end of movements table for specific banks
         # First, try to use movements_end from BANK_CONFIGS (for all banks)
         movement_end_pattern = None
-        movement_end_string = bank_config.get('movements_end')
+        movement_end_string = bank_config.get('movements_end_new_format') if (bank_config['name'] == 'Banamex' and banamex_new_format) else bank_config.get('movements_end')
         if movement_end_string:
             # Create pattern from movements_end string (escape special chars)
             # For Santander, Banregio, Hey, and Clara, we need special handling for patterns with numbers
@@ -5753,6 +5865,9 @@ def main():
                 movement_end_pattern = re.compile(
                     re.escape(movement_end_string) + r'\s+\$?[\d,\.\-]+\.\d{2}', re.I
                 )
+            elif bank_config['name'] == 'Banamex' and banamex_new_format:
+                # Banamex new format: "Total +" or "Total cargos +" marks end
+                movement_end_pattern = re.compile(r'Total\s+(?:cargos\s+)?\+', re.I)
             else:
                 # For other banks, use simple string matching
                 movement_end_pattern = re.compile(re.escape(movement_end_string), re.I)
@@ -5864,6 +5979,23 @@ def main():
                         continue  # Skip the movements_start line
                 
                 mov_section_line_num += 1
+                
+                # Banamex new format: capture Total Abonos/Cargos from "Pagos y abonos" and "Cargos regulares (no a meses)" for Valor en PDF
+                if bank_config['name'] == 'Banamex' and banamex_new_format and all_row_text_orig:
+                    _amt_in_line = re.search(r'\$\s*([\d,]+\.\d{2})|(?<!\d)(\d{1,3}(?:,\d{3})*\.\d{2})(?=\s|$|[^\d])', all_row_text_orig)
+                    if _amt_in_line:
+                        _val = _amt_in_line.group(1) or _amt_in_line.group(2)
+                        try:
+                            _num = normalize_amount_str(_val)
+                        except Exception:
+                            _num = None
+                        if _num is not None:
+                            # "Pagos y abonos" -> Total Abonos (Valor en PDF)
+                            if re.search(r'Pagos\s+y\s+abonos', all_row_text_orig, re.I) and banamex_new_fmt_totals.get('total_abonos') is None:
+                                banamex_new_fmt_totals['total_abonos'] = _num
+                            # "Cargos regulares (no a meses)" -> Total Cargos (Valor en PDF); allow OCR variants (no a mes, etc.)
+                            if re.search(r'Cargos\s+regulares\s*\(?\s*no\s+a\s+meses?', all_row_text_orig, re.I) and banamex_new_fmt_totals.get('total_cargos') is None:
+                                banamex_new_fmt_totals['total_cargos'] = _num
                 
                 # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
                 if bank_config['name'] == 'Banregio':
@@ -5986,6 +6118,7 @@ def main():
                         # For BBVA, mark that we've left the movements section
                         if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
                             in_bbva_movements_section = False
+                        # Banamex new format: validation totals from "Pagos y abonos" / "Cargos regulares (no a meses)" only; treat movements_end like other banks
                         _disp = "END (movements_end matched, not added)"
                         _debug_mov_line(all_row_text_orig, None, _disp)
                         extraction_stopped = True
@@ -5996,6 +6129,42 @@ def main():
                 # Santander: sanitize duplicated-character lines before extraction
                 row_words_for_extract = _santander_sanitize_row_words_if_duplicated(row_words) if bank_config['name'] == 'Santander' else row_words
                 row_data = extract_movement_row(row_words_for_extract, columns_config, bank_config['name'], date_pattern)
+                
+                # Banamex: override from line text for new format only (fecha, descripcion, cargo/abono from +/- in line or prev/next)
+                # Run when header set banamex_new_format, OR when line has DD-mon-YYYY with lowercase month (e.g. 13-oct-2025); classic uses "30 ENE" (uppercase)
+                if bank_config['name'] == 'Banamex' and all_row_text_orig:
+                    # DD-mon-YYYY with optional space between day and month (OCR may output "13 oct-2025")
+                    _bnf_date_re = re.compile(r'\b(0?[1-9]|[12][0-9]|3[01])[- ]([a-z]{3})[- ]?(\d{4})\b', re.I)
+                    _bnf_date_re_strict = re.compile(r'\b(0?[1-9]|[12][0-9]|3[01])-[a-z]{3}-\d{4}\b', re.I)
+                    # Amount: $ optional space digits/comma .XX (or standalone NNN.NN / N,NNN.NN not part of year)
+                    _bnf_amt_re = re.compile(r'\$\s*[\d,]+\.\d{2}')
+                    _bnf_amt_re_alt = re.compile(r'(?<!\d)(\d{1,3}(?:,\d{3})*\.\d{2})(?=\s|$|[^\d])')
+                    dates = [f"{m.group(1)}-{m.group(2)}-{m.group(3)}" for m in _bnf_date_re.finditer(all_row_text_orig)]
+                    if not dates:
+                        dates = _bnf_date_re_strict.findall(all_row_text_orig)
+                    amt_m = _bnf_amt_re.search(all_row_text_orig)
+                    if not amt_m:
+                        amt_m = _bnf_amt_re_alt.search(all_row_text_orig)
+                    # Override only for new format: header detected OR line has DD-mon-YYYY with lowercase month (classic uses "30 ENE" uppercase)
+                    _is_new_fmt_line = banamex_new_format or (bool(dates) and bool(re.search(r'-[a-z]{3}-', dates[0])))
+                    if dates and amt_m and _is_new_fmt_line:
+                        prev_line_text = ' '.join([w.get('text', '') for w in word_rows[row_idx - 1]]) if row_idx > 0 else ''
+                        row_data['fecha'] = dates[-1]  # last date (e.g. 19-oct-2025); keep full DD-mon-YYYY
+                        amount_val = amt_m.group().strip()
+                        if not amount_val.startswith('$'):
+                            amount_val = '$' + amount_val
+                        desc_line = _bnf_date_re.sub(' ', all_row_text_orig)
+                        desc_line = _bnf_amt_re.sub(' ', desc_line, count=1)
+                        if _bnf_amt_re.search(desc_line) is None and _bnf_amt_re_alt.search(all_row_text_orig):
+                            desc_line = _bnf_amt_re_alt.sub(' ', desc_line, count=1)
+                        row_data['descripcion'] = ' '.join(desc_line.split()).strip().lstrip('|').strip()
+                        # + on current or previous line = cargo; else abono (next line's + applies to next movement)
+                        is_cargo = '+' in prev_line_text or '+' in all_row_text_orig
+                        row_data['cargos'] = amount_val if is_cargo else ''
+                        row_data['abonos'] = amount_val if not is_cargo else ''
+                        row_data['saldo'] = ''
+                        if 'monto' in row_data:
+                            del row_data['monto']
                 
                 # Debug for Konfio: print row data after extraction (only first 3 pages)
                 if bank_config['name'] == 'Konfio' and page_num <= 3:
@@ -6037,9 +6206,14 @@ def main():
                         clara_date_pattern = re.compile(r'\d{1,2}\s+[A-Z]{3}|\d{1,2}\s+[A-Z]\s+[A-Z]\s+[A-Z]', re.I)
                         has_date = bool(clara_date_pattern.search(fecha_val))
                     elif bank_config['name'] == 'Banamex':
-                        # For Banamex, check if fecha contains a valid date pattern (e.g., "30 ENE" or "10 ENE")
-                        banamex_date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])\s+[A-Z]{3}\b', re.I)
-                        has_date = bool(banamex_date_pattern.search(fecha_val))
+                        # Classic: day + 3-letter month (e.g. "30 ENE"). New format: DD-mon-YYYY (e.g. 13-oct-2025)
+                        banamex_dd_mon_yyyy = re.compile(r'\b(0?[1-9]|[12][0-9]|3[01])-[a-z]{3}-\d{4}\b', re.I)
+                        if banamex_new_format or banamex_dd_mon_yyyy.search(fecha_val):
+                            has_date = bool(banamex_dd_mon_yyyy.search(fecha_val))
+                        else:
+                            # Classic Banamex only
+                            banamex_date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])\s+[A-Z]{3}\b', re.I)
+                            has_date = bool(banamex_date_pattern.search(fecha_val))
                     else:
                         has_date = bool(date_pattern.search(fecha_val))
                         # For Inbursa, use strict date pattern: "MES. DD" or "MES DD" at start of line
@@ -6210,6 +6384,7 @@ def main():
                         #row_data['page'] = page_num
                         _disp = "ADDED"
                         movement_rows.append(row_data)
+                        _debug_mov_line(all_row_text_orig, row_data, _disp)
                     elif has_description_or_amounts:
                         # For HSBC, validate row before adding
                         if bank_config['name'] == 'HSBC':
@@ -7850,8 +8025,8 @@ def main():
     if bank_config['name'] == 'Banamex':
         # print("🔍 Extrayendo secciones DIGITEM y TRANSFERENCIA directamente del PDF...")
         
-        # Extract DIGITEM section from PDF using same coordinate-based extraction as Movements
-        df_digitem = extract_digitem_section(pdf_path, columns_config)
+        # Extract DIGITEM section using already-extracted data to avoid second PDF/OCR pass
+        df_digitem = extract_digitem_section(pdf_path, columns_config, extracted_data=extracted_data)
         
         # Extract Transferencias section from PDF
         df_transferencias = extract_transferencia_section(pdf_path)
@@ -7941,6 +8116,12 @@ def main():
     # Para otros casos, extraer desde PDF
     if not (is_hsbc and used_ocr):
         pdf_summary = extract_summary_from_pdf(pdf_path, movement_start_page=movement_start_page)
+    # Banamex new format: use Total cargos/abonos from "Total +" and "Total" lines for validation (Valor en PDF)
+    if banamex_new_fmt_totals and pdf_summary:
+        if banamex_new_fmt_totals.get('total_cargos') is not None:
+            pdf_summary['total_cargos'] = banamex_new_fmt_totals['total_cargos']
+        if banamex_new_fmt_totals.get('total_abonos') is not None:
+            pdf_summary['total_abonos'] = banamex_new_fmt_totals['total_abonos']
     # Si es HSBC con OCR, pdf_summary ya fue extraído arriba en extract_hsbc_summary_from_ocr_text
     extracted_totals = calculate_extracted_totals(df_mov, bank_config['name'])
     
