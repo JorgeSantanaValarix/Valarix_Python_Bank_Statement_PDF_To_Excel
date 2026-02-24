@@ -1913,6 +1913,16 @@ def extract_period_text_from_text(full_text: str):
     """
     if not full_text or not full_text.strip():
         return None
+    # Mercury: "2025-July 31, 2025" or "2025-July\n31,\n2025" -> "July 2025-July 31, 2025"
+    mercury_period = re.search(
+        r'(\d{4})\s*-\s*(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s*(\d{4})',
+        full_text.replace('\n', ' '),
+        re.IGNORECASE,
+    )
+    if mercury_period:
+        year1, month_name, day, year2 = mercury_period.group(1), mercury_period.group(2), mercury_period.group(3), mercury_period.group(4)
+        month_cap = month_name.capitalize()
+        return f"{month_cap} {year1}-{month_cap} {day}, {year2}"
     # Santander: "PERIODO DEL 01-ENE-2026 AL 31-ENE-2026" -> return only "01-ENE-2026 AL 31-ENE-2026"
     santander_periodo = re.search(
         r'(?i)PERIODO\s+DEL\s+(\d{1,2}-[A-Z]{3}-\d{2,4})\s+AL\s+(\d{1,2}-[A-Z]{3}-\d{2,4})',
@@ -1961,6 +1971,75 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
         return (rfc, name)
     lines = full_text.split('\n')
     bank_keywords = BANK_KEYWORDS.get(detected_bank, []) if detected_bank else []
+
+    # Mercury: EIN (e.g. "EIN ••9023") and name = text before "Account details" (e.g. "CONTAAYUDA USA INC")
+    if detected_bank == 'Mercury':
+        # EIN: "EIN" followed by value on same line or next line (e.g. "••9023")
+        ein_value = None
+        for i, line in enumerate(lines):
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+            if re.search(r'\bEIN\b', line_stripped, re.IGNORECASE):
+                after_ein = re.sub(r'^.*?\bEIN\b\s*', '', line_stripped, count=1, flags=re.IGNORECASE).strip()
+                if after_ein:
+                    ein_value = 'EIN ' + after_ein
+                else:
+                    for j in range(i + 1, min(i + 3, len(lines))):
+                        next_line = lines[j].strip()
+                        if next_line:
+                            ein_value = 'EIN ' + next_line
+                            break
+                break
+        if ein_value:
+            rfc = ein_value
+        # Name: lines before "Account" + "details" (same or adjacent line), joined (e.g. "CONTAAYUDA USA INC")
+        account_details_idx = None
+        for i, line in enumerate(lines):
+            line_lower = line.strip().lower()
+            if not line_lower:
+                continue
+            if 'account' in line_lower and 'details' in line_lower:
+                account_details_idx = i
+                break
+            if 'account' in line_lower and i + 1 < len(lines) and 'details' in (lines[i + 1].strip().lower() or ''):
+                account_details_idx = i
+                break
+        if account_details_idx is not None and account_details_idx > 0:
+            # Mercury: name is only the block immediately before "Account details" (e.g. CONTAAYUDA USA INC).
+            # Exclude all date/header lines (July, 2025, statement, 2025-July 31, 2025 (31 days), All dates in UTC).
+            mercury_header_words = {
+                'statement', 'all', 'dates', 'in', 'utc', 'days', 'days)', 'july', 'jan', 'feb', 'mar', 'apr', 'may', 'jun',
+                'aug', 'sep', 'oct', 'nov', 'dec', 'january', 'february', 'march', 'april', 'june', 'august',
+                'september', 'october', 'november', 'december', '(31', '(', ')', '31', '31,',
+            }
+            def line_contains_any_header(line):
+                t = line.strip()
+                if not t:
+                    return True
+                words = re.split(r'\s+', t)
+                for w in words:
+                    w_clean = w.rstrip(',')
+                    if w_clean.lower() in mercury_header_words:
+                        return True
+                    if re.match(r'^\d{4}$', w_clean):
+                        return True
+                    if re.match(r'^\d{4}-\w+', w_clean):
+                        return True
+                return False
+            # Take only the last run of non-header lines immediately before "Account details"
+            name_parts = []
+            for i in range(account_details_idx - 1, -1, -1):
+                t = lines[i].strip()
+                if not t:
+                    continue
+                if line_contains_any_header(t):
+                    break
+                name_parts.append(t)
+            name_parts.reverse()
+            if name_parts:
+                name = ' '.join(name_parts)
+        return (rfc, name)
 
     # RFC: try multiple patterns (RFC:, R.F.C., R.F.C , Registro Federal de Contribuyentes:, or line with only RFC value)
     rfc_value_re = r'([A-ZÑ]{3,4}\s*\d{6}\s*[A-Z0-9]{2,3})'
