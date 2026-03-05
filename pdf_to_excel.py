@@ -383,6 +383,27 @@ def normalize_amount_str(amount_str):
         return 0.0
 
 
+def normalize_hsbc_single_amount(value: str) -> str:
+    """For HSBC: ensure cargos/abonos/saldo contain only one numeric amount with 2 decimals.
+    Strips any extra text or digits after the amount (e.g. '$ 29,694.83 2' -> '$29,694.83').
+    Returns normalized '$X,XXX.XX' or empty string if no valid amount."""
+    if not value or not isinstance(value, str):
+        return '' if not value else value
+    value = value.strip()
+    if not value:
+        return ''
+    # Match single amount: optional $, optional space, digits with optional comma/space grouping, then exactly .XX
+    match = re.match(r'(\$?\s*\d{1,3}(?:[,\s]\d{3})*\.\d{2})', value)
+    if not match:
+        return ''
+    amount = match.group(1)
+    # Normalize: remove internal spaces, ensure $ prefix
+    amount_clean = re.sub(r'\s+', '', amount)
+    if not amount_clean.startswith('$'):
+        amount_clean = '$' + amount_clean
+    return amount_clean
+
+
 def fix_duplicated_chars(text_str):
     """Fix duplicated characters in text (e.g., 'PPaaggoo' -> 'Pagos').
     This happens with some PDF encodings where each character is duplicated.
@@ -1622,6 +1643,10 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict 
             # If there are 2+ amounts and saldo is not assigned, assign the last amount to saldo
             movement['saldo'] = amounts[-1].strip()
         
+        # HSBC: ensure cargos, abonos, saldo contain only one numeric amount (2 decimals), nothing after
+        movement['cargos'] = normalize_hsbc_single_amount(movement['cargos'])
+        movement['abonos'] = normalize_hsbc_single_amount(movement['abonos'])
+        movement['saldo'] = normalize_hsbc_single_amount(movement['saldo'])
         
         if movement['descripcion'] and (movement['cargos'] or movement['abonos'] or movement['saldo']):
             movements.append(movement)
@@ -5904,6 +5929,11 @@ def main():
                 # Si la descripción sigue vacía (sin residual o residual vacío), usar "."
                 if not row_data.get('descripcion'):
                     row_data['descripcion'] = '.'
+                
+                # HSBC: ensure cargos, abonos, saldo contain only one numeric amount (2 decimals), nothing after
+                for col in ('cargos', 'abonos', 'saldo'):
+                    if row_data.get(col):
+                        row_data[col] = normalize_hsbc_single_amount(row_data[col])
                 
                 # Validar si es una transacción válida
                 is_valid = is_transaction_row(row_data, 'HSBC', debug_only_if_contains_iva=False)
