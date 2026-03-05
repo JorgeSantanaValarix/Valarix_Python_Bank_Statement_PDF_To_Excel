@@ -1643,9 +1643,7 @@ def extract_hsbc_movements_from_ocr_text(pages_data: list, columns_config: dict 
             # If there are 2+ amounts and saldo is not assigned, assign the last amount to saldo
             movement['saldo'] = amounts[-1].strip()
         
-        # HSBC: ensure cargos, abonos, saldo contain only one numeric amount (2 decimals), nothing after
-        movement['cargos'] = normalize_hsbc_single_amount(movement['cargos'])
-        movement['abonos'] = normalize_hsbc_single_amount(movement['abonos'])
+        # HSBC: ensure saldo contains only one numeric amount (2 decimals), nothing after
         movement['saldo'] = normalize_hsbc_single_amount(movement['saldo'])
         
         if movement['descripcion'] and (movement['cargos'] or movement['abonos'] or movement['saldo']):
@@ -5930,10 +5928,9 @@ def main():
                 if not row_data.get('descripcion'):
                     row_data['descripcion'] = '.'
                 
-                # HSBC: ensure cargos, abonos, saldo contain only one numeric amount (2 decimals), nothing after
-                for col in ('cargos', 'abonos', 'saldo'):
-                    if row_data.get(col):
-                        row_data[col] = normalize_hsbc_single_amount(row_data[col])
+                # HSBC: ensure saldo contains only one numeric amount (2 decimals), nothing after
+                if row_data.get('saldo'):
+                    row_data['saldo'] = normalize_hsbc_single_amount(row_data['saldo'])
                 
                 # Validar si es una transacción válida
                 is_valid = is_transaction_row(row_data, 'HSBC', debug_only_if_contains_iva=False)
