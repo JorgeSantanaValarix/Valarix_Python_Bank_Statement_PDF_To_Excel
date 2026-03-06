@@ -8557,6 +8557,15 @@ def main():
                     break
         if idx != -1:
             _summary['name'] = s[:idx].strip()
+    # Santander: trim at "CODIGO DE CLIENTE" / "CODIFO DE CLIENTE" so Nombre is only the company name (e.g. "SERVICIOS MARINOS RAMM SA DE CV")
+    if bank_config['name'] == 'Santander' and _summary.get('name') and isinstance(_summary['name'], str):
+        s = _summary['name']
+        su = s.upper()
+        idx = su.find('CODIGO DE CLIENTE')
+        if idx == -1:
+            idx = su.find('CODIFO DE CLIENTE')  # typo tolerance
+        if idx != -1:
+            _summary['name'] = s[:idx].strip()
     # Ensure at least 2 columns (e.g. HSBC OCR can yield single-column df when no valid movements)
     if len(df_mov.columns) < 2:
         default_mov_cols = ['Fecha', 'Descripción', 'Abonos', 'Cargos', 'Saldo']
