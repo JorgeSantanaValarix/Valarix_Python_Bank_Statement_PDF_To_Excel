@@ -2126,6 +2126,39 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                 rfc = re.sub(r'\s+', '', line_stripped).upper()
                 break
 
+    # HSBC fallback: if RFC (or name) still blank, look for a line that contains a valid Mexican regimen (601-626) and an RFC
+    # e.g. "ANA MARIA ALVARADO QUEZADA AAQA620417J80 45085 605-Sueldos Salarios Ingresos Asimilados S01-Sin efectos fiscales"
+    # Nombre = text before the RFC on that line; RFC = the matched value.
+    if (rfc is None or name is None) and detected_bank == 'HSBC':
+        # Valid SAT regimen codes (Mexico): 601 through 626
+        regimen_code_re = re.compile(r'\b(60[1-9]|61[0-9]|62[0-6])(?=-|\s)', re.IGNORECASE)
+        hsbc_rfc_in_line = re.compile(r'\b([A-ZÑ]{3,4}\s*\d{6}\s*[A-Z0-9]{2,3})\b', re.IGNORECASE)
+        for line in lines:
+            line_stripped = (line or '').strip()
+            if not line_stripped:
+                continue
+            if not regimen_code_re.search(line_stripped):
+                continue
+            m = hsbc_rfc_in_line.search(line_stripped)
+            if m:
+                if rfc is None:
+                    rfc = re.sub(r'\s+', '', m.group(1)).upper()
+                if name is None:
+                    name_before_rfc = line_stripped[:m.start()].strip()
+                    # Use only the last run of purely alphabetic words (avoids headers like "Subtotal: Total: Nombre Receptor: RFC Receptor: ...")
+                    parts = name_before_rfc.split()
+                    name_parts = []
+                    for p in reversed(parts):
+                        if p and all(c.isalpha() or c in "'-" for c in p):
+                            name_parts.append(p)
+                        else:
+                            break
+                    name_parts.reverse()
+                    candidate = ' '.join(name_parts).strip() if name_parts else ''
+                    if len(candidate) >= 3 and len(name_parts) >= 2:
+                        name = candidate
+                break
+
     # Name: lines with company suffixes (SA DE CV, S.A. DE C.V., etc.), excluding bank's own name
     company_suffixes = [
         'SA DE CV', 'S.A. DE C.V.', 'S.A. DE C.V', 'S. DE R.L. DE C.V.', 'S. DE R.L. DE C.V',
@@ -8386,6 +8419,19 @@ def main():
         df_mov,
         pd.DataFrame([row_blank, row_rfc, row_name, row_period]),
     ], ignore_index=True)
+    
+    if debug_mode:
+        print("Periodo:", (_summary.get('period_text') or '').strip() or '(vacío)', flush=True)
+        print("Nombre:", (_summary.get('name') or '').strip() or '(vacío)', flush=True)
+        print("RFC:", (_summary.get('rfc') or '').strip() or '(vacío)', flush=True)
+    
+    # Always print Periodo, Nombre, RFC at end of run (normal and debug)
+    _p = (_summary.get('period_text') or '').strip() or '—'
+    _n = (_summary.get('name') or '').strip() or '—'
+    _r = (_summary.get('rfc') or '').strip() or '—'
+    print("📅 Periodo:", _p, flush=True)
+    print("👤 Nombre:", _n, flush=True)
+    print("🆔 RFC:", _r, flush=True)
     
     # Create validation sheet
     #print("📋 Creando pestaña de validación...")
