@@ -1982,6 +1982,33 @@ def extract_period_text_from_text(full_text: str):
     return None
 
 
+def extract_rfc_from_raw_konfio(raw_first_page_text: str):
+    """
+    Konfio only: extract RFC from raw (unfixed) first page text.
+    Raw PDF may have duplicated chars (e.g. RRFFCC AMM160915BU4). We detect the label
+    (RRFFCC or RFC) and take the value that follows; use that value as-is (raw),
+    only normalize spaces and case (no fix_duplicated_chars on the value).
+    Returns normalized (spaces removed, uppercase) RFC string or None.
+    """
+    if not raw_first_page_text or not raw_first_page_text.strip():
+        return None
+    # Label: duplicated "RFC" (R+F+C+) or plain RFC; then require space(s) and capture next token (RFC value, use raw)
+    value_after_label = re.compile(r'(?:R+F+C+|(?<!\w)RFC(?!\w))\s+([A-ZÑ0-9]{10,20})', re.IGNORECASE)
+    for m in value_after_label.finditer(raw_first_page_text):
+        raw_value = m.group(1).strip()
+        if not raw_value or len(raw_value) < 10:
+            continue
+        # Use raw value: only remove spaces and uppercase
+        rfc_val = re.sub(r'\s+', '', raw_value).upper()
+        if rfc_val:
+            return rfc_val
+    return None
+
+
+# When --debug: collect lines for RFC extraction log (written to _movements_debug.txt)
+RFC_DEBUG_LINES = []
+
+
 def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
     """
     Extract RFC and name (razón social) from PDF text.
@@ -1995,6 +2022,16 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
     lines = full_text.split('\n')
     bank_keywords = BANK_KEYWORDS.get(detected_bank, []) if detected_bank else []
 
+    def _rfc_debug(msg):
+        if '--debug' not in sys.argv:
+            return
+        RFC_DEBUG_LINES.append(msg)
+        print(msg, flush=True)
+
+    if '--debug' in sys.argv:
+        RFC_DEBUG_LINES.clear()
+        _rfc_debug("--- RFC extraction (bank=%s) ---" % (detected_bank or 'None'))
+
     # Mercury: EIN (e.g. "EIN ••9023") and name = text before "Account details" (e.g. "CONTAAYUDA USA INC")
     if detected_bank == 'Mercury':
         # EIN: "EIN" followed by value on same line or next line (e.g. "••9023")
@@ -2004,6 +2041,7 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
             if not line_stripped:
                 continue
             if re.search(r'\bEIN\b', line_stripped, re.IGNORECASE):
+                _rfc_debug("RFC_CHECK (Mercury EIN): %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
                 after_ein = re.sub(r'^.*?\bEIN\b\s*', '', line_stripped, count=1, flags=re.IGNORECASE).strip()
                 if after_ein:
                     ein_value = 'EIN ' + after_ein
@@ -2016,6 +2054,7 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                 break
         if ein_value:
             rfc = ein_value
+            _rfc_debug("RFC_MATCH (Mercury EIN): %s" % rfc)
         # Name: lines before "Account" + "details" (same or adjacent line), joined (e.g. "CONTAAYUDA USA INC")
         account_details_idx = None
         for i, line in enumerate(lines):
@@ -2065,12 +2104,13 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
         return (rfc, name)
 
     # RFC: try multiple patterns (RFC:, R.F.C., R.F.C , Registro Federal de Contribuyentes:, or line with only RFC value)
-    rfc_value_re = r'([A-ZÑ]{3,4}\s*\d{6}\s*[A-Z0-9]{2,3})'
+    # Allow 2-4 letters: standard is 3 (moral) or 4 (física); some RFCs have 2 letters (e.g. AM160915BU4)
+    rfc_value_re = r'([A-ZÑ]{2,4}\s*\d{6}\s*[A-Z0-9]{2,3})'
     rfc_patterns = [
         re.compile(r'Registro\s+Federal\s+de\s+Contribuyentes\s*:\s*' + rfc_value_re, re.IGNORECASE),
         re.compile(r'(?:R\.F\.C\.?|RFC)\s*:?\s*(?:Cliente\s+)?' + rfc_value_re, re.IGNORECASE),
     ]
-    only_rfc_pattern = re.compile(r'^([A-ZÑ]{3,4}\s*\d{6}\s*[A-Z0-9]{2,3})$', re.IGNORECASE)
+    only_rfc_pattern = re.compile(r'^([A-ZÑ]{2,4}\s*\d{6}\s*[A-Z0-9]{2,3})$', re.IGNORECASE)
     # Line is "RFC" or "R.F.C." label only (no value on same line) - e.g. HSBC where value is on next line
     rfc_label_only = re.compile(r'\b(?:R\.F\.C\.?|RFC)\s*$', re.IGNORECASE)
 
@@ -2079,10 +2119,12 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
         if not line_stripped:
             continue
         if rfc is None:
+            _rfc_debug("RFC_CHECK: %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
             for pat in rfc_patterns:
                 m = pat.search(line_stripped)
                 if m:
                     rfc = re.sub(r'\s+', '', m.group(1)).upper()
+                    _rfc_debug("RFC_MATCH: %s" % rfc)
                     break
             if rfc is not None:
                 break
@@ -2092,7 +2134,7 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
         # RFC label anywhere in line (not only at end), e.g. "... RFC > Plaza 26 XAXX010101000 ..."
         hsbc_rfc_label_anywhere = re.compile(r'\b(?:R\.F\.C\.?|RFC)\b', re.IGNORECASE)
         # Pattern for RFC substring: 3-4 letters, 6 digits, 3 alphanumeric (homoclave); optional spaces for OCR.
-        hsbc_rfc_substring = re.compile(r'\b([A-ZÑ]{3,4}\s*\d{6}\s*[A-Z0-9]{3})\b', re.IGNORECASE)
+        hsbc_rfc_substring = re.compile(r'\b([A-ZÑ]{2,4}\s*\d{6}\s*[A-Z0-9]{3})\b', re.IGNORECASE)
         for i, line in enumerate(lines):
             line_stripped = line.strip()
             label_match = hsbc_rfc_label_anywhere.search(line_stripped) if line_stripped else None
@@ -2100,20 +2142,24 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
             if not line_stripped:
                 continue
             if rfc_label_found:
+                _rfc_debug("RFC_CHECK (HSBC label): %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
                 # First try same line: search for RFC value after the "RFC" label
                 after_label = line_stripped[label_match.end():] if label_match else line_stripped
                 m = hsbc_rfc_substring.search(after_label)
                 if m:
                     rfc = re.sub(r'\s+', '', m.group(1)).upper()
+                    _rfc_debug("RFC_MATCH (HSBC): %s" % rfc)
                     break
                 # Else search in the next 2 lines
                 for j in range(i + 1, min(i + 3, len(lines))):
                     candidate = lines[j].strip()
                     if not candidate:
                         continue
+                    _rfc_debug("RFC_CHECK (HSBC next line): %s" % (candidate[:200] + '...' if len(candidate) > 200 else candidate))
                     m = hsbc_rfc_substring.search(candidate)
                     if m:
                         rfc = re.sub(r'\s+', '', m.group(1)).upper()
+                        _rfc_debug("RFC_MATCH (HSBC): %s" % rfc)
                         break
                 if rfc is not None:
                     break
@@ -2122,9 +2168,12 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
     if rfc is None:
         for line in lines:
             line_stripped = line.strip()
-            if 10 <= len(line_stripped) <= 14 and only_rfc_pattern.match(line_stripped):
-                rfc = re.sub(r'\s+', '', line_stripped).upper()
-                break
+            if 10 <= len(line_stripped) <= 14:
+                _rfc_debug("RFC_CHECK (fallback line-only): %s" % line_stripped)
+                if only_rfc_pattern.match(line_stripped):
+                    rfc = re.sub(r'\s+', '', line_stripped).upper()
+                    _rfc_debug("RFC_MATCH (fallback): %s" % rfc)
+                    break
 
     # HSBC fallback: if RFC (or name) still blank, look for a line that contains a valid Mexican regimen (601-626) and an RFC
     # e.g. "ANA MARIA ALVARADO QUEZADA AAQA620417J80 45085 605-Sueldos Salarios Ingresos Asimilados S01-Sin efectos fiscales"
@@ -2132,17 +2181,19 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
     if (rfc is None or name is None) and detected_bank == 'HSBC':
         # Valid SAT regimen codes (Mexico): 601 through 626
         regimen_code_re = re.compile(r'\b(60[1-9]|61[0-9]|62[0-6])(?=-|\s)', re.IGNORECASE)
-        hsbc_rfc_in_line = re.compile(r'\b([A-ZÑ]{3,4}\s*\d{6}\s*[A-Z0-9]{2,3})\b', re.IGNORECASE)
+        hsbc_rfc_in_line = re.compile(r'\b([A-ZÑ]{2,4}\s*\d{6}\s*[A-Z0-9]{2,3})\b', re.IGNORECASE)
         for line in lines:
             line_stripped = (line or '').strip()
             if not line_stripped:
                 continue
             if not regimen_code_re.search(line_stripped):
                 continue
+            _rfc_debug("RFC_CHECK (HSBC regimen): %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
             m = hsbc_rfc_in_line.search(line_stripped)
             if m:
                 if rfc is None:
                     rfc = re.sub(r'\s+', '', m.group(1)).upper()
+                    _rfc_debug("RFC_MATCH (HSBC regimen): %s" % rfc)
                 if name is None:
                     name_before_rfc = line_stripped[:m.start()].strip()
                     # Use only the last run of purely alphabetic words (avoids headers like "Subtotal: Total: Nombre Receptor: RFC Receptor: ...")
@@ -2345,12 +2396,14 @@ def extract_summary_from_pdf(pdf_path: str, movement_start_page: int = None) -> 
             full_text = all_text if all_text else '\n'.join(all_lines)
             if full_text:
                 summary_data['period_text'] = extract_period_text_from_text(full_text)
-                # Konfio: RFC is on first page only — find "RFC" label, next valid RFC is the statement RFC
+                # Konfio: RFC from raw first page (RRFFCC/AMM160915BU4); name and period from fixed text
                 if bank_name == "Konfio" and len(pdf.pages) >= 1:
-                    first_page_text = pdf.pages[0].extract_text() or ""
-                    if first_page_text:
-                        first_page_text = fix_duplicated_chars(first_page_text)
-                    rfc_val, name_val = extract_rfc_and_name_from_text(first_page_text or full_text, detected_bank=bank_name)
+                    first_page_raw = pdf.pages[0].extract_text() or ""
+                    first_page_fixed = fix_duplicated_chars(first_page_raw) if first_page_raw else ""
+                    rfc_val, name_val = extract_rfc_and_name_from_text(first_page_fixed or full_text, detected_bank=bank_name)
+                    rfc_from_raw = extract_rfc_from_raw_konfio(first_page_raw)
+                    if rfc_from_raw is not None:
+                        rfc_val = rfc_from_raw
                 else:
                     rfc_val, name_val = extract_rfc_and_name_from_text(full_text, detected_bank=bank_name)
                 summary_data['rfc'] = rfc_val
@@ -5998,9 +6051,13 @@ def main():
         # Extraer resumen desde texto OCR de la página 1
         pdf_summary = extract_hsbc_summary_from_ocr_text(extracted_data)
         
-        # Debug: write movements debug file for HSBC OCR path (summary + movements)
+        # Debug: write movements debug file for HSBC OCR path (RFC log + summary + movements)
         if debug_path is not None:
             with open(debug_path, 'w', encoding='utf-8') as f:
+                for _line in RFC_DEBUG_LINES:
+                    f.write(_line + "\n")
+                if RFC_DEBUG_LINES:
+                    f.write("\n")
                 _sum = pdf_summary or {}
                 f.write("RFC: " + ((_sum.get('rfc') or '').strip() or '(vacío)') + "\n")
                 f.write("Nombre: " + ((_sum.get('name') or '').strip() or '(vacío)') + "\n")
@@ -8319,9 +8376,13 @@ def main():
         if banamex_new_fmt_totals.get('total_abonos') is not None:
             pdf_summary['total_abonos'] = banamex_new_fmt_totals['total_abonos']
     # Si es HSBC con OCR, pdf_summary ya fue extraído arriba en extract_hsbc_summary_from_ocr_text
-    # Debug: write movements debug file for coordinate path (summary + movements; HSBC OCR path writes earlier)
+    # Debug: write movements debug file for coordinate path (RFC log + summary + movements; HSBC OCR path writes earlier)
     if debug_path is not None and not (is_hsbc and used_ocr):
         with open(debug_path, 'w', encoding='utf-8') as f:
+            for _line in RFC_DEBUG_LINES:
+                f.write(_line + "\n")
+            if RFC_DEBUG_LINES:
+                f.write("\n")
             _sum = pdf_summary or {}
             f.write("RFC: " + ((_sum.get('rfc') or '').strip() or '(vacío)') + "\n")
             f.write("Nombre: " + ((_sum.get('name') or '').strip() or '(vacío)') + "\n")
