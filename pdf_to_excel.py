@@ -2289,6 +2289,19 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                     break
             break
 
+    # Banorte: Nombre = next line after the line containing "ESTADO DE CUENTA / ENLACE" (e.g. "CASA MEXICANA LAS PALMAS AC")
+    if detected_bank == 'Banorte':
+        marker = 'estado de cuenta / enlace'
+        for i, line in enumerate(lines):
+            if marker not in line.strip().lower():
+                continue
+            for j in range(i + 1, len(lines)):
+                nxt = lines[j].strip()
+                if nxt:
+                    name = nxt
+                    break
+            break
+
     # HSBC-specific fallback: personal-name style line before address (e.g. "JUSEOG AN" followed by address)
     if name is None and detected_bank == 'HSBC':
         address_keywords = ['CLL', 'CALLE', 'SECCION', 'COL', 'PROV', 'AV.', 'AV ', 'NO ', 'NUM', 'C.P', 'CP ']
