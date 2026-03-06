@@ -2402,6 +2402,12 @@ def extract_summary_from_pdf(pdf_path: str, movement_start_page: int = None) -> 
                     intercam_period = re.search(r'DEL\s+\d{4}-\d{2}-\d{2}\s+AL\s+\d{4}-\d{2}-\d{2}', pt, re.IGNORECASE)
                     if intercam_period:
                         summary_data['period_text'] = intercam_period.group(0).strip()
+                # Banamex: trim period to only "DD-mon-YYYY al DD-mon-YYYY" (e.g. 20-sep-2025 al 21-oct-2025; drop Fecha de corte, Número de días, etc.)
+                if bank_name == "Banamex" and summary_data.get('period_text'):
+                    pt = summary_data['period_text']
+                    banamex_period = re.search(r'\d{1,2}-[a-z]{3}-\d{4}\s+al\s+\d{1,2}-[a-z]{3}-\d{4}', pt, re.IGNORECASE)
+                    if banamex_period:
+                        summary_data['period_text'] = banamex_period.group(0).strip()
                 # Konfio: RFC from raw first page (RRFFCC/AMM160915BU4); name and period from fixed text
                 if bank_name == "Konfio" and len(pdf.pages) >= 1:
                     first_page_raw = pdf.pages[0].extract_text() or ""
@@ -8326,6 +8332,17 @@ def main():
     # Para otros casos, extraer desde PDF
     if not (is_hsbc and used_ocr):
         pdf_summary = extract_summary_from_pdf(pdf_path, movement_start_page=movement_start_page)
+    # Banamex with OCR/mixed: reuse HSBC OCR logic to get Nombre and RFC from OCR text (same as extract_hsbc_summary_from_ocr_text)
+    if bank_config['name'] == 'Banamex' and used_ocr and extracted_data:
+        full_text_ocr = '\n'.join(p.get('content', '') or '' for p in extracted_data)
+        if full_text_ocr:
+            rfc_ocr, name_ocr = extract_rfc_and_name_from_text(full_text_ocr, detected_bank='Banamex')
+            if pdf_summary is None:
+                pdf_summary = {}
+            if rfc_ocr is not None:
+                pdf_summary['rfc'] = rfc_ocr
+            if name_ocr is not None:
+                pdf_summary['name'] = name_ocr
     # Banamex new format only: Valor en PDF from "Total +" line → Total Cargos, "Total" line (e.g. "$438.55 Total") → Total Abonos. Scan ALL PDF pages.
     if bank_config['name'] == 'Banamex' and banamex_new_format and extracted_data:
         need_abonos = banamex_new_fmt_totals.get('total_abonos') is None
