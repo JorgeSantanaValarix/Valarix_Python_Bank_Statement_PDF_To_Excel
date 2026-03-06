@@ -2345,7 +2345,14 @@ def extract_summary_from_pdf(pdf_path: str, movement_start_page: int = None) -> 
             full_text = all_text if all_text else '\n'.join(all_lines)
             if full_text:
                 summary_data['period_text'] = extract_period_text_from_text(full_text)
-                rfc_val, name_val = extract_rfc_and_name_from_text(full_text, detected_bank=bank_name)
+                # Konfio: RFC is on first page only — find "RFC" label, next valid RFC is the statement RFC
+                if bank_name == "Konfio" and len(pdf.pages) >= 1:
+                    first_page_text = pdf.pages[0].extract_text() or ""
+                    if first_page_text:
+                        first_page_text = fix_duplicated_chars(first_page_text)
+                    rfc_val, name_val = extract_rfc_and_name_from_text(first_page_text or full_text, detected_bank=bank_name)
+                else:
+                    rfc_val, name_val = extract_rfc_and_name_from_text(full_text, detected_bank=bank_name)
                 summary_data['rfc'] = rfc_val
                 summary_data['name'] = name_val
             
@@ -5988,18 +5995,24 @@ def main():
         
         df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
         
-        # Debug: write movements debug file for HSBC OCR path (same format as coordinate path)
-        if debug_path is not None and debug_movements_lines is not None and len(debug_movements_lines) > 0:
-            with open(debug_path, 'w', encoding='utf-8') as f:
-                for rec in debug_movements_lines:
-                    f.write("ORIGINAL: " + (rec.get('original') or '') + "\n")
-                    f.write("EXCEL: " + (rec.get('excel') or '') + "\n")
-                    f.write("DISPOSITION: " + (rec.get('disposition') or '') + "\n")
-                    f.write("\n")
-            print(f"Debug: movements debug written to -> {debug_path}" + "\n", flush=True)
-        
         # Extraer resumen desde texto OCR de la página 1
         pdf_summary = extract_hsbc_summary_from_ocr_text(extracted_data)
+        
+        # Debug: write movements debug file for HSBC OCR path (summary + movements)
+        if debug_path is not None:
+            with open(debug_path, 'w', encoding='utf-8') as f:
+                _sum = pdf_summary or {}
+                f.write("RFC: " + ((_sum.get('rfc') or '').strip() or '(vacío)') + "\n")
+                f.write("Nombre: " + ((_sum.get('name') or '').strip() or '(vacío)') + "\n")
+                f.write("Periodo: " + ((_sum.get('period_text') or '').strip() or '(vacío)') + "\n")
+                f.write("\n")
+                if debug_movements_lines and len(debug_movements_lines) > 0:
+                    for rec in debug_movements_lines:
+                        f.write("ORIGINAL: " + (rec.get('original') or '') + "\n")
+                        f.write("EXCEL: " + (rec.get('excel') or '') + "\n")
+                        f.write("DISPOSITION: " + (rec.get('disposition') or '') + "\n")
+                        f.write("\n")
+            print(f"Debug: movements debug written to -> {debug_path}" + "\n", flush=True)
         
     else:
         # Flujo normal: procesar con coordenadas o texto plano
@@ -7092,15 +7105,7 @@ def main():
                 if debug_movements_lines is not None:
                     _debug_mov_line(all_row_text_orig, row_data, _disp)
 
-        # Write debug file after coordinate-based extraction (all banks)
-        if debug_path is not None and debug_movements_lines is not None and len(debug_movements_lines) > 0:
-            with open(debug_path, 'w', encoding='utf-8') as f:
-                for rec in debug_movements_lines:
-                    f.write("ORIGINAL: " + (rec.get('original') or '') + "\n")
-                    f.write("EXCEL: " + (rec.get('excel') or '') + "\n")
-                    f.write("DISPOSITION: " + (rec.get('disposition') or '') + "\n")
-                    f.write("\n")
-            print(f"Debug: movements debug written to -> {debug_path}", flush=True)
+        # Write debug file after coordinate-based extraction (summary written later when pdf_summary is available)
 
     # Process summary lines to format them properly
     def format_summary_line(line):
@@ -8314,6 +8319,21 @@ def main():
         if banamex_new_fmt_totals.get('total_abonos') is not None:
             pdf_summary['total_abonos'] = banamex_new_fmt_totals['total_abonos']
     # Si es HSBC con OCR, pdf_summary ya fue extraído arriba en extract_hsbc_summary_from_ocr_text
+    # Debug: write movements debug file for coordinate path (summary + movements; HSBC OCR path writes earlier)
+    if debug_path is not None and not (is_hsbc and used_ocr):
+        with open(debug_path, 'w', encoding='utf-8') as f:
+            _sum = pdf_summary or {}
+            f.write("RFC: " + ((_sum.get('rfc') or '').strip() or '(vacío)') + "\n")
+            f.write("Nombre: " + ((_sum.get('name') or '').strip() or '(vacío)') + "\n")
+            f.write("Periodo: " + ((_sum.get('period_text') or '').strip() or '(vacío)') + "\n")
+            f.write("\n")
+            if debug_movements_lines is not None and len(debug_movements_lines) > 0:
+                for rec in debug_movements_lines:
+                    f.write("ORIGINAL: " + (rec.get('original') or '') + "\n")
+                    f.write("EXCEL: " + (rec.get('excel') or '') + "\n")
+                    f.write("DISPOSITION: " + (rec.get('disposition') or '') + "\n")
+                    f.write("\n")
+        print(f"Debug: movements debug written to -> {debug_path}", flush=True)
     extracted_totals = calculate_extracted_totals(df_mov, bank_config['name'])
     
     # For INTERCAM and Mercury, use last Saldo from Bank Statement Report for validation "Valor en PDF" (Saldo Final)
