@@ -2009,6 +2009,39 @@ def extract_rfc_from_raw_konfio(raw_first_page_text: str):
 RFC_DEBUG_LINES = []
 
 
+def extract_name_from_tarjeta_titular_line(full_text: str):
+    """
+    Fallback for Banamex mixed/OCR: extract Nombre from a line containing "Tarjeta titular:".
+    Example: "Tarjeta titular: 55462590 32436034 SANDRA ISABEL CHAN BALAN" -> "SANDRA ISABEL CHAN BALAN".
+    The part after the colon may contain card numbers (digits/spaces) then the holder name; we strip leading digits/spaces.
+    Returns the name string or None if not found.
+    """
+    if not full_text or not full_text.strip():
+        return None
+    marker = "tarjeta titular:"
+    for line in full_text.split("\n"):
+        line_stripped = line.strip()
+        if not line_stripped:
+            continue
+        idx = line_stripped.lower().find(marker)
+        if idx == -1:
+            continue
+        after = line_stripped[idx + len(marker) :].strip()
+        if not after:
+            continue
+        # Strip leading digits and spaces (card numbers) to get the name
+        i = 0
+        while i < len(after) and (after[i].isdigit() or after[i].isspace()):
+            i += 1
+        name = after[i:].strip()
+        # OCR may concatenate with " | " or "|" (e.g. "SANDRA ISABEL CHAN BALAN | Fecha dela Fecha..."); keep only the name
+        for sep in (" | ", "|", "\n"):
+            name = name.split(sep)[0].strip()
+        if name:
+            return name
+    return None
+
+
 def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
     """
     Extract RFC and name (razón social) from PDF text.
@@ -8342,7 +8375,16 @@ def main():
             if rfc_ocr is not None:
                 pdf_summary['rfc'] = rfc_ocr
             if name_ocr is not None:
-                pdf_summary['name'] = name_ocr
+                # OCR may concatenate with " | " or "|"; keep only the name (e.g. "SANDRA ISABEL CHAN BALAN")
+                nom = name_ocr
+                for sep in (" | ", "|", "\n"):
+                    nom = nom.split(sep)[0].strip()
+                pdf_summary['name'] = nom
+            # Fallback: if name still missing, try "Tarjeta titular: 55462590 32436034 SANDRA ISABEL CHAN BALAN" -> Nombre = SANDRA ISABEL CHAN BALAN
+            if not (pdf_summary.get('name') or '').strip():
+                name_from_titular = extract_name_from_tarjeta_titular_line(full_text_ocr)
+                if name_from_titular:
+                    pdf_summary['name'] = name_from_titular
     # Banamex new format only: Valor en PDF from "Total +" line → Total Cargos, "Total" line (e.g. "$438.55 Total") → Total Abonos. Scan ALL PDF pages.
     if bank_config['name'] == 'Banamex' and banamex_new_format and extracted_data:
         need_abonos = banamex_new_fmt_totals.get('total_abonos') is None
@@ -8500,11 +8542,21 @@ def main():
     
     # Append blank row, then RFC, Name, Period (all banks)
     _summary = pdf_summary or {}
-    # Trim name at " PERIODO" so Nombre shows only the account/customer name (e.g. "ESTEVES DWD MEXICO, S. DE R.L. DE C.V." without " PERIODO DEL 1/ENE/2023...")
+    # Trim name at " PERIODO" / "Periodo del" so Nombre shows only the account/customer name (Base, Konfio, etc.)
+    # e.g. "ESTEVES DWD MEXICO, S. DE R.L. DE C.V. PERIODO DEL 1/ENE/2023..." or "ALUMINIO MARIPOSA MONARCA SA DE CV Periodo del 02 mar 2023..."
     if _summary.get('name') and isinstance(_summary['name'], str):
-        idx = _summary['name'].upper().find(' PERIODO')
+        s = _summary['name']
+        su = s.upper()
+        idx = su.find(' PERIODO')
+        if idx == -1:
+            # e.g. Konfio: "SA DE CVPeriodo del 02 mar 2023" (no space before Periodo)
+            for phrase in ('PERIODO DEL', 'PERIODO AL'):
+                i = su.find(phrase)
+                if i != -1:
+                    idx = i
+                    break
         if idx != -1:
-            _summary['name'] = _summary['name'][:idx].strip()
+            _summary['name'] = s[:idx].strip()
     # Ensure at least 2 columns (e.g. HSBC OCR can yield single-column df when no valid movements)
     if len(df_mov.columns) < 2:
         default_mov_cols = ['Fecha', 'Descripción', 'Abonos', 'Cargos', 'Saldo']
