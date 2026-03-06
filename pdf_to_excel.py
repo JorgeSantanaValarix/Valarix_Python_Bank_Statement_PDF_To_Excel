@@ -2263,6 +2263,19 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
         name = line_stripped
         break
 
+    # Inbursa: Nombre = line immediately above the line containing "Cliente Inbursa:" (e.g. "CONSULTEC, INGENIERIA, ARQUITECTURA Y SUPERVISION, S.A.")
+    if detected_bank == 'Inbursa':
+        marker = 'cliente inbursa:'
+        for i, line in enumerate(lines):
+            if marker not in line.strip().lower():
+                continue
+            for j in range(i - 1, -1, -1):
+                prev = lines[j].strip()
+                if prev:
+                    name = prev
+                    break
+            break
+
     # HSBC-specific fallback: personal-name style line before address (e.g. "JUSEOG AN" followed by address)
     if name is None and detected_bank == 'HSBC':
         address_keywords = ['CLL', 'CALLE', 'SECCION', 'COL', 'PROV', 'AV.', 'AV ', 'NO ', 'NUM', 'C.P', 'CP ']
