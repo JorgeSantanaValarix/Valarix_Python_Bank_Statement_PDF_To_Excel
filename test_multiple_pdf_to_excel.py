@@ -95,7 +95,7 @@ def process_single_pdf(pdf_path: str, script_path: str = "pdf_to_excel.py") -> t
         script_path: Path to pdf_to_excel.py script
     
     Returns:
-        Tuple of (success: bool, error_type: str, error_message: str, elapsed_time: float)
+        Tuple of (success: bool, error_type: str, error_message: str, elapsed_time: float, rfc_empty: bool)
     """
     start_time = time.time()
     
@@ -107,7 +107,7 @@ def process_single_pdf(pdf_path: str, script_path: str = "pdf_to_excel.py") -> t
         # Validate script exists
         if not os.path.isfile(script_path):
             elapsed_time = time.time() - start_time
-            return (False, "Script not found", f"pdf_to_excel.py not found at: {script_path}", elapsed_time)
+            return (False, "Script not found", f"pdf_to_excel.py not found at: {script_path}", elapsed_time, False)
         
         # Build command
         cmd = [sys.executable, script_path, pdf_path]
@@ -142,15 +142,16 @@ def process_single_pdf(pdf_path: str, script_path: str = "pdf_to_excel.py") -> t
         
         # Detect errors
         has_error, error_type, error_message = detect_error_from_output(stderr_text, stdout_text, return_code)
-        
+        # Detect empty RFC: pdf_to_excel.py prints "🆔 RFC: —" or "🆔 RFC: -" when RFC is missing
+        rfc_empty = bool(re.search(r'RFC:\s*[—\-]\s*$', stdout_text, re.MULTILINE)) or '🆔 RFC: —' in stdout_text or 'RFC: —' in stdout_text
         if has_error:
-            return (False, error_type, error_message, elapsed_time)
+            return (False, error_type, error_message, elapsed_time, rfc_empty)
         else:
-            return (True, "", "", elapsed_time)
+            return (True, "", "", elapsed_time, rfc_empty)
     
     except Exception as e:
         elapsed_time = time.time() - start_time
-        return (False, "Execution error", str(e), elapsed_time)
+        return (False, "Execution error", str(e), elapsed_time, False)
 
 
 def format_time(seconds: float) -> str:
@@ -192,6 +193,7 @@ def process_folder(folder_path: str, recursive: bool = False) -> dict:
         'successful': 0,
         'failed': 0,
         'failed_list': [],  # List of dicts: {'file': str, 'error_type': str, 'error_message': str}
+        'rfc_empty_list': [],  # List of PDF file paths where RFC was empty or "—"
         'total_time': 0.0
     }
     
@@ -218,7 +220,11 @@ def process_folder(folder_path: str, recursive: bool = False) -> dict:
         print(f"[{idx}/{stats['total']}] Processing: {pdf_name}")
         print("=" * 60)
         
-        success, error_type, error_message, elapsed_time = process_single_pdf(pdf_path)
+        success, error_type, error_message, elapsed_time, rfc_empty = process_single_pdf(pdf_path)
+        
+        # Track PDFs with empty RFC
+        if rfc_empty:
+            stats['rfc_empty_list'].append(pdf_path)
         
         # Separator after processing
         print("=" * 60)
@@ -283,6 +289,14 @@ def print_summary(stats: dict):
                 if len(error_msg) > 100:
                     error_msg = error_msg[:100] + "..."
                 print(f"      Details: {error_msg}")
+    
+    if stats.get('rfc_empty_list'):
+        print(f"\n🆔 PDFs with empty RFC (🆔 RFC: —):")
+        for idx, path in enumerate(stats['rfc_empty_list'], 1):
+            print(f"   {idx}. {path}")
+        print(f"   Total: {len(stats['rfc_empty_list'])} file(s)")
+    else:
+        print(f"\n🆔 PDFs with empty RFC: none")
     
     print("=" * 60)
 
