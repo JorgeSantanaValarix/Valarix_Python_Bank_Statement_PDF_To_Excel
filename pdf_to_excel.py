@@ -2396,6 +2396,12 @@ def extract_summary_from_pdf(pdf_path: str, movement_start_page: int = None) -> 
             full_text = all_text if all_text else '\n'.join(all_lines)
             if full_text:
                 summary_data['period_text'] = extract_period_text_from_text(full_text)
+                # INTERCAM: trim period to only "DEL YYYY-MM-DD AL YYYY-MM-DD" (drop Número, Año, etc.)
+                if bank_name == "INTERCAM" and summary_data.get('period_text'):
+                    pt = summary_data['period_text']
+                    intercam_period = re.search(r'DEL\s+\d{4}-\d{2}-\d{2}\s+AL\s+\d{4}-\d{2}-\d{2}', pt, re.IGNORECASE)
+                    if intercam_period:
+                        summary_data['period_text'] = intercam_period.group(0).strip()
                 # Konfio: RFC from raw first page (RRFFCC/AMM160915BU4); name and period from fixed text
                 if bank_name == "Konfio" and len(pdf.pages) >= 1:
                     first_page_raw = pdf.pages[0].extract_text() or ""
