@@ -8500,6 +8500,11 @@ def main():
     
     # Append blank row, then RFC, Name, Period (all banks)
     _summary = pdf_summary or {}
+    # Trim name at " PERIODO" so Nombre shows only the account/customer name (e.g. "ESTEVES DWD MEXICO, S. DE R.L. DE C.V." without " PERIODO DEL 1/ENE/2023...")
+    if _summary.get('name') and isinstance(_summary['name'], str):
+        idx = _summary['name'].upper().find(' PERIODO')
+        if idx != -1:
+            _summary['name'] = _summary['name'][:idx].strip()
     # Ensure at least 2 columns (e.g. HSBC OCR can yield single-column df when no valid movements)
     if len(df_mov.columns) < 2:
         default_mov_cols = ['Fecha', 'Descripción', 'Abonos', 'Cargos', 'Saldo']
