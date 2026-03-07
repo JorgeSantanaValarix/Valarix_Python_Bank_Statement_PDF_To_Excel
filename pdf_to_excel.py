@@ -2005,8 +2005,9 @@ def extract_rfc_from_raw_konfio(raw_first_page_text: str):
     return None
 
 
-# When --debug: collect lines for RFC extraction log (written to _movements_debug.txt)
+# When --debug: collect lines for RFC/Nombre extraction log (written to _movements_debug.txt)
 RFC_DEBUG_LINES = []
+NAME_DEBUG_LINES = []
 
 
 def extract_name_from_tarjeta_titular_line(full_text: str):
@@ -2061,9 +2062,41 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
         RFC_DEBUG_LINES.append(msg)
         print(msg, flush=True)
 
+    def _name_debug(msg):
+        if '--debug' not in sys.argv:
+            return
+        NAME_DEBUG_LINES.append(msg)
+        print(msg, flush=True)
+
     if '--debug' in sys.argv:
         RFC_DEBUG_LINES.clear()
+        NAME_DEBUG_LINES.clear()
         _rfc_debug("--- RFC extraction (bank=%s) ---" % (detected_bank or 'None'))
+        _name_debug("--- Nombre extraction (bank=%s) ---" % (detected_bank or 'None'))
+
+    # BBVA: restrict RFC/name search to lines after "Periodo DEL" / "Fecha de Corte" / "No. de Cuenta" / "No. de Cliente" block
+    bbva_lines_trimmed = False
+    if detected_bank == 'BBVA':
+        periodo_del = re.compile(r'Periodo\s+DEL', re.I)
+        skip_headers = re.compile(
+            r'Periodo\s+DEL|Fecha\s+de\s+Corte|No\.?\s*de\s+Cuenta|No\.?\s*de\s+Cliente',
+            re.I
+        )
+        start_idx = 0
+        for i, line in enumerate(lines):
+            if periodo_del.search((line or '').strip()):
+                j = i + 1
+                while j < len(lines):
+                    line_j = (lines[j] or '').strip()
+                    if not line_j or skip_headers.search(line_j):
+                        j += 1
+                    else:
+                        break
+                start_idx = j
+                break
+        if start_idx > 0:
+            lines = lines[start_idx:]
+            bbva_lines_trimmed = True
 
     # Mercury: EIN (e.g. "EIN ••9023") and name = text before "Account details" (e.g. "CONTAAYUDA USA INC")
     if detected_bank == 'Mercury':
@@ -2134,6 +2167,7 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
             name_parts.reverse()
             if name_parts:
                 name = ' '.join(name_parts)
+                _name_debug("NOMBRE_MATCH (Mercury): %s" % name)
         return (rfc, name)
 
     # RFC: try multiple patterns (RFC:, R.F.C., R.F.C , Registro Federal de Contribuyentes:, or line with only RFC value)
@@ -2241,6 +2275,7 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                     candidate = ' '.join(name_parts).strip() if name_parts else ''
                     if len(candidate) >= 3 and len(name_parts) >= 2:
                         name = candidate
+                        _name_debug("NOMBRE_MATCH (HSBC regimen): %s" % name)
                 break
 
     # Name: lines with company suffixes (SA DE CV, S.A. DE C.V., etc.), excluding bank's own name
@@ -2256,11 +2291,13 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
         has_suffix = any(s in line_upper for s in company_suffixes)
         if not has_suffix:
             continue
+        _name_debug("NOMBRE_CHECK (company suffix): %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
         # Exclude if line matches the detected bank's keywords (e.g. "HSBC México S.A. DE C.V.")
         if bank_keywords:
             if any(re.search(pat, line_stripped, re.IGNORECASE) for pat in bank_keywords):
                 continue
         name = line_stripped
+        _name_debug("NOMBRE_MATCH (company suffix): %s" % name)
         break
 
     # Inbursa: Nombre = line immediately above the line containing "Cliente Inbursa:" (e.g. "CONSULTEC, INGENIERIA, ARQUITECTURA Y SUPERVISION, S.A.")
@@ -2272,22 +2309,94 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
             for j in range(i - 1, -1, -1):
                 prev = lines[j].strip()
                 if prev:
+                    _name_debug("NOMBRE_CHECK (Inbursa line above Cliente): %s" % (prev[:200] + '...' if len(prev) > 200 else prev))
                     name = prev
+                    _name_debug("NOMBRE_MATCH (Inbursa): %s" % name)
                     break
             break
 
-    # BBVA: Nombre = next line after the line containing "No. de Cliente" (e.g. "EDUARDO ALVAREZ CRUZ")
+    # BBVA: Prefer pattern from "Periodo DEL": if next line contains "Fecha de Corte", Nombre = line after that; else Nombre = that next line.
+    # Fallback: line after "No. de Cliente", or after "Fecha de corte" if that is the next line, or line before "Periodo DEL".
     if detected_bank == 'BBVA':
-        marker = 'no. de cliente'
-        for i, line in enumerate(lines):
-            if marker not in line.strip().lower():
-                continue
-            for j in range(i + 1, len(lines)):
-                nxt = lines[j].strip()
-                if nxt:
-                    name = nxt
+        fecha_corte = 'fecha de corte'
+        periodo_del = 'periodo del'
+        bbva_name = None
+        # When we trimmed lines for BBVA, "Periodo DEL" is no longer in lines; first non-empty line is the account holder name (e.g. "GUSTAVO OROZCO CORONADO")
+        if bbva_lines_trimmed and lines:
+            for line in lines:
+                candidate = (line or '').strip()
+                if not candidate:
+                    continue
+                if re.search(r'\bR\.?\s*F\.?\s*C\.?\b', candidate, re.I) or only_rfc_pattern.match(candidate):
+                    continue  # skip RFC label line or line that is just RFC
+                _name_debug("NOMBRE_CHECK (BBVA first line after trim): %s" % (candidate[:200] + '...' if len(candidate) > 200 else candidate))
+                bbva_name = candidate
+                _name_debug("NOMBRE_MATCH (BBVA from first line after trim): %s" % bbva_name)
+                break
+        # First pass: find "Periodo DEL"; next non-empty line: if it contains "Fecha de Corte", Nombre = line after it; else Nombre = that line (e.g. "LOGISTICA DE CARGA VAR SA DE CV")
+        if bbva_name is None:
+            for i, line in enumerate(lines):
+                if periodo_del not in line.strip().lower():
+                    continue
+                # Next non-empty after "Periodo DEL"
+                j = i + 1
+                while j < len(lines) and not lines[j].strip():
+                    j += 1
+                if j >= len(lines):
+                    continue
+                nxt_line = lines[j].strip()
+                if fecha_corte in nxt_line.lower():
+                    # Next line is "Fecha de Corte" (or contains it) -> Nombre is the line after
+                    for k in range(j + 1, len(lines)):
+                        nombre_line = lines[k].strip()
+                        if nombre_line:
+                            _name_debug("NOMBRE_CHECK (BBVA after Fecha de Corte): %s" % (nombre_line[:200] + '...' if len(nombre_line) > 200 else nombre_line))
+                            bbva_name = nombre_line
+                            break
+                else:
+                    # Next line does not contain "Fecha de Corte" -> it is the Nombre (e.g. "LOGISTICA DE CARGA VAR SA DE CV")
+                    _name_debug("NOMBRE_CHECK (BBVA next line after Periodo): %s" % (nxt_line[:200] + '...' if len(nxt_line) > 200 else nxt_line))
+                    bbva_name = nxt_line
+                if bbva_name:
                     break
-            break
+        if bbva_name:
+            name = bbva_name
+            _name_debug("NOMBRE_MATCH (BBVA): %s" % name)
+        else:
+            # Fallback: "No. de Cliente" based logic
+            marker = 'no. de cliente'
+            for i, line in enumerate(lines):
+                if marker not in line.strip().lower():
+                    continue
+                j = i + 1
+                while j < len(lines) and not lines[j].strip():
+                    j += 1
+                if j >= len(lines):
+                    break
+                nxt = lines[j].strip()
+                if fecha_corte in nxt.lower():
+                    for k in range(j + 1, len(lines)):
+                        after = lines[k].strip()
+                        if after:
+                            _name_debug("NOMBRE_MATCH (BBVA fallback after Fecha): %s" % (after[:200] + '...' if len(after) > 200 else after))
+                            name = after
+                            break
+                else:
+                    name_from_periodo = None
+                    for k in range(j, len(lines)):
+                        if periodo_del in lines[k].strip().lower():
+                            if k > 0:
+                                prev_line = lines[k - 1].strip()
+                                if prev_line and fecha_corte not in prev_line.lower():
+                                    name_from_periodo = prev_line
+                            break
+                    if name_from_periodo:
+                        name = name_from_periodo
+                        _name_debug("NOMBRE_MATCH (BBVA fallback from Periodo): %s" % name)
+                    else:
+                        name = nxt
+                        _name_debug("NOMBRE_MATCH (BBVA fallback next): %s" % (nxt[:200] + '...' if len(nxt) > 200 else nxt))
+                break
 
     # Banorte: Nombre = next line after the line containing "ESTADO DE CUENTA / ENLACE" (e.g. "CASA MEXICANA LAS PALMAS AC")
     if detected_bank == 'Banorte':
@@ -2298,7 +2407,9 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
             for j in range(i + 1, len(lines)):
                 nxt = lines[j].strip()
                 if nxt:
+                    _name_debug("NOMBRE_CHECK (Banorte next line): %s" % (nxt[:200] + '...' if len(nxt) > 200 else nxt))
                     name = nxt
+                    _name_debug("NOMBRE_MATCH (Banorte): %s" % name)
                     break
             break
 
@@ -2330,6 +2441,7 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                     break
             if has_address_below:
                 name = line_stripped
+                _name_debug("NOMBRE_MATCH (HSBC before address): %s" % name)
                 break
         # HSBC: name between "Estado de Cuenta" and "Subtotal" in same line (e.g. "Estado de Cuenta 283879 2 JUSEOG AN Subtotal:")
         if name is None and detected_bank == 'HSBC':
@@ -2346,6 +2458,7 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                     candidate = m.group(1).strip()
                     if 2 <= len(candidate) <= 80 and not any(ch.isdigit() for ch in candidate) and 1 <= len(candidate.split()) <= 6:
                         name = candidate
+                        _name_debug("NOMBRE_MATCH (HSBC Estado/Subtotal): %s" % name)
                         break
         # HSBC: name (company with DE CV / S.A. DE C.V.) after "Estado de Cuenta" in same line (e.g. "... Estado de Cuenta ... HK DASA DE CV. ...")
         if name is None and detected_bank == 'HSBC':
@@ -2364,6 +2477,7 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                         if bank_keywords and any(re.search(pat, candidate, re.IGNORECASE) for pat in bank_keywords):
                             continue
                         name = candidate
+                        _name_debug("NOMBRE_MATCH (HSBC Estado/company): %s" % name)
                         break
 
     return (rfc, name)
@@ -6142,6 +6256,10 @@ def main():
                     f.write(_line + "\n")
                 if RFC_DEBUG_LINES:
                     f.write("\n")
+                for _line in NAME_DEBUG_LINES:
+                    f.write(_line + "\n")
+                if NAME_DEBUG_LINES:
+                    f.write("\n")
                 _sum = pdf_summary or {}
                 f.write("RFC: " + ((_sum.get('rfc') or '').strip() or '(vacío)') + "\n")
                 f.write("Nombre: " + ((_sum.get('name') or '').strip() or '(vacío)') + "\n")
@@ -8486,6 +8604,10 @@ def main():
             for _line in RFC_DEBUG_LINES:
                 f.write(_line + "\n")
             if RFC_DEBUG_LINES:
+                f.write("\n")
+            for _line in NAME_DEBUG_LINES:
+                f.write(_line + "\n")
+            if NAME_DEBUG_LINES:
                 f.write("\n")
             _sum = pdf_summary or {}
             f.write("RFC: " + ((_sum.get('rfc') or '').strip() or '(vacío)') + "\n")
