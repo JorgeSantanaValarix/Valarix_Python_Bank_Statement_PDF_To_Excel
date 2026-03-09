@@ -2319,28 +2319,32 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                     _name_debug("NOMBRE_MATCH (Banbajio between RFC and bank line): %s" % name)
                     break
 
-    # Name: lines with company suffixes (SA DE CV, S.A. DE C.V., etc.), excluding bank's own name.
-    # Only run this generic fallback if a bank-specific rule has not already set `name`.
-    if name is None:
-        company_suffixes = [
-            'SA DE CV', 'S.A. DE C.V.', 'S.A. DE C.V', 'S. DE R.L. DE C.V.', 'S. DE R.L. DE C.V',
-            'S.R.L.', 'S. DE R.L.', 'DE C.V.', 'DE CV',
-        ]
-        for line in lines:
-            line_stripped = line.strip()
-            if not line_stripped or len(line_stripped) < 5:
+    # Banamex fallback (normal PDFs): Nombre is the next non-empty line after
+    # "después de descontar la inflación estimada".
+    # For Banamex, this acts as the main extraction path before generic company-suffix fallback.
+    if name is None and detected_bank == 'Banamex':
+        banamex_inflation_marker = re.compile(
+            r'despu[eé]s\s+de\s+descontar\s+la\s+inflaci[oó]n\s+estimada',
+            re.IGNORECASE
+        )
+        for i, line in enumerate(lines):
+            line_stripped = (line or '').strip()
+            if not line_stripped:
                 continue
-            line_upper = line_stripped.upper()
-            has_suffix = any(s in line_upper for s in company_suffixes)
-            if not has_suffix:
+            if not banamex_inflation_marker.search(line_stripped):
                 continue
-            _name_debug("NOMBRE_CHECK (company suffix): %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
-            # Exclude if line matches the detected bank's keywords (e.g. "HSBC México S.A. DE C.V.")
-            if bank_keywords:
-                if any(re.search(pat, line_stripped, re.IGNORECASE) for pat in bank_keywords):
+            _name_debug("NOMBRE_CHECK (Banamex inflation marker): %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
+            for j in range(i + 1, len(lines)):
+                nxt = (lines[j] or '').strip()
+                if not nxt:
                     continue
-            name = line_stripped
-            _name_debug("NOMBRE_MATCH (company suffix): %s" % name)
+                if re.search(r'\bR\.?\s*F\.?\s*C\.?\b|RFC|CLIENTE|ESTADO\s+DE\s+CUENTA|CITIBANAMEX|BANAMEX|www\.', nxt, re.IGNORECASE):
+                    continue
+                if any(ch.isdigit() for ch in nxt):
+                    continue
+                name = nxt
+                _name_debug("NOMBRE_MATCH (Banamex after inflation marker): %s" % name)
+                break
             break
 
     # Inbursa: Nombre = line immediately above the line containing "Cliente Inbursa:" (e.g. "CONSULTEC, INGENIERIA, ARQUITECTURA Y SUPERVISION, S.A.")
@@ -2556,6 +2560,30 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                     name = max(candidates, key=len)
                     _name_debug("NOMBRE_MATCH (HSBC Estado/company): %s" % name)
                     break
+
+    # Name: lines with company suffixes (SA DE CV, S.A. DE C.V., etc.), excluding bank's own name.
+    # Only run this generic fallback if a bank-specific rule has not already set `name`.
+    if name is None:
+        company_suffixes = [
+            'SA DE CV', 'S.A. DE C.V.', 'S.A. DE C.V', 'S. DE R.L. DE C.V.', 'S. DE R.L. DE C.V',
+            'S.R.L.', 'S. DE R.L.', 'DE C.V.', 'DE CV',
+        ]
+        for line in lines:
+            line_stripped = line.strip()
+            if not line_stripped or len(line_stripped) < 5:
+                continue
+            line_upper = line_stripped.upper()
+            has_suffix = any(s in line_upper for s in company_suffixes)
+            if not has_suffix:
+                continue
+            _name_debug("NOMBRE_CHECK (company suffix): %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
+            # Exclude if line matches the detected bank's keywords (e.g. "HSBC México S.A. DE C.V.")
+            if bank_keywords:
+                if any(re.search(pat, line_stripped, re.IGNORECASE) for pat in bank_keywords):
+                    continue
+            name = line_stripped
+            _name_debug("NOMBRE_MATCH (company suffix): %s" % name)
+            break
 
     return (rfc, name)
 
