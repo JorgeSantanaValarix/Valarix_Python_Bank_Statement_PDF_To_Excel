@@ -2629,6 +2629,46 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                 _name_debug("NOMBRE_MATCH (Banregio marker rule): %s" % name)
             break
 
+    # INTERCAM fallback: Nombre on 1st page appears after "Versión 1.1" (e.g. "HK" + "DA").
+    if name is None and detected_bank == 'INTERCAM':
+        version_word_re = re.compile(r'\bversi[oó]n\b', re.IGNORECASE)
+        version_value_re = re.compile(r'^\d+(?:\.\d+)?$')
+        stop_after_version_re = re.compile(
+            r'\b(?:r\.?\s*f\.?\s*c\.?|cliente|fecha\s+de\s+corte|estado\s+de\s+cuenta|periodo|intercam|www\.)\b',
+            re.IGNORECASE
+        )
+        for i, line in enumerate(lines):
+            line_stripped = (line or '').strip()
+            if not line_stripped:
+                continue
+            if not version_word_re.search(line_stripped):
+                continue
+            _name_debug("NOMBRE_CHECK (INTERCAM after Version): %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
+            for j in range(i + 1, min(i + 8, len(lines))):
+                nxt = (lines[j] or '').strip()
+                if not nxt:
+                    continue
+                if version_word_re.search(nxt):
+                    continue
+                if version_value_re.match(nxt):
+                    continue
+                if stop_after_version_re.search(nxt):
+                    break
+                if any(ch.isdigit() for ch in nxt):
+                    continue
+                cleaned = re.sub(r'[^A-Za-zÑñÁÉÍÓÚÜáéíóúü\s&\'\-]', '', nxt).strip()
+                if not cleaned:
+                    continue
+                # For INTERCAM, keep only the first valid line after "Versión".
+                if len(cleaned) > 80:
+                    break
+                name = re.sub(r'\s+', ' ', cleaned).strip(' ,.-')
+                if name:
+                    _name_debug("NOMBRE_MATCH (INTERCAM after Version): %s" % name)
+                    break
+            if name:
+                break
+
     # Name: lines with company suffixes (SA DE CV, S.A. DE C.V., etc.), excluding bank's own name.
     # Only run this generic fallback if a bank-specific rule has not already set `name`.
     if name is None:
