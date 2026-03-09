@@ -2101,6 +2101,18 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
     # Mercury: EIN (e.g. "EIN ••9023") and name = text before "Account details" (e.g. "CONTAAYUDA USA INC")
     if detected_bank == 'Mercury':
         # EIN: "EIN" followed by value on same line or next line (e.g. "••9023")
+        def _normalize_mercury_ein(raw_text):
+            if not raw_text:
+                return None
+            cleaned = re.sub(r'^.*?\bEIN\b\s*', '', raw_text, count=1, flags=re.IGNORECASE).strip()
+            cleaned = re.sub(r'^[^A-Za-z0-9]+', '', cleaned).strip()
+            if not cleaned:
+                return None
+            m = re.search(r'([A-Za-z0-9][A-Za-z0-9\-]{0,30})', cleaned)
+            if not m:
+                return None
+            return m.group(1).upper()
+
         ein_value = None
         for i, line in enumerate(lines):
             line_stripped = line.strip()
@@ -2108,15 +2120,17 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                 continue
             if re.search(r'\bEIN\b', line_stripped, re.IGNORECASE):
                 _rfc_debug("RFC_CHECK (Mercury EIN): %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
-                after_ein = re.sub(r'^.*?\bEIN\b\s*', '', line_stripped, count=1, flags=re.IGNORECASE).strip()
-                if after_ein:
-                    ein_value = 'EIN ' + after_ein
+                ein_value_same_line = _normalize_mercury_ein(line_stripped)
+                if ein_value_same_line:
+                    ein_value = ein_value_same_line
                 else:
                     for j in range(i + 1, min(i + 3, len(lines))):
                         next_line = lines[j].strip()
                         if next_line:
-                            ein_value = 'EIN ' + next_line
-                            break
+                            ein_value_next_line = _normalize_mercury_ein(next_line)
+                            if ein_value_next_line:
+                                ein_value = ein_value_next_line
+                                break
                 break
         if ein_value:
             rfc = ein_value
