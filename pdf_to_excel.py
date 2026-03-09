@@ -2561,6 +2561,21 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                     _name_debug("NOMBRE_MATCH (HSBC Estado/company): %s" % name)
                     break
 
+    # Clara fallback: if the first non-empty line is "Hoja 1 de ...",
+    # use the second non-empty line as account holder name.
+    if name is None and detected_bank == 'Clara':
+        non_empty_lines = [(idx, (line or '').strip()) for idx, line in enumerate(lines) if (line or '').strip()]
+        if len(non_empty_lines) >= 2:
+            first_line = non_empty_lines[0][1]
+            second_line = non_empty_lines[1][1]
+            if re.search(r'^hoja\s*1\s*de\b', first_line, re.IGNORECASE):
+                _name_debug("NOMBRE_CHECK (Clara second line after Hoja 1 de): %s" % (second_line[:200] + '...' if len(second_line) > 200 else second_line))
+                # Basic guardrails to avoid obvious headers/noise.
+                if not any(ch.isdigit() for ch in second_line) and len(second_line) >= 3:
+                    if not re.search(r'\bRFC\b|ESTADO\s+DE\s+CUENTA|PERIODO|CLARA|www\.', second_line, re.IGNORECASE):
+                        name = second_line
+                        _name_debug("NOMBRE_MATCH (Clara second line): %s" % name)
+
     # Name: lines with company suffixes (SA DE CV, S.A. DE C.V., etc.), excluding bank's own name.
     # Only run this generic fallback if a bank-specific rule has not already set `name`.
     if name is None:
