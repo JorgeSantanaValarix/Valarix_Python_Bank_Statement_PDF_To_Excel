@@ -2418,6 +2418,29 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                     break
             break
 
+    # Santander fallback: if name is still empty, use the closest non-empty line above
+    # "CODIGO DE CLIENTE NO." (or "CÓDIGO DE CLIENTE NO.").
+    if name is None and detected_bank == 'Santander':
+        santander_cliente_marker = re.compile(r'c[oó]digo\s+de\s+cliente\s+no\.?', re.IGNORECASE)
+        for i, line in enumerate(lines):
+            line_stripped = (line or '').strip()
+            if not line_stripped:
+                continue
+            if not santander_cliente_marker.search(line_stripped):
+                continue
+            _name_debug("NOMBRE_CHECK (Santander marker): %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
+            for j in range(i - 1, -1, -1):
+                prev = (lines[j] or '').strip()
+                if not prev:
+                    continue
+                # Avoid taking obvious non-name header lines.
+                if re.search(r'\bRFC\b|R\.F\.C\.|ESTADO\s*DE\s*CUENTA|IPAB|www\.', prev, re.IGNORECASE):
+                    continue
+                name = prev
+                _name_debug("NOMBRE_MATCH (Santander before Codigo de Cliente): %s" % name)
+                break
+            break
+
     # HSBC-specific fallback: personal-name style line before address (e.g. "JUSEOG AN" followed by address)
     if name is None and detected_bank == 'HSBC':
         address_keywords = ['CLL', 'CALLE', 'SECCION', 'COL', 'PROV', 'AV.', 'AV ', 'NO ', 'NUM', 'C.P', 'CP ']
