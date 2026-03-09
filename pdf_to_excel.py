@@ -2364,6 +2364,10 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
     # Inbursa: Nombre = line immediately above the line containing "Cliente Inbursa:" (e.g. "CONSULTEC, INGENIERIA, ARQUITECTURA Y SUPERVISION, S.A.")
     if detected_bank == 'Inbursa':
         marker = 'cliente inbursa:'
+        inbursa_tail_re = re.compile(
+            r'^(?:DE\s+C\.?\s*V\.?|S\.?\s*A\.?\s*DE\s*C\.?\s*V\.?)$',
+            re.IGNORECASE
+        )
         for i, line in enumerate(lines):
             if marker not in line.strip().lower():
                 continue
@@ -2372,6 +2376,15 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                 if prev:
                     _name_debug("NOMBRE_CHECK (Inbursa line above Cliente): %s" % (prev[:200] + '...' if len(prev) > 200 else prev))
                     name = prev
+                    # If first non-empty line after "Cliente Inbursa:" is only legal tail (DE C.V. / S.A. DE C.V.),
+                    # append it to the extracted name line.
+                    for k in range(i + 1, len(lines)):
+                        nxt = (lines[k] or '').strip()
+                        if not nxt:
+                            continue
+                        if inbursa_tail_re.match(nxt):
+                            name = re.sub(r'\s+', ' ', f"{name} {nxt}").strip(' ,.-')
+                        break
                     _name_debug("NOMBRE_MATCH (Inbursa): %s" % name)
                     break
             break
