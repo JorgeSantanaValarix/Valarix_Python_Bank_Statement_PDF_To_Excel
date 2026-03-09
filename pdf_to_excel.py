@@ -2590,6 +2590,45 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                         name = second_line
                         _name_debug("NOMBRE_MATCH (Clara second line): %s" % name)
 
+    # Banregio fallback: after marker line "*<digits>*", take next non-empty line as Nombre.
+    # If following line is only a legal suffix tail ("DE C.V.", "S.A. DE C.V.", etc.), append it.
+    if name is None and detected_bank == 'Banregio':
+        banregio_marker_re = re.compile(r'^\*\s*\d{6,}\s*\*$', re.IGNORECASE)
+        banregio_tail_re = re.compile(
+            r'^(?:DE\s+C\.?\s*V\.?|S\.?\s*A\.?\s*DE\s*C\.?\s*V\.?|S\.?\s*A\.?\s*S\.?\s*DE\s*C\.?\s*V\.?)$',
+            re.IGNORECASE
+        )
+        for i, line in enumerate(lines):
+            marker_line = (line or '').strip()
+            if not marker_line:
+                continue
+            if not banregio_marker_re.match(marker_line):
+                continue
+            _name_debug("NOMBRE_CHECK (Banregio marker *digits*): %s" % marker_line)
+            first_name_line = None
+            first_idx = None
+            for j in range(i + 1, len(lines)):
+                candidate = (lines[j] or '').strip()
+                if not candidate:
+                    continue
+                first_name_line = candidate
+                first_idx = j
+                break
+            if not first_name_line:
+                break
+            full_name = first_name_line
+            for k in range((first_idx or 0) + 1, len(lines)):
+                tail = (lines[k] or '').strip()
+                if not tail:
+                    continue
+                if banregio_tail_re.match(tail):
+                    full_name = re.sub(r'\s+', ' ', (full_name + ' ' + tail)).strip(' ,.-')
+                break
+            if full_name:
+                name = full_name
+                _name_debug("NOMBRE_MATCH (Banregio marker rule): %s" % name)
+            break
+
     # Name: lines with company suffixes (SA DE CV, S.A. DE C.V., etc.), excluding bank's own name.
     # Only run this generic fallback if a bank-specific rule has not already set `name`.
     if name is None:
