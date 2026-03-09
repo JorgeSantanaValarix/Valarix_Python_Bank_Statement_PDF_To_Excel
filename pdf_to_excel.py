@@ -2528,23 +2528,34 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                         break
         # HSBC: name (company with DE CV / S.A. DE C.V.) after "Estado de Cuenta" in same line (e.g. "... Estado de Cuenta ... HK DASA DE CV. ...")
         if name is None and detected_bank == 'HSBC':
-            hsbc_estado_company = re.compile(
-                r'Estado\s+de\s+Cuenta\s.*?\b([A-Za-zÑñ][A-Za-zÑñ\s]*(?:DE\s+CV|S\.A\.\s+DE\s+C\.V\.?))\s*\.?',
+            # Capture full legal-name fragments (allow commas/dots) and prefer the longest
+            # company candidate ending with DE CV / S.A. DE C.V.
+            hsbc_company_fragment = re.compile(
+                r'\b([A-Za-zÑñ][A-Za-zÑñ\s,\.&\'\-]{1,120}?(?:S\.?\s*A\.?\s*DE\s*C\.?\s*V\.?|DE\s+C\.?\s*V\.?))\b',
                 re.IGNORECASE
             )
             for idx, line in enumerate(lines):
                 line_stripped = line.strip()
                 if not line_stripped or 'Estado de Cuenta' not in line_stripped:
                     continue
-                m = hsbc_estado_company.search(line_stripped)
-                if m:
-                    candidate = m.group(1).strip().rstrip('.')
-                    if 3 <= len(candidate) <= 80 and 'HSBC' not in candidate.upper():
-                        if bank_keywords and any(re.search(pat, candidate, re.IGNORECASE) for pat in bank_keywords):
-                            continue
-                        name = candidate
-                        _name_debug("NOMBRE_MATCH (HSBC Estado/company): %s" % name)
-                        break
+                # Search only after "Estado de Cuenta" to avoid matching preceding header text.
+                parts = re.split(r'Estado\s+de\s+Cuenta', line_stripped, flags=re.IGNORECASE, maxsplit=1)
+                search_zone = parts[1] if len(parts) > 1 else line_stripped
+                candidates = []
+                for m in hsbc_company_fragment.finditer(search_zone):
+                    candidate = re.sub(r'\s+', ' ', m.group(1)).strip(' ,.-')
+                    if not (3 <= len(candidate) <= 120):
+                        continue
+                    if 'HSBC' in candidate.upper():
+                        continue
+                    if bank_keywords and any(re.search(pat, candidate, re.IGNORECASE) for pat in bank_keywords):
+                        continue
+                    candidates.append(candidate)
+                if candidates:
+                    # Prefer the longest legal-name fragment (e.g. "VIAJES BEDA, S.A. DE C.V.")
+                    name = max(candidates, key=len)
+                    _name_debug("NOMBRE_MATCH (HSBC Estado/company): %s" % name)
+                    break
 
     return (rfc, name)
 
