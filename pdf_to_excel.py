@@ -2181,11 +2181,16 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
     # Line is "RFC" or "R.F.C." label only (no value on same line) - e.g. HSBC where value is on next line
     rfc_label_only = re.compile(r'\b(?:R\.F\.C\.?|RFC)\s*$', re.IGNORECASE)
 
+    banregio_rfc_label_required = re.compile(r'RFC\s*:', re.IGNORECASE)
+
     for line in lines:
         line_stripped = line.strip()
         if not line_stripped:
             continue
         if rfc is None:
+            if detected_bank == 'Banregio' and not banregio_rfc_label_required.search(line_stripped):
+                _rfc_debug("RFC_SKIP (Banregio missing RFC:): %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
+                continue
             _rfc_debug("RFC_CHECK: %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
             for pat in rfc_patterns:
                 m = pat.search(line_stripped)
