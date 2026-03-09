@@ -2478,13 +2478,25 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
     # "CODIGO DE CLIENTE NO." (or "CÓDIGO DE CLIENTE NO.").
     if name is None and detected_bank == 'Santander':
         santander_cliente_marker = re.compile(r'c[oó]digo\s+de\s+cliente\s+no\.?', re.IGNORECASE)
+        santander_cliente_number_only = re.compile(r'^[\s:;\-#]*\d[\d\s\-]*$')
         for i, line in enumerate(lines):
             line_stripped = (line or '').strip()
             if not line_stripped:
                 continue
-            if not santander_cliente_marker.search(line_stripped):
+            marker_match = santander_cliente_marker.search(line_stripped)
+            if not marker_match:
                 continue
             _name_debug("NOMBRE_CHECK (Santander marker): %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
+            # If line has extra text before marker, use that as Nombre.
+            # Example: "SERVICIOS ... SA DE CV CODIGO DE CLIENTE NO. 42503225" -> "SERVICIOS ... SA DE CV"
+            before_marker = line_stripped[:marker_match.start()].strip(" :,-")
+            after_marker = line_stripped[marker_match.end():].strip()
+            if before_marker and santander_cliente_number_only.match(after_marker):
+                if not re.search(r'\bRFC\b|R\.F\.C\.|ESTADO\s*DE\s*CUENTA|IPAB|www\.|SANTANDER', before_marker, re.IGNORECASE):
+                    name = before_marker
+                    _name_debug("NOMBRE_MATCH (Santander same line before Codigo de Cliente): %s" % name)
+                    break
+            # Otherwise, keep existing behavior: closest non-empty line above marker line.
             for j in range(i - 1, -1, -1):
                 prev = (lines[j] or '').strip()
                 if not prev:
