@@ -5170,13 +5170,34 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                         if nxt_col in ('cargos', 'abonos', 'saldo', 'saldo_liq'):
                             if cur_col == nxt_col:
                                 can_merge = True
-                            elif cur_col == 'descripcion' and nxt_col in columns:
-                                # Borderline case: prefix token falls in descripcion but is right at the
-                                # left boundary of numeric column. Accept only very close to boundary.
+                            elif cur_col in ('descripcion', None) and nxt_col in columns:
+                                # Coordinate continuity rule (token-level, same row):
+                                # a short integer prefix can belong to a numeric amount even if OCR placed it
+                                # in descripcion or just outside configured ranges.
                                 nx0, nx1 = columns[nxt_col]
                                 if nx0 > nx1:
                                     nx0, nx1 = nx1, nx0
-                                if (cur_x1 >= (nx0 - 25)) and (cur_x0 <= (nx0 + 5)):
+                                near_numeric_left_edge = (cur_x1 >= (nx0 - 25)) and (cur_x0 <= (nx0 + 5))
+                                # Additional context guard:
+                                # if previous token is mixed alphanumeric (e.g. "A15"), treat current short
+                                # number as description tail, not amount prefix.
+                                prev_is_mixed_alnum = False
+                                prev_is_short_alpha = False
+                                if i - 1 >= 0:
+                                    prev_text = (sorted_words[i - 1].get('text') or '').strip()
+                                    prev_is_mixed_alnum = bool(
+                                        re.search(r'[A-Za-z]', prev_text) and re.search(r'\d', prev_text)
+                                    )
+                                    prev_is_short_alpha = bool(re.fullmatch(r'[A-Za-z]{1,3}', prev_text))
+                                # OCR can place the prefix digit inside descripcion/outside ranges even when it belongs
+                                # to the amount (e.g. "... D 4 290.00"). Accept when spacing is tight and
+                                # previous token is short alpha (context marker), while still blocking "A15 34 ...".
+                                pair_gap = (nxt.get('x0', 0) - cur_x1)
+                                close_pair_spacing = (0 <= pair_gap <= 120)
+                                if (
+                                    (near_numeric_left_edge or (prev_is_short_alpha and close_pair_spacing))
+                                    and not prev_is_mixed_alnum
+                                ):
                                     can_merge = True
                         if can_merge:
                             # Preserve decimal separator from next token, add thousands comma.
