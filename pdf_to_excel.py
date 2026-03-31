@@ -6094,10 +6094,44 @@ def main():
     movement_section_found = False
     # Banamex new format: "DESGLOSE DE MOVIMIENTOS" (--find row Y≈802) or "CARGOS, ABONOS Y COMPRAS REGULARES"; single Monto column (- = Abono, + = Cargo)
     banamex_new_format = False
+
+    def _normalize_line_for_marker(s):
+        """Normalize OCR lines for robust header detection."""
+        if not s:
+            return ''
+        s = str(s).upper()
+        s = s.replace('Á', 'A').replace('É', 'E').replace('Í', 'I').replace('Ó', 'O').replace('Ú', 'U')
+        s = re.sub(r'[^A-Z0-9\s]', ' ', s)
+        s = re.sub(r'\s+', ' ', s).strip()
+        return s
+
+    def _bbva_ocr_start_marker_at(lines, idx):
+        """
+        BBVA OCR start marker:
+        - one-line phrase: DETALLE DE MOVIMIENTOS REALIZADOS
+        - or 4 continuous lines: DETALLE / DE / MOVIMIENTOS / REALIZADOS
+        """
+        cur = _normalize_line_for_marker(lines[idx])
+        if 'DETALLE DE MOVIMIENTOS REALIZADOS' in cur:
+            return True
+        if idx + 3 >= len(lines):
+            return False
+        n1 = _normalize_line_for_marker(lines[idx + 1])
+        n2 = _normalize_line_for_marker(lines[idx + 2])
+        n3 = _normalize_line_for_marker(lines[idx + 3])
+        return (cur == 'DETALLE' and n1 == 'DE' and n2 == 'MOVIMIENTOS' and n3 == 'REALIZADOS')
     
     for p in pages_lines:
         if not movement_start_found:
             for i, ln in enumerate(p['lines']):
+                # BBVA OCR: detect movements_start with robust token continuity in pre-scan.
+                if bank_config['name'] == 'BBVA' and used_ocr and _bbva_ocr_start_marker_at(p['lines'], i):
+                    movement_start_found = True
+                    movement_start_page = p['page']
+                    movement_start_index = i
+                    # Start after header line to avoid adding it as movement content
+                    movements_lines.extend(p['lines'][i + 1:])
+                    break
                 # Generic movement_start_pattern from BANK_CONFIGS (for all banks)
                 if movement_start_pattern and not movement_section_found:
                     # Banamex new format: OCR may put "DESGLOSE", "DE", "MOVIMIENTOS" on separate lines (--find row Y≈802); try joined line
@@ -6309,6 +6343,34 @@ def main():
             print(flush=True)
         # Banamex new format: always log in normal operation (not gated by --debug)
         _banamex_new_fmt_log(line_text, row_for_banamex, disposition)
+
+    def _normalize_marker_text(s):
+        """Normalize text for robust marker comparison (OCR-safe)."""
+        if not s:
+            return ''
+        s = str(s).upper()
+        s = s.replace('Á', 'A').replace('É', 'E').replace('Í', 'I').replace('Ó', 'O').replace('Ú', 'U')
+        s = re.sub(r'[^A-Z0-9\s]', ' ', s)
+        s = re.sub(r'\s+', ' ', s).strip()
+        return s
+
+    def _bbva_ocr_end_marker_is_valid(rows, idx):
+        """
+        BBVA OCR rule:
+        - Valid end if exact phrase appears in one row: "TOTAL DE MOVIMIENTOS"
+        - Or valid when split across 3 consecutive rows exactly as:
+          row i   -> TOTAL
+          row i+1 -> DE
+          row i+2 -> MOVIMIENTOS
+        """
+        current = _normalize_marker_text(' '.join([w.get('text', '') for w in rows[idx]]))
+        if 'TOTAL DE MOVIMIENTOS' in current:
+            return True
+        if idx + 2 >= len(rows):
+            return False
+        r1 = _normalize_marker_text(' '.join([w.get('text', '') for w in rows[idx + 1]]))
+        r2 = _normalize_marker_text(' '.join([w.get('text', '') for w in rows[idx + 2]]))
+        return (current == 'TOTAL' and r1 == 'DE' and r2.startswith('MOVIMIENTOS'))
     
     # Si es HSBC y se usó OCR, usar la misma lógica que otros bancos
     if is_hsbc and used_ocr:
@@ -6790,6 +6852,11 @@ def main():
                         if movement_end_pattern and movement_end_pattern.search(all_text):
                             match_found = True
                         elif banamex_secondary_end_pattern and banamex_secondary_end_pattern.search(all_text):
+                            match_found = True
+                    elif bank_config['name'] == 'BBVA' and used_ocr:
+                        # BBVA OCR: accept movements_end only when marker is exact
+                        # in one row or split as TOTAL / DE / MOVIMIENTOS in 3 continuous rows.
+                        if _bbva_ocr_end_marker_is_valid(word_rows, row_idx):
                             match_found = True
                     else:
                         # For other banks (Santander, Konfio, Banbajío, etc.), use the standard pattern
