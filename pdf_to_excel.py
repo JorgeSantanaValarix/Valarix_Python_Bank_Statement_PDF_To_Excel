@@ -9038,6 +9038,173 @@ def main():
                     break
             if period_ocr:
                 pdf_summary['period_text'] = period_ocr
+            # BBVA OCR totals for Data Validation (Valor en PDF):
+            # - Total Abonos / Depositos
+            # - Total Cargos / Retiros
+            # - Saldo Final
+            # Extract from OCR rows using summary labels, before movements section.
+            if (
+                pdf_summary.get('total_abonos') is None
+                or pdf_summary.get('total_cargos') is None
+                or pdf_summary.get('saldo_final') is None
+            ):
+                # First pass: parse directly from OCR summary text (before movements_start).
+                # This is the most reliable source for lines like:
+                # "Depósitos / Abonos (+) 11 687,515.92"
+                # "Retiros / Cargos (-) 101 762,031.99"
+                # "Saldo (+) Final 343,721.30"
+                _txt_scan = re.sub(r'\s+', ' ', (pre_movement_text_ocr or full_text_ocr or '')).strip()
+                if _txt_scan:
+                    if pdf_summary.get('total_abonos') is None:
+                        _dep_patterns = [
+                            r'Dep[oó]sitos\s*/\s*Abonos\s*\(\+\)\s*\d+\s*([\d,]+\.\d{2})',
+                            r'Dep[oó]sitos\s*Abonos\s*\(\+\)\s*\d+\s*([\d,]+\.\d{2})',
+                        ]
+                        for _pat in _dep_patterns:
+                            _m = re.search(_pat, _txt_scan, re.I)
+                            if _m:
+                                _v = normalize_amount_str(_m.group(1))
+                                if _v is not None and _v > 0:
+                                    pdf_summary['total_abonos'] = _v
+                                    pdf_summary['total_depositos'] = _v
+                                    if '--debug' in sys.argv:
+                                        print(f"[DEBUG] BBVA OCR total_abonos detected (text) -> {_v:,.2f}", flush=True)
+                                    break
+                    if pdf_summary.get('total_cargos') is None:
+                        _ret_patterns = [
+                            r'Retiros\s*/\s*Cargos\s*\(-\)\s*\d+\s*([\d,]+\.\d{2})',
+                            r'Retiros\s*Cargos\s*\(-\)\s*\d+\s*([\d,]+\.\d{2})',
+                            r'Cargos\s*\(-\)\s*Retiros\s*\d+\s*([\d,]+\.\d{2})',
+                        ]
+                        for _pat in _ret_patterns:
+                            _m = re.search(_pat, _txt_scan, re.I)
+                            if _m:
+                                _v = normalize_amount_str(_m.group(1))
+                                if _v is not None and _v > 0:
+                                    pdf_summary['total_cargos'] = _v
+                                    pdf_summary['total_retiros'] = _v
+                                    if '--debug' in sys.argv:
+                                        print(f"[DEBUG] BBVA OCR total_cargos detected (text) -> {_v:,.2f}", flush=True)
+                                    break
+                    if pdf_summary.get('saldo_final') is None:
+                        _sf_patterns = [
+                            r'Saldo\s*\(\+\)\s*Final\s*([\d,]+\.\d{2})',
+                            r'Saldo\s+Final\s*\(\+\)\s*([\d,]+\.\d{2})',
+                        ]
+                        for _pat in _sf_patterns:
+                            _m = re.search(_pat, _txt_scan, re.I)
+                            if _m:
+                                _v = normalize_amount_str(_m.group(1))
+                                if _v is not None and _v > 0:
+                                    pdf_summary['saldo_final'] = _v
+                                    if '--debug' in sys.argv:
+                                        print(f"[DEBUG] BBVA OCR saldo_final detected (text) -> {_v:,.2f}", flush=True)
+                                    break
+
+                re_amt_dec = re.compile(r'(?<!\d)(\d{1,3}(?:,\d{3})*\.\d{2})(?!\d)')
+                line_buckets = []  # list of (page, line_key, words_sorted, norm_text)
+                for _p in extracted_data:
+                    _page = _p.get('page')
+                    if movement_start_page is not None and _page > movement_start_page:
+                        continue
+                    _words = _p.get('words', []) or []
+                    if not _words:
+                        continue
+                    grouped = {}
+                    for w in _words:
+                        # Prefer OCR line_num; fallback to rounded Y.
+                        lk = w.get('line_num')
+                        if lk is None:
+                            lk = int(round((w.get('top', 0) or 0) / 3.0))
+                        grouped.setdefault(lk, []).append(w)
+                    for lk in sorted(grouped.keys()):
+                        words_sorted = sorted(grouped[lk], key=lambda ww: ww.get('x0', 0))
+                        txt = ' '.join([(ww.get('text') or '').strip() for ww in words_sorted]).strip()
+                        if not txt:
+                            continue
+                        norm = _normalize_marker_text(txt)
+                        # Stop at movements header.
+                        if 'DETALLE DE MOVIMIENTOS REALIZADOS' in norm:
+                            break
+                        line_buckets.append((_page, lk, words_sorted, norm))
+
+                def _window_words(idx, size=3):
+                    ws, norms = [], []
+                    end = min(len(line_buckets), idx + size)
+                    for j in range(idx, end):
+                        ws.extend(line_buckets[j][2])
+                        norms.append(line_buckets[j][3])
+                    return ws, ' '.join(norms)
+
+                def _rightmost_amount_from_words(words):
+                    cand = []
+                    for ww in words:
+                        t = (ww.get('text') or '').strip()
+                        m = re_amt_dec.search(t)
+                        if not m:
+                            continue
+                        v = normalize_amount_str(m.group(1))
+                        if v is None or v <= 0:
+                            continue
+                        cx = (ww.get('x0', 0) + ww.get('x1', 0)) / 2.0
+                        cand.append((cx, v, t))
+                    if not cand:
+                        return None
+                    cand.sort(key=lambda x: x[0])
+                    return cand[-1][1]
+
+                for i, (_page, _lk, _line_words, _line_norm) in enumerate(line_buckets):
+                    if (
+                        pdf_summary.get('total_abonos') is not None
+                        and pdf_summary.get('total_cargos') is not None
+                        and pdf_summary.get('saldo_final') is not None
+                    ):
+                        break
+                    win_words, win_norm = _window_words(i, size=3)
+                    # Depositos / Abonos (+)
+                    if (
+                        pdf_summary.get('total_abonos') is None
+                        and ('DEPOSITOS' in _line_norm or 'ABONOS' in _line_norm)
+                        and 'DEPOSITOS' in win_norm
+                        and 'ABONOS' in win_norm
+                    ):
+                        val = _rightmost_amount_from_words(win_words)
+                        if val is not None:
+                            pdf_summary['total_abonos'] = val
+                            pdf_summary['total_depositos'] = val
+                            if '--debug' in sys.argv:
+                                print(f"[DEBUG] BBVA OCR total_abonos detected -> {val:,.2f} | line={_line_norm[:140]}", flush=True)
+                    # Retiros / Cargos (-)
+                    if (
+                        pdf_summary.get('total_cargos') is None
+                        and ('RETIROS' in _line_norm or 'CARGOS' in _line_norm)
+                        and 'RETIROS' in win_norm
+                        and 'CARGOS' in win_norm
+                    ):
+                        val = _rightmost_amount_from_words(win_words)
+                        if val is not None:
+                            pdf_summary['total_cargos'] = val
+                            pdf_summary['total_retiros'] = val
+                            if '--debug' in sys.argv:
+                                print(f"[DEBUG] BBVA OCR total_cargos detected -> {val:,.2f} | line={_line_norm[:140]}", flush=True)
+                    # Saldo Final (+) (split as SALDO / FINAL across adjacent lines)
+                    if (
+                        pdf_summary.get('saldo_final') is None
+                        and ('SALDO' in _line_norm or 'FINAL' in _line_norm)
+                        and 'SALDO' in win_norm
+                        and 'FINAL' in win_norm
+                    ):
+                        val = _rightmost_amount_from_words(win_words)
+                        if val is not None:
+                            pdf_summary['saldo_final'] = val
+                            if '--debug' in sys.argv:
+                                print(f"[DEBUG] BBVA OCR saldo_final detected -> {val:,.2f} | line={_line_norm[:140]}", flush=True)
+                    if (
+                        pdf_summary.get('total_abonos') is not None
+                        and pdf_summary.get('total_cargos') is not None
+                        and pdf_summary.get('saldo_final') is not None
+                    ):
+                        break
     # Banamex new format only: Valor en PDF from "Total +" line → Total Cargos, "Total" line (e.g. "$438.55 Total") → Total Abonos. Scan ALL PDF pages.
     if bank_config['name'] == 'Banamex' and banamex_new_format and extracted_data:
         need_abonos = banamex_new_fmt_totals.get('total_abonos') is None
