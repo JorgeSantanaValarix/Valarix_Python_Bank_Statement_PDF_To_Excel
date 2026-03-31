@@ -8902,11 +8902,99 @@ def main():
     if bank_config['name'] == 'BBVA' and used_ocr and extracted_data:
         full_text_ocr = '\n'.join(p.get('content', '') or '' for p in extracted_data)
         if full_text_ocr:
+            # BBVA OCR RFC must come from the R.F.C. label before movements_start (not from movements lines).
+            def _norm_ocr_marker_text(_s):
+                _s = (_s or '').upper()
+                _s = _s.replace('Á', 'A').replace('É', 'E').replace('Í', 'I').replace('Ó', 'O').replace('Ú', 'U')
+                _s = re.sub(r'[^A-Z0-9\s]', ' ', _s)
+                _s = re.sub(r'\s+', ' ', _s).strip()
+                return _s
+
+            pre_movement_text_ocr = full_text_ocr
+            _marker = 'DETALLE DE MOVIMIENTOS REALIZADOS'
+            _norm_full = _norm_ocr_marker_text(full_text_ocr)
+            _marker_idx = _norm_full.find(_marker)
+            if _marker_idx >= 0:
+                # Coarse cut on raw OCR text using first marker occurrence as boundary.
+                # This avoids taking RFC values from movement rows when OCR merges large blocks.
+                _raw_idx = full_text_ocr.upper().find('DETALLE DE MOVIMIENTOS REALIZADOS')
+                if _raw_idx >= 0:
+                    pre_movement_text_ocr = full_text_ocr[:_raw_idx]
+
+            pre_movement_lines = []
+            for _p in pages_lines:
+                _page_no = _p.get('page')
+                _lines = _p.get('lines', []) or []
+                if movement_start_page is None:
+                    pre_movement_lines.extend(_lines)
+                    continue
+                if _page_no < movement_start_page:
+                    pre_movement_lines.extend(_lines)
+                elif _page_no == movement_start_page:
+                    _cut = movement_start_index if isinstance(movement_start_index, int) else len(_lines)
+                    pre_movement_lines.extend(_lines[:max(0, _cut)])
+                    break
+                else:
+                    break
+
+            # Keep the strict page/line bounded pre-movement window as primary source.
+            # Only fallback to text-cut lines if page/line pre-scan produced nothing.
+            if (not pre_movement_lines) and pre_movement_text_ocr:
+                pre_movement_lines = pre_movement_text_ocr.split('\n')
+
+            bbva_rfc_label_re = re.compile(r'\bR\s*\.?\s*F\s*\.?\s*C\s*\.?\b', re.I)
+            bbva_rfc_value_re = re.compile(r'\b([A-ZÑ]{3,4}\s*\d{6}\s*[A-Z0-9]{3})\b', re.I)
+            bbva_rfc_after_label_re = re.compile(
+                r'R\s*\.?\s*F\s*\.?\s*C\s*\.?\s*:?\s*([A-ZÑ]{3,4}\s*\d{6}\s*[A-Z0-9]{3})',
+                re.I
+            )
+            rfc_ocr_pref = None
+            m_direct = bbva_rfc_after_label_re.search(pre_movement_text_ocr or '')
+            if m_direct:
+                rfc_ocr_pref = re.sub(r'\s+', '', m_direct.group(1)).upper()
+                if '--debug' in sys.argv:
+                    print(f"RFC_MATCH (BBVA OCR pre-mov R.F.C direct): {rfc_ocr_pref}", flush=True)
+            for i, ln in enumerate(pre_movement_lines):
+                if rfc_ocr_pref is not None:
+                    break
+                line = (ln or '').strip()
+                if not line:
+                    continue
+                m_label = bbva_rfc_label_re.search(line)
+                if not m_label:
+                    continue
+                if '--debug' in sys.argv:
+                    print(
+                        "RFC_CHECK (BBVA OCR pre-mov R.F.C): %s" %
+                        (line[:220] + '...' if len(line) > 220 else line),
+                        flush=True
+                    )
+                # Prefer value after R.F.C label on same line.
+                after = line[m_label.end():].strip()
+                m_val = bbva_rfc_value_re.search(after) or bbva_rfc_value_re.search(line)
+                if m_val is None and i + 1 < len(pre_movement_lines):
+                    nxt = (pre_movement_lines[i + 1] or '').strip()
+                    if '--debug' in sys.argv and nxt:
+                        print(
+                            "RFC_CHECK (BBVA OCR pre-mov next): %s" %
+                            (nxt[:220] + '...' if len(nxt) > 220 else nxt),
+                            flush=True
+                        )
+                    m_val = bbva_rfc_value_re.search(nxt)
+                if m_val:
+                    rfc_ocr_pref = re.sub(r'\s+', '', m_val.group(1)).upper()
+                    if '--debug' in sys.argv:
+                        print(f"RFC_MATCH (BBVA OCR pre-mov R.F.C): {rfc_ocr_pref}", flush=True)
+                    break
+
+            # Keep existing OCR extraction for Nombre/Periodo and RFC fallback only.
             rfc_ocr, name_ocr = extract_rfc_and_name_from_text(full_text_ocr, detected_bank='BBVA')
             period_ocr = extract_period_text_from_text(full_text_ocr)
             if pdf_summary is None:
                 pdf_summary = {}
-            if rfc_ocr is not None:
+            if rfc_ocr_pref is not None:
+                pdf_summary['rfc'] = rfc_ocr_pref
+            elif rfc_ocr is not None:
                 pdf_summary['rfc'] = rfc_ocr
             if name_ocr is not None:
                 nom = name_ocr
