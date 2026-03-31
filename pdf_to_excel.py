@@ -6229,6 +6229,24 @@ def main():
             else:
                 movements_lines.extend(p['lines'])
 
+    # In --debug mode, print where movements_start was detected.
+    if debug_mode:
+        if movement_start_found and movement_start_page is not None and movement_start_index is not None:
+            start_line_text = ''
+            for _p in pages_lines:
+                if _p.get('page') == movement_start_page:
+                    _lines = _p.get('lines', [])
+                    if 0 <= movement_start_index < len(_lines):
+                        start_line_text = _lines[movement_start_index]
+                    break
+            print(
+                f"[DEBUG] movements_start detected -> page={movement_start_page}, "
+                f"line={movement_start_index + 1}, text={start_line_text}",
+                flush=True
+            )
+        else:
+            print("[DEBUG] movements_start not detected", flush=True)
+
     # Banamex with OCR (mixed content): if new format not detected from lines, scan full content for new-format headers
     if (bank_config['name'] == 'Banamex' and used_ocr and not banamex_new_format and extracted_data):
         full_text = ' '.join((p.get('content') or '') for p in extracted_data)
@@ -6781,6 +6799,12 @@ def main():
                                 #print(f"🛑 BanBajío: Fin de extracción detectado en página {page_num}, fila {row_idx+1}: {all_row_text[:100]}")
                     
                     if match_found:
+                        if debug_mode:
+                            print(
+                                f"[DEBUG] movements_end detected -> page={page_num}, "
+                                f"row={row_idx + 1}, text={all_text[:220]}",
+                                flush=True
+                            )
                         # For BBVA, mark that we've left the movements section
                         if bank_config['name'] == 'BBVA' and in_bbva_movements_section:
                             in_bbva_movements_section = False
