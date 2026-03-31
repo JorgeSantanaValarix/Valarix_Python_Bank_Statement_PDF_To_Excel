@@ -8898,6 +8898,40 @@ def main():
                 name_from_titular = extract_name_from_tarjeta_titular_line(full_text_ocr)
                 if name_from_titular:
                     pdf_summary['name'] = name_from_titular
+    # BBVA with OCR: use OCR text for RFC/Nombre/Periodo to avoid illegible raw-PDF artifacts.
+    if bank_config['name'] == 'BBVA' and used_ocr and extracted_data:
+        full_text_ocr = '\n'.join(p.get('content', '') or '' for p in extracted_data)
+        if full_text_ocr:
+            rfc_ocr, name_ocr = extract_rfc_and_name_from_text(full_text_ocr, detected_bank='BBVA')
+            period_ocr = extract_period_text_from_text(full_text_ocr)
+            if pdf_summary is None:
+                pdf_summary = {}
+            if rfc_ocr is not None:
+                pdf_summary['rfc'] = rfc_ocr
+            if name_ocr is not None:
+                nom = name_ocr
+                for sep in (" | ", "|", "\n"):
+                    nom = nom.split(sep)[0].strip()
+                pdf_summary['name'] = nom
+            # BBVA OCR fallback: when OCR merges long header/movement lines, extract a legal-entity
+            # name with company suffix directly from OCR text.
+            if not (pdf_summary.get('name') or '').strip():
+                company_name_re = re.compile(
+                    r'\b([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ&\.\-]{1,}'
+                    r'(?:\s+[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ&\.\-]{1,}){1,8}\s+'
+                    r'(?:S\.?\s*A\.?\s*DE\s*C\.?\s*V\.?|S\.?\s*C\.?|A\.?\s*C\.?))\b',
+                    re.IGNORECASE,
+                )
+                forbidden_tokens = ('BBVA', 'BANCO', 'ESTADO', 'CUENTA', 'OPER', 'LIQ', 'DESCRIP')
+                for m in company_name_re.finditer(full_text_ocr):
+                    candidate = re.sub(r'\s+', ' ', m.group(1)).strip(' ,.-')
+                    upper_candidate = candidate.upper()
+                    if any(tok in upper_candidate for tok in forbidden_tokens):
+                        continue
+                    pdf_summary['name'] = candidate
+                    break
+            if period_ocr:
+                pdf_summary['period_text'] = period_ocr
     # Banamex new format only: Valor en PDF from "Total +" line → Total Cargos, "Total" line (e.g. "$438.55 Total") → Total Abonos. Scan ALL PDF pages.
     if bank_config['name'] == 'Banamex' and banamex_new_format and extracted_data:
         need_abonos = banamex_new_fmt_totals.get('total_abonos') is None
