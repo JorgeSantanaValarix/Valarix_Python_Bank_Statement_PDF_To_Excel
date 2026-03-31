@@ -6120,6 +6120,21 @@ def main():
         n2 = _normalize_line_for_marker(lines[idx + 2])
         n3 = _normalize_line_for_marker(lines[idx + 3])
         return (cur == 'DETALLE' and n1 == 'DE' and n2 == 'MOVIMIENTOS' and n3 == 'REALIZADOS')
+
+    def _sanitize_bbva_ocr_fecha(value):
+        """
+        BBVA OCR date cleanup:
+        normalize common OCR confusion in day token (O -> 0), e.g.:
+        - O5/AGO -> 05/AGO
+        - 1O/AGO -> 10/AGO
+        """
+        s = (value or '').strip().upper()
+        if not s:
+            return s
+        # Apply only on leading day token before separator/month.
+        s = re.sub(r'^O([0-9])(?=[/\-\s])', r'0\1', s)
+        s = re.sub(r'^([0-9])O(?=[/\-\s])', r'\g<1>0', s)
+        return s
     
     for p in pages_lines:
         if not movement_start_found:
@@ -6886,6 +6901,9 @@ def main():
                 # Santander: sanitize duplicated-character lines before extraction
                 row_words_for_extract = _santander_sanitize_row_words_if_duplicated(row_words) if bank_config['name'] == 'Santander' else row_words
                 row_data = extract_movement_row(row_words_for_extract, columns_config, bank_config['name'], date_pattern)
+                # BBVA OCR: sanitize common fecha OCR error (O->0) before has_date validation.
+                if bank_config['name'] == 'BBVA' and used_ocr:
+                    row_data['fecha'] = _sanitize_bbva_ocr_fecha(row_data.get('fecha'))
                 
                 # Banamex: override from line text for new format only (fecha, descripcion, cargo/abono from +/- in line or prev/next)
                 # Run when header set banamex_new_format, OR when line has DD-mon-YYYY with lowercase month (e.g. 13-oct-2025); classic uses "30 ENE" (uppercase)
