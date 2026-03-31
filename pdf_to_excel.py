@@ -5145,7 +5145,7 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
         sorted_words = combined_words
 
     # BBVA (especially OCR): combine split thousand amounts like "4" + "290.00" -> "4,290.00"
-    # when both tokens belong to the same numeric column and are adjacent in X.
+    # using coordinates only.
     if bank_name == 'BBVA' and len(sorted_words) > 1 and columns:
         combined_words = []
         i = 0
@@ -5162,12 +5162,23 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
                     nxt_center = (nxt.get('x0', 0) + nxt.get('x1', 0)) / 2
                     # Require close horizontal distance
                     if abs(nxt_center - cur_center) <= 220:
-                        cur_col = assign_word_to_column(current.get('x0', 0), current.get('x1', 0), columns)
+                        cur_x0 = current.get('x0', 0)
+                        cur_x1 = current.get('x1', 0)
+                        cur_col = assign_word_to_column(cur_x0, cur_x1, columns)
                         nxt_col = assign_word_to_column(nxt.get('x0', 0), nxt.get('x1', 0), columns)
-                        if (
-                            nxt_col in ('cargos', 'abonos', 'saldo', 'saldo_liq')
-                            and (cur_col == nxt_col or cur_col == 'descripcion')
-                        ):
+                        can_merge = False
+                        if nxt_col in ('cargos', 'abonos', 'saldo', 'saldo_liq'):
+                            if cur_col == nxt_col:
+                                can_merge = True
+                            elif cur_col == 'descripcion' and nxt_col in columns:
+                                # Borderline case: prefix token falls in descripcion but is right at the
+                                # left boundary of numeric column. Accept only very close to boundary.
+                                nx0, nx1 = columns[nxt_col]
+                                if nx0 > nx1:
+                                    nx0, nx1 = nx1, nx0
+                                if (cur_x1 >= (nx0 - 25)) and (cur_x0 <= (nx0 + 5)):
+                                    can_merge = True
+                        if can_merge:
                             # Preserve decimal separator from next token, add thousands comma.
                             current['text'] = f"{cur_text},{nxt_text}"
                             # Force merged token to be interpreted in the numeric column from the decimal token.
@@ -5680,22 +5691,6 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
         row_data['abonos'] = m if m.startswith('-') else ''
         row_data['saldo'] = ''
         del row_data['monto']
-
-    # BBVA (OCR-like split): if amount was split as trailing digit in descripcion + "290.00" in numeric col,
-    # merge it into one value (e.g. "... D 4" + "290.00" -> "... D" and "4,290.00").
-    if bank_name == 'BBVA':
-        desc = str(row_data.get('descripcion') or '').strip()
-        if desc:
-            m_tail = re.search(r'\b(\d{1,3})\s*$', desc)
-            if m_tail:
-                tail = m_tail.group(1)
-                for col in ('cargos', 'abonos', 'saldo', 'saldo_liq'):
-                    val = str(row_data.get(col) or '').strip()
-                    if re.fullmatch(r'\d{3}(?:[\.,]\d{2})', val):
-                        row_data[col] = f"{tail},{val}"
-                        # remove trailing numeric token from descripcion
-                        row_data['descripcion'] = re.sub(r'\b\d{1,3}\s*$', '', desc).strip()
-                        break
 
     return row_data
 
@@ -6957,16 +6952,6 @@ def main():
                 # BBVA OCR: sanitize common fecha OCR error (O->0) before has_date validation.
                 if bank_config['name'] == 'BBVA' and used_ocr:
                     row_data['fecha'] = _sanitize_bbva_ocr_fecha(row_data.get('fecha'))
-                    # BBVA OCR: recover split thousand amounts from original row text
-                    # e.g. "... D 4 290.00" captured as "290.00" -> "4,290.00".
-                    for _col in ('cargos', 'abonos', 'saldo', 'saldo_liq'):
-                        _val = str(row_data.get(_col) or '').strip()
-                        if not re.fullmatch(r'\d{3}(?:[\.,]\d{2})', _val):
-                            continue
-                        _val_pat = re.escape(_val).replace(r'\,', r'[, ]?')
-                        _m_left = re.search(r'(?<![A-Za-z0-9])(\d{1,2})\s+' + _val_pat + r'(?!\d)', all_row_text_orig or '')
-                        if _m_left:
-                            row_data[_col] = f"{_m_left.group(1)},{_val}"
                 
                 # Banamex: override from line text for new format only (fecha, descripcion, cargo/abono from +/- in line or prev/next)
                 # Run when header set banamex_new_format, OR when line has DD-mon-YYYY with lowercase month (e.g. 13-oct-2025); classic uses "30 ENE" (uppercase)
@@ -8433,31 +8418,6 @@ def main():
         if _amt_col in df_mov.columns:
             df_mov[_amt_col] = df_mov[_amt_col].apply(_sanitize_amount_cell)
 
-    # BBVA OCR repair: if amount appears split in raw text as "4 290.00" and column captured only "290.00",
-    # rebuild the full amount as "4,290.00".
-    if bank_config['name'] == 'BBVA' and used_ocr and 'raw' in df_mov.columns:
-        def _repair_split_from_raw(row, col):
-            val = _sanitize_amount_cell(row.get(col))
-            if not val:
-                return val
-            # Only repair likely truncated values (e.g. 290.00) not full amounts with comma/thousands.
-            if not re.fullmatch(r'\d{3}(?:[\.,]\d{2})', str(val).strip()):
-                return val
-            raw_txt = str(row.get('raw') or '')
-            if not raw_txt:
-                return val
-            # Look for N + "ddd.dd" pair in raw; when decimal part equals current value, use merged thousand.
-            pair_re = re.compile(r'(?<![A-Za-z0-9])(\d{1,2})\s+(\d{3}(?:[\.,]\d{2}))(?!\d)')
-            for m in pair_re.finditer(raw_txt):
-                left = m.group(1)
-                right = _sanitize_amount_cell(m.group(2))
-                if right == val:
-                    return f"{left},{right}"
-            return val
-
-        for _col in ('cargos', 'abonos', 'saldo', 'saldo_liq'):
-            if _col in df_mov.columns:
-                df_mov[_col] = df_mov.apply(lambda r: _repair_split_from_raw(r, _col), axis=1)
     # Pattern for dates: supports multiple formats:
     # - "DIA MES" (01 ABR)
     # - "MES DIA" (ABR 01)
