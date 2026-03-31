@@ -6964,7 +6964,7 @@ def main():
                         if not re.fullmatch(r'\d{3}(?:[\.,]\d{2})', _val):
                             continue
                         _val_pat = re.escape(_val).replace(r'\,', r'[, ]?')
-                        _m_left = re.search(r'(?<!\d)(\d)\s+' + _val_pat + r'(?!\d)', all_row_text_orig or '')
+                        _m_left = re.search(r'(?<![A-Za-z0-9])(\d{1,2})\s+' + _val_pat + r'(?!\d)', all_row_text_orig or '')
                         if _m_left:
                             row_data[_col] = f"{_m_left.group(1)},{_val}"
                 
@@ -8447,7 +8447,7 @@ def main():
             if not raw_txt:
                 return val
             # Look for N + "ddd.dd" pair in raw; when decimal part equals current value, use merged thousand.
-            pair_re = re.compile(r'(?<!\d)(\d)\s+(\d{3}(?:[\.,]\d{2}))(?!\d)')
+            pair_re = re.compile(r'(?<![A-Za-z0-9])(\d{1,2})\s+(\d{3}(?:[\.,]\d{2}))(?!\d)')
             for m in pair_re.finditer(raw_txt):
                 left = m.group(1)
                 right = _sanitize_amount_cell(m.group(2))
