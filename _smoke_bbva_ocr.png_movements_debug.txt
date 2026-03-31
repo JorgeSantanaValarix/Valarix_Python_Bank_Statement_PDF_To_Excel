@@ -1,0 +1,21 @@
+--- RFC extraction (bank=BBVA) ---
+RFC_CHECK: GRUPO FINANCIERO BBVA MEXICO Detalle de Movimientos Realizados Total de Movimientos
+
+--- Nombre extraction (bank=BBVA) ---
+
+RFC: (vacío)
+Nombre: (vacío)
+Periodo: (vacío)
+
+ORIGINAL: GRUPO FINANCIERO BBVA MEXICO
+EXCEL: fecha= | descripcion=FINANCIERO BBVA | cargos= | abonos= | saldo=
+DISPOSITION: SKIPPED
+
+ORIGINAL: Detalle de Movimientos Realizados
+EXCEL: fecha= | descripcion= | cargos= | abonos= | saldo=
+DISPOSITION: SKIPPED (movements_start header)
+
+ORIGINAL: Total de Movimientos
+EXCEL: fecha= | descripcion= | cargos= | abonos= | saldo=
+DISPOSITION: END (movements_end matched, not added)
+

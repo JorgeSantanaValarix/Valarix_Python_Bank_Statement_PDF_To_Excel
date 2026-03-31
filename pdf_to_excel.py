@@ -1100,6 +1100,12 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
         lang: Language for OCR (default: 'spa+eng' for Spanish+English)
         pages: Optional 1-based page numbers to process (e.g. [1, 3]). If None, all pages are processed.
     
+    CLI:
+        --ocr-save-visual  If present (sys.argv), writes PNGs per page next to the PDF:
+            ``{pdf_stem}_ocr_visual/page_NNN_raw_rgb.png`` — full-color render before preprocessing
+            ``{pdf_stem}_ocr_visual/page_NNN_tesseract_input.png`` — exact image passed to Tesseract
+            Use these to zoom in and check whether misread digits (e.g. 7 vs 1) come from the bitmap.
+    
     Returns:
         List of dictionaries with format: [{"page": int, "content": str, "words": list}, ...]
         Compatible with the return format of extract_text_from_pdf.
@@ -1115,6 +1121,18 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
         raise Exception("Tesseract OCR not found. Install Tesseract from: https://github.com/UB-Mannheim/tesseract/wiki")
     
     print("[INFO] Extracting text with local Tesseract OCR (100% private)...", flush=True)
+    
+    ocr_save_visual = '--ocr-save-visual' in sys.argv
+    ocr_visual_dir = None
+    if ocr_save_visual:
+        _base = os.path.splitext(os.path.abspath(pdf_path))[0]
+        ocr_visual_dir = _base + '_ocr_visual'
+        try:
+            os.makedirs(ocr_visual_dir, exist_ok=True)
+            print(f"[INFO] --ocr-save-visual: writing page images -> {ocr_visual_dir}", flush=True)
+        except OSError as e:
+            print(f"[WARNING] --ocr-save-visual: could not create {ocr_visual_dir}: {e}", flush=True)
+            ocr_visual_dir = None
     
     extracted_data = []
     
@@ -1197,6 +1215,14 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
             
             # Use preprocessed image for OCR (grayscale + contrast + sharpening)
             img_for_ocr = img_sharpened
+            
+            if ocr_visual_dir:
+                try:
+                    _pl = f"page_{page_num + 1:03d}"
+                    img.save(os.path.join(ocr_visual_dir, f"{_pl}_raw_rgb.png"))
+                    img_for_ocr.save(os.path.join(ocr_visual_dir, f"{_pl}_tesseract_input.png"))
+                except OSError as e:
+                    print(f"[WARNING] --ocr-save-visual: could not save {_pl} PNGs: {e}", flush=True)
             
             # Perform OCR with real coordinates and improved configuration
             # PSM 6: Single uniform block of text (good for multi-line content)
