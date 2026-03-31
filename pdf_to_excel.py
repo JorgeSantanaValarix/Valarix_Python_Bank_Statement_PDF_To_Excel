@@ -369,6 +369,44 @@ BANK_KEYWORDS = {
 # Decimal / thousands amount regex (module-level so helpers can use it)
 DEC_AMOUNT_RE = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
 
+# Tesseract OCR preprocessing (PIL). Very strong contrast (2.0) + heavy sharpen can create halos
+# and stroke artifacts that worsen 7/1 confusion; defaults below are gentler.
+OCR_PREPROCESS_CONTRAST = 1.45
+OCR_PREPROCESS_UNSHARP_RADIUS = 1.2
+OCR_PREPROCESS_UNSHARP_PERCENT = 100
+OCR_PREPROCESS_UNSHARP_THRESHOLD = 3
+
+
+def _preprocess_pil_image_for_tesseract(img):
+    """
+    Grayscale → mild contrast → light unsharp mask for Tesseract input.
+    CLI ``--ocr-legacy-preprocess`` restores the older 2.0 contrast + 3×3 sharpen kernel.
+    """
+    if '--ocr-legacy-preprocess' in sys.argv:
+        img_gray = img.convert('L')
+        enhancer = ImageEnhance.Contrast(img_gray)
+        img_enhanced = enhancer.enhance(2.0)
+        sharpening_kernel = ImageFilter.Kernel(
+            (3, 3), [0, -1, 0, -1, 5, -1, 0, -1, 0], scale=1
+        )
+        return img_enhanced.filter(sharpening_kernel)
+    img_gray = img.convert('L')
+    img_mid = ImageEnhance.Contrast(img_gray).enhance(OCR_PREPROCESS_CONTRAST)
+    try:
+        return img_mid.filter(
+            ImageFilter.UnsharpMask(
+                radius=OCR_PREPROCESS_UNSHARP_RADIUS,
+                percent=OCR_PREPROCESS_UNSHARP_PERCENT,
+                threshold=OCR_PREPROCESS_UNSHARP_THRESHOLD,
+            )
+        )
+    except (AttributeError, TypeError, ValueError):
+        # Pillow without UnsharpMask: mild edge enhancement only
+        return img_mid.filter(
+            ImageFilter.Kernel((3, 3), [0, -1, 0, -1, 5, -1, 0, -1, 0], scale=1)
+        )
+
+
 # Amount normalization function
 def normalize_amount_str(amount_str):
     """Normalize amount string by removing commas, spaces, and converting to float."""
@@ -1105,6 +1143,8 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
             ``{pdf_stem}_ocr_visual/page_NNN_raw_rgb.png`` — full-color render before preprocessing
             ``{pdf_stem}_ocr_visual/page_NNN_tesseract_input.png`` — exact image passed to Tesseract
             Use these to zoom in and check whether misread digits (e.g. 7 vs 1) come from the bitmap.
+        --ocr-legacy-preprocess  Use previous pipeline: contrast 2.0 + strong 3×3 sharpen kernel instead of
+            mild contrast + unsharp mask (see ``_preprocess_pil_image_for_tesseract``).
     
     Returns:
         List of dictionaries with format: [{"page": int, "content": str, "words": list}, ...]
@@ -1198,23 +1238,8 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
             from io import BytesIO
             img = Image.open(BytesIO(img_data))
             
-            # Preprocess image for better OCR quality (Opción A1: PIL only improvements)
-            # Pipeline: Grayscale → Contrast Enhancement → Sharpening
-            # Step 1: Convert to grayscale (simplifies data, improves thresholding)
-            img_gray = img.convert('L')
-            
-            # Step 2: Enhance contrast (helps text stand out from background)
-            enhancer = ImageEnhance.Contrast(img_gray)
-            img_enhanced = enhancer.enhance(2.0)  # Increase contrast by 2x
-            
-            # Step 3: Sharpen edges (improves definition of small characters and dots like "I.V.A.")
-            # Kernel: [[0, -1, 0], [-1, 5, -1], [0, -1, 0]] - standard sharpening kernel
-            sharpening_kernel = ImageFilter.Kernel((3, 3), 
-                [0, -1, 0, -1, 5, -1, 0, -1, 0], scale=1)
-            img_sharpened = img_enhanced.filter(sharpening_kernel)
-            
-            # Use preprocessed image for OCR (grayscale + contrast + sharpening)
-            img_for_ocr = img_sharpened
+            # Preprocess for Tesseract: mild contrast + unsharp mask (default), or --ocr-legacy-preprocess
+            img_for_ocr = _preprocess_pil_image_for_tesseract(img)
             
             if ocr_visual_dir:
                 try:
