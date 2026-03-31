@@ -65,6 +65,17 @@ BANK_CONFIGS = {
             "cargos": (360, 398),          # Charges column
             "abonos": (422, 458),          # Credits column
             "saldo": (539, 593),           # Balance column
+        },
+        # OCR-only coordinates for illegible BBVA PDFs (Tesseract path).
+        # Keeps normal BBVA coordinates unchanged.
+        "columns_ocr": {
+            "fecha": (20, 78),             # Fecha Operacion
+            "liq": (100, 165),             # Fecha Liquidacion
+            "descripcion": (170, 445),     # Descripcion
+            "cargos": (740, 805),          # Cargos
+            "abonos": (830, 910),          # Abonos
+            "saldo": (970, 1055),          # Saldo Operacion
+            "saldo_liq": (1105, 1190),     # Saldo Liquidacion
         }
     },
     
@@ -6003,6 +6014,9 @@ def main():
         bank_config["name"] = detected_bank
     
     columns_config = bank_config.get("columns", {})
+    # BBVA OCR: use OCR-calibrated coordinates so row splitting matches illegible PDFs.
+    if bank_config.get('name') == 'BBVA' and used_ocr and bank_config.get('columns_ocr'):
+        columns_config = bank_config.get('columns_ocr', {}).copy()
 
     # find where movements start (first line anywhere that matches a date or contains header keywords)
     # Pattern for dates: supports multiple formats:
@@ -8361,7 +8375,9 @@ def main():
             if col in df_mov.columns:
                 df_mov = df_mov.drop(columns=[col])
 
-    # For BBVA, split 'saldo' column into 'OPERACIÓN' and 'LIQUIDACIÓN'
+    # For BBVA, derive final Saldo keeping compatibility:
+    # - Normal BBVA: split "saldo" cell into OPERACION/LIQUIDACION.
+    # - OCR BBVA (with columns_ocr): prefer explicit "saldo_liq" as LIQUIDACION and "saldo" as OPERACION.
     if bank_config['name'] == 'BBVA' and 'saldo' in df_mov.columns:
         def _extract_two_amounts(txt):
             """Extract two amounts from the saldo column (OPERACIÓN and LIQUIDACIÓN)."""
@@ -8391,17 +8407,28 @@ def main():
             else:
                 return (None, None)
         
-        # Extract the two amounts from saldo column
-        amounts = df_mov['saldo'].astype(str).apply(_extract_two_amounts)
-        df_mov['OPERACIÓN'] = amounts.apply(lambda t: t[1])  # Second amount is OPERACIÓN
-        df_mov['LIQUIDACIÓN'] = amounts.apply(lambda t: t[0])  # First amount is LIQUIDACIÓN
-        
-        # For BBVA, create 'Saldo' from 'LIQUIDACIÓN' (first amount) and remove both saldo columns
-        df_mov['Saldo'] = df_mov['LIQUIDACIÓN']
-        df_mov = df_mov.drop(columns=['OPERACIÓN', 'LIQUIDACIÓN'])
-        
-        # Remove the original 'saldo' column
-        df_mov = df_mov.drop(columns=['saldo'])
+        if 'saldo_liq' in df_mov.columns:
+            # OCR BBVA with explicit two saldo columns.
+            df_mov['OPERACIÓN'] = df_mov['saldo'].astype(str).replace('nan', '').str.strip()
+            df_mov['LIQUIDACIÓN'] = df_mov['saldo_liq'].astype(str).replace('nan', '').str.strip()
+            df_mov['OPERACIÓN'] = df_mov['OPERACIÓN'].replace('', None)
+            df_mov['LIQUIDACIÓN'] = df_mov['LIQUIDACIÓN'].replace('', None)
+            # Final one-column Saldo must stay aligned with historical BBVA export:
+            # prefer LIQUIDACION and fallback to OPERACION if missing.
+            df_mov['Saldo'] = df_mov['LIQUIDACIÓN'].fillna(df_mov['OPERACIÓN'])
+            df_mov = df_mov.drop(columns=['OPERACIÓN', 'LIQUIDACIÓN', 'saldo', 'saldo_liq'])
+        else:
+            # Normal BBVA: saldo column can contain both values in one cell.
+            amounts = df_mov['saldo'].astype(str).apply(_extract_two_amounts)
+            df_mov['OPERACIÓN'] = amounts.apply(lambda t: t[1])  # Second amount is OPERACIÓN
+            df_mov['LIQUIDACIÓN'] = amounts.apply(lambda t: t[0])  # First amount is LIQUIDACIÓN
+            
+            # For BBVA, create 'Saldo' from 'LIQUIDACIÓN' (first amount) and remove both saldo columns
+            df_mov['Saldo'] = df_mov['LIQUIDACIÓN']
+            df_mov = df_mov.drop(columns=['OPERACIÓN', 'LIQUIDACIÓN'])
+            
+            # Remove the original 'saldo' column
+            df_mov = df_mov.drop(columns=['saldo'])
 
     # Merge 'liq' and 'descripcion' into a single 'Descripcion' column.
     # Remove any date tokens and decimal amounts from the description text.
