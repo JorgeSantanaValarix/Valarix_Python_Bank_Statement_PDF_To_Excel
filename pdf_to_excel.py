@@ -8355,6 +8355,20 @@ def main():
                 return matches[0].strip()
             return s
         df_mov['fecha'] = df_mov['fecha'].astype(str).apply(_first_date_only)
+
+    # Normalize OCR amount cells so Excel does not contain spaced numbers (e.g. "449 172.42").
+    def _sanitize_amount_cell(v):
+        if v is None:
+            return ''
+        s = str(v).strip()
+        if not s or s.lower() in ('nan', 'none'):
+            return ''
+        # Remove spaces between digits only.
+        return re.sub(r'(?<=\d)\s+(?=\d)', '', s)
+
+    for _amt_col in ('cargos', 'abonos', 'saldo', 'saldo_liq'):
+        if _amt_col in df_mov.columns:
+            df_mov[_amt_col] = df_mov[_amt_col].apply(_sanitize_amount_cell)
     # Pattern for dates: supports multiple formats:
     # - "DIA MES" (01 ABR)
     # - "MES DIA" (ABR 01)
