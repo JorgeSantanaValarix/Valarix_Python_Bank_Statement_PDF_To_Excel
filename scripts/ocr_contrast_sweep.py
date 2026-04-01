@@ -1,5 +1,5 @@
 """
-Run pdf_to_excel.py over a contrast grid (default 1.0 .. 2.5 step 0.2) and write
+Run pdf_to_excel.py over a contrast grid (default 1.4 .. 1.8 step 0.1) and write
 one Excel per value: <pdf_stem>_ocr_contrast_<value>.xlsx in the PDF directory.
 
 Requires: pdf_to_excel.py with --ocr-contrast and --output-excel support.
@@ -23,7 +23,7 @@ def _repo_root() -> str:
 
 
 def _contrast_values(start: float, end: float, step: float) -> list[float]:
-    """1.0 .. 2.5 step 0.2 yields 1.0..2.4 plus 2.5 (step does not land on 2.5)."""
+    """Inclusive start/end; if the last step does not land exactly on ``end``, ``end`` is appended."""
     out: list[float] = []
     v = round(start, 6)
     end_r = round(end, 6)
@@ -75,9 +75,9 @@ def main() -> int:
         ),
         help="Input PDF path",
     )
-    ap.add_argument("--start", type=float, default=1.0)
-    ap.add_argument("--end", type=float, default=2.5)
-    ap.add_argument("--step", type=float, default=0.2)
+    ap.add_argument("--start", type=float, default=1.4)
+    ap.add_argument("--end", type=float, default=1.8)
+    ap.add_argument("--step", type=float, default=0.1)
     ap.add_argument(
         "--extra-args",
         nargs="*",
