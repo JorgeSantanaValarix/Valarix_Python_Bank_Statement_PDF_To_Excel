@@ -372,6 +372,35 @@ DEC_AMOUNT_RE = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
 # Tesseract OCR preprocessing (PIL): matches pdf_to_excel-BUP (grayscale → contrast 2.0 → 3×3 sharpen kernel).
 OCR_PREPROCESS_CONTRAST = 2.0
 
+_OCR_CONTRAST_EFFECTIVE_CACHE = None
+
+
+def _parse_ocr_contrast_from_argv():
+    for i, arg in enumerate(sys.argv):
+        if arg == '--ocr-contrast' and i + 1 < len(sys.argv):
+            try:
+                return float(sys.argv[i + 1])
+            except ValueError:
+                break
+    return OCR_PREPROCESS_CONTRAST
+
+
+def _get_ocr_preprocess_contrast():
+    global _OCR_CONTRAST_EFFECTIVE_CACHE
+    if _OCR_CONTRAST_EFFECTIVE_CACHE is None:
+        _OCR_CONTRAST_EFFECTIVE_CACHE = _parse_ocr_contrast_from_argv()
+    return _OCR_CONTRAST_EFFECTIVE_CACHE
+
+
+def _parse_output_excel_path_from_argv(default_path):
+    for i, arg in enumerate(sys.argv):
+        if arg in ('--output-excel', '--out-xlsx') and i + 1 < len(sys.argv):
+            nxt = sys.argv[i + 1]
+            if nxt.startswith('-'):
+                continue
+            return os.path.normpath(os.path.abspath(nxt))
+    return default_path
+
 
 def _preprocess_pil_image_for_tesseract(img):
     """
@@ -380,7 +409,7 @@ def _preprocess_pil_image_for_tesseract(img):
     """
     img_gray = img.convert('L')
     enhancer = ImageEnhance.Contrast(img_gray)
-    img_enhanced = enhancer.enhance(OCR_PREPROCESS_CONTRAST)
+    img_enhanced = enhancer.enhance(_get_ocr_preprocess_contrast())
     sharpening_kernel = ImageFilter.Kernel(
         (3, 3), [0, -1, 0, -1, 5, -1, 0, -1, 0], scale=1
     )
@@ -1123,6 +1152,9 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
             ``{pdf_stem}_ocr_visual/page_NNN_raw_rgb.png`` — full-color render before preprocessing
             ``{pdf_stem}_ocr_visual/page_NNN_tesseract_input.png`` — exact image passed to Tesseract
             Use these to zoom in and check whether misread digits (e.g. 7 vs 1) come from the bitmap.
+        --ocr-psm-11  Use Tesseract ``--psm 11`` (sparse text) for A/B testing. Default is ``--psm 6`` (single
+            uniform block), which matches the historical pipeline and has been more reliable for bank tables.
+        --ocr-contrast <float>  PIL contrast factor for preprocessing (default 2.0). Use with contrast sweeps.
     
     Returns:
         List of dictionaries with format: [{"page": int, "content": str, "words": list}, ...]
@@ -1139,6 +1171,10 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
         raise Exception("Tesseract OCR not found. Install Tesseract from: https://github.com/UB-Mannheim/tesseract/wiki")
     
     print("[INFO] Extracting text with local Tesseract OCR (100% private)...", flush=True)
+    
+    ocr_psm = 11 if '--ocr-psm-11' in sys.argv else 6
+    print(f"[INFO] Tesseract page segmentation: --psm {ocr_psm} (add --ocr-psm-11 to try sparse-text mode)", flush=True)
+    print(f"[INFO] OCR preprocess contrast: {_get_ocr_preprocess_contrast()} (--ocr-contrast to override)", flush=True)
     
     ocr_save_visual = '--ocr-save-visual' in sys.argv
     ocr_visual_dir = None
@@ -1228,10 +1264,9 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
                     print(f"[WARNING] --ocr-save-visual: could not save {_pl} PNGs: {e}", flush=True)
             
             # Perform OCR with real coordinates and improved configuration
-            # PSM 6: Single uniform block of text (good for multi-line content)
-            # Note: PSM 7 was tested but caused issues with word extraction and coordinates
+            # Default --psm 6; use --ocr-psm-11 for sparse-text A/B (can misread amounts on some layouts)
             # OEM 1: LSTM engine (better accuracy than legacy engine)
-            tesseract_config = r'--oem 1 --psm 6'
+            tesseract_config = f'--oem 1 --psm {ocr_psm}'
             ocr_data = pytesseract.image_to_data(img_for_ocr, lang=lang, output_type=pytesseract.Output.DICT, config=tesseract_config)
             
             # Extract plain text to maintain compatibility with 'content'
@@ -6036,8 +6071,9 @@ def main():
         print(f"   Detalle: {e}")
         sys.exit(1)
 
-    # Normalize output path
+    # Normalize output path (optional: --output-excel / --out-xlsx <path>)
     output_excel = os.path.normpath(os.path.splitext(pdf_path)[0] + ".xlsx")
+    output_excel = _parse_output_excel_path_from_argv(output_excel)
     
     # Validar permisos de escritura en el directorio de salida
     output_dir = os.path.dirname(output_excel) or os.getcwd()
