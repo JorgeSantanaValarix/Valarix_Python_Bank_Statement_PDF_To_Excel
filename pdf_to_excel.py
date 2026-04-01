@@ -369,27 +369,9 @@ BANK_KEYWORDS = {
 # Decimal / thousands amount regex (module-level so helpers can use it)
 DEC_AMOUNT_RE = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
 
-# Tesseract OCR preprocessing (PIL): grayscale → contrast enhance → 3×3 sharpen kernel (BUP used contrast 2.0).
-OCR_PREPROCESS_CONTRAST = 1.6
-
-_OCR_CONTRAST_EFFECTIVE_CACHE = None
-
-
-def _parse_ocr_contrast_from_argv():
-    for i, arg in enumerate(sys.argv):
-        if arg == '--ocr-contrast' and i + 1 < len(sys.argv):
-            try:
-                return float(sys.argv[i + 1])
-            except ValueError:
-                break
-    return OCR_PREPROCESS_CONTRAST
-
-
-def _get_ocr_preprocess_contrast():
-    global _OCR_CONTRAST_EFFECTIVE_CACHE
-    if _OCR_CONTRAST_EFFECTIVE_CACHE is None:
-        _OCR_CONTRAST_EFFECTIVE_CACHE = _parse_ocr_contrast_from_argv()
-    return _OCR_CONTRAST_EFFECTIVE_CACHE
+# Tesseract OCR preprocessing (PIL): grayscale → contrast enhance → 3×3 sharpen kernel.
+# Matches pdf_to_excel-BUP.py (Opción A1): contrast 2.0, same sharpen kernel.
+OCR_PREPROCESS_CONTRAST = 1.9
 
 
 def _parse_output_excel_path_from_argv(default_path):
@@ -404,12 +386,12 @@ def _parse_output_excel_path_from_argv(default_path):
 
 def _preprocess_pil_image_for_tesseract(img):
     """
-    Same PIL pipeline as ``extract_text_with_tesseract_ocr`` in pdf_to_excel-BUP.py:
-    grayscale → contrast enhance → 3×3 sharpening kernel.
+    Same PIL pipeline as pdf_to_excel-BUP.py (Opción A1):
+    grayscale → contrast 2.0 → 3×3 sharpening kernel.
     """
     img_gray = img.convert('L')
     enhancer = ImageEnhance.Contrast(img_gray)
-    img_enhanced = enhancer.enhance(_get_ocr_preprocess_contrast())
+    img_enhanced = enhancer.enhance(OCR_PREPROCESS_CONTRAST)
     sharpening_kernel = ImageFilter.Kernel(
         (3, 3), [0, -1, 0, -1, 5, -1, 0, -1, 0], scale=1
     )
@@ -1148,13 +1130,11 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
         pages: Optional 1-based page numbers to process (e.g. [1, 3]). If None, all pages are processed.
     
     CLI:
-        --ocr-save-visual  If present (sys.argv), writes PNGs per page next to the PDF:
+        --ocr-save-visual  Optional debug: writes PNGs per page next to the PDF (not in BUP):
             ``{pdf_stem}_ocr_visual/page_NNN_raw_rgb.png`` — full-color render before preprocessing
             ``{pdf_stem}_ocr_visual/page_NNN_tesseract_input.png`` — exact image passed to Tesseract
             Use these to zoom in and check whether misread digits (e.g. 7 vs 1) come from the bitmap.
-        --ocr-psm-11  Use Tesseract ``--psm 11`` (sparse text) for A/B testing. Default is ``--psm 6`` (single
-            uniform block), which matches the historical pipeline and has been more reliable for bank tables.
-        --ocr-contrast <float>  PIL contrast factor for preprocessing (default 1.6). Use with contrast sweeps.
+        Tesseract config matches pdf_to_excel-BUP.py: ``--oem 1 --psm 6``; PIL contrast ``OCR_PREPROCESS_CONTRAST`` (2.0).
     
     Returns:
         List of dictionaries with format: [{"page": int, "content": str, "words": list}, ...]
@@ -1171,10 +1151,6 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
         raise Exception("Tesseract OCR not found. Install Tesseract from: https://github.com/UB-Mannheim/tesseract/wiki")
     
     print("[INFO] Extracting text with local Tesseract OCR (100% private)...", flush=True)
-    
-    ocr_psm = 11 if '--ocr-psm-11' in sys.argv else 6
-    print(f"[INFO] Tesseract page segmentation: --psm {ocr_psm} (add --ocr-psm-11 to try sparse-text mode)", flush=True)
-    print(f"[INFO] OCR preprocess contrast: {_get_ocr_preprocess_contrast()} (--ocr-contrast to override)", flush=True)
     
     ocr_save_visual = '--ocr-save-visual' in sys.argv
     ocr_visual_dir = None
@@ -1252,7 +1228,7 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
             from io import BytesIO
             img = Image.open(BytesIO(img_data))
             
-            # Preprocess for Tesseract: grayscale + contrast (default 1.6) + 3×3 sharpen kernel
+            # Preprocess for Tesseract: grayscale + contrast 2.0 (same as BUP) + 3×3 sharpen kernel
             img_for_ocr = _preprocess_pil_image_for_tesseract(img)
             
             if ocr_visual_dir:
@@ -1263,10 +1239,8 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
                 except OSError as e:
                     print(f"[WARNING] --ocr-save-visual: could not save {_pl} PNGs: {e}", flush=True)
             
-            # Perform OCR with real coordinates and improved configuration
-            # Default --psm 6; use --ocr-psm-11 for sparse-text A/B (can misread amounts on some layouts)
-            # OEM 1: LSTM engine (better accuracy than legacy engine)
-            tesseract_config = f'--oem 1 --psm {ocr_psm}'
+            # Perform OCR (same as pdf_to_excel-BUP.py: PSM 6, OEM 1 LSTM)
+            tesseract_config = r'--oem 1 --psm 6'
             ocr_data = pytesseract.image_to_data(img_for_ocr, lang=lang, output_type=pytesseract.Output.DICT, config=tesseract_config)
             
             # Extract plain text to maintain compatibility with 'content'
