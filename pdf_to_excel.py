@@ -369,8 +369,8 @@ BANK_KEYWORDS = {
 # Decimal / thousands amount regex (module-level so helpers can use it)
 DEC_AMOUNT_RE = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
 
-# Tesseract OCR preprocessing (PIL): matches pdf_to_excel-BUP (grayscale → contrast 2.0 → 3×3 sharpen kernel).
-OCR_PREPROCESS_CONTRAST = 2.0
+# Tesseract OCR preprocessing (PIL): grayscale → contrast enhance → 3×3 sharpen kernel (BUP used contrast 2.0).
+OCR_PREPROCESS_CONTRAST = 1.6
 
 _OCR_CONTRAST_EFFECTIVE_CACHE = None
 
@@ -1154,7 +1154,7 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
             Use these to zoom in and check whether misread digits (e.g. 7 vs 1) come from the bitmap.
         --ocr-psm-11  Use Tesseract ``--psm 11`` (sparse text) for A/B testing. Default is ``--psm 6`` (single
             uniform block), which matches the historical pipeline and has been more reliable for bank tables.
-        --ocr-contrast <float>  PIL contrast factor for preprocessing (default 2.0). Use with contrast sweeps.
+        --ocr-contrast <float>  PIL contrast factor for preprocessing (default 1.6). Use with contrast sweeps.
     
     Returns:
         List of dictionaries with format: [{"page": int, "content": str, "words": list}, ...]
@@ -1252,7 +1252,7 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
             from io import BytesIO
             img = Image.open(BytesIO(img_data))
             
-            # Preprocess for Tesseract: same as BUP (grayscale + contrast 2.0 + 3×3 sharpen kernel)
+            # Preprocess for Tesseract: grayscale + contrast (default 1.6) + 3×3 sharpen kernel
             img_for_ocr = _preprocess_pil_image_for_tesseract(img)
             
             if ocr_visual_dir:
