@@ -369,42 +369,22 @@ BANK_KEYWORDS = {
 # Decimal / thousands amount regex (module-level so helpers can use it)
 DEC_AMOUNT_RE = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
 
-# Tesseract OCR preprocessing (PIL). Very strong contrast (2.0) + heavy sharpen can create halos
-# and stroke artifacts that worsen 7/1 confusion; defaults below are gentler.
-OCR_PREPROCESS_CONTRAST = 1.45
-OCR_PREPROCESS_UNSHARP_RADIUS = 1.2
-OCR_PREPROCESS_UNSHARP_PERCENT = 100
-OCR_PREPROCESS_UNSHARP_THRESHOLD = 3
+# Tesseract OCR preprocessing (PIL): matches pdf_to_excel-BUP (grayscale → contrast 2.0 → 3×3 sharpen kernel).
+OCR_PREPROCESS_CONTRAST = 2.0
 
 
 def _preprocess_pil_image_for_tesseract(img):
     """
-    Grayscale → mild contrast → light unsharp mask for Tesseract input.
-    CLI ``--ocr-legacy-preprocess`` restores the older 2.0 contrast + 3×3 sharpen kernel.
+    Same PIL pipeline as ``extract_text_with_tesseract_ocr`` in pdf_to_excel-BUP.py:
+    grayscale → contrast enhance → 3×3 sharpening kernel.
     """
-    if '--ocr-legacy-preprocess' in sys.argv:
-        img_gray = img.convert('L')
-        enhancer = ImageEnhance.Contrast(img_gray)
-        img_enhanced = enhancer.enhance(2.0)
-        sharpening_kernel = ImageFilter.Kernel(
-            (3, 3), [0, -1, 0, -1, 5, -1, 0, -1, 0], scale=1
-        )
-        return img_enhanced.filter(sharpening_kernel)
     img_gray = img.convert('L')
-    img_mid = ImageEnhance.Contrast(img_gray).enhance(OCR_PREPROCESS_CONTRAST)
-    try:
-        return img_mid.filter(
-            ImageFilter.UnsharpMask(
-                radius=OCR_PREPROCESS_UNSHARP_RADIUS,
-                percent=OCR_PREPROCESS_UNSHARP_PERCENT,
-                threshold=OCR_PREPROCESS_UNSHARP_THRESHOLD,
-            )
-        )
-    except (AttributeError, TypeError, ValueError):
-        # Pillow without UnsharpMask: mild edge enhancement only
-        return img_mid.filter(
-            ImageFilter.Kernel((3, 3), [0, -1, 0, -1, 5, -1, 0, -1, 0], scale=1)
-        )
+    enhancer = ImageEnhance.Contrast(img_gray)
+    img_enhanced = enhancer.enhance(OCR_PREPROCESS_CONTRAST)
+    sharpening_kernel = ImageFilter.Kernel(
+        (3, 3), [0, -1, 0, -1, 5, -1, 0, -1, 0], scale=1
+    )
+    return img_enhanced.filter(sharpening_kernel)
 
 
 # Amount normalization function
@@ -1143,8 +1123,6 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
             ``{pdf_stem}_ocr_visual/page_NNN_raw_rgb.png`` — full-color render before preprocessing
             ``{pdf_stem}_ocr_visual/page_NNN_tesseract_input.png`` — exact image passed to Tesseract
             Use these to zoom in and check whether misread digits (e.g. 7 vs 1) come from the bitmap.
-        --ocr-legacy-preprocess  Use previous pipeline: contrast 2.0 + strong 3×3 sharpen kernel instead of
-            mild contrast + unsharp mask (see ``_preprocess_pil_image_for_tesseract``).
     
     Returns:
         List of dictionaries with format: [{"page": int, "content": str, "words": list}, ...]
@@ -1238,7 +1216,7 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
             from io import BytesIO
             img = Image.open(BytesIO(img_data))
             
-            # Preprocess for Tesseract: mild contrast + unsharp mask (default), or --ocr-legacy-preprocess
+            # Preprocess for Tesseract: same as BUP (grayscale + contrast 2.0 + 3×3 sharpen kernel)
             img_for_ocr = _preprocess_pil_image_for_tesseract(img)
             
             if ocr_visual_dir:
