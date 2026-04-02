@@ -2209,6 +2209,62 @@ def extract_name_from_tarjeta_titular_line(full_text: str):
     return None
 
 
+def banamex_ocr_line_sign_only(text):
+    """
+    If an OCR row is only '+' or '-' (optional whitespace), return '+' or '-'.
+    Handles common OCR dash variants. Otherwise None.
+    """
+    if not text or not str(text).strip():
+        return None
+    t = re.sub(r'\s+', '', str(text).strip())
+    if len(t) != 1:
+        return None
+    if t == '+':
+        return '+'
+    if t in ('-', '−', '–', '\u2212'):
+        return '-'
+    return None
+
+
+def banamex_amount_string_has_leading_sign(s):
+    s = (s or '').strip()
+    if not s:
+        return False
+    if s[0] in ('+', '-'):
+        return True
+    if len(s) >= 1 and s[0] in ('−', '–', '\u2212'):
+        return True
+    return False
+
+
+def banamex_merge_standalone_sign_to_previous_row(prev_row, sign_char):
+    """
+    Banamex new format: '-' => abono, '+' => cargo. Prepend sign to the amount on the
+    previous movement row when OCR put '+'/'-' on its own line.
+    Returns True if a change was applied.
+    """
+    if not prev_row or sign_char not in ('+', '-'):
+        return False
+    ab = (prev_row.get('abonos') or '').strip()
+    cg = (prev_row.get('cargos') or '').strip()
+    amt = ''
+    if ab and DEC_AMOUNT_RE.search(ab):
+        amt = ab
+    elif cg and DEC_AMOUNT_RE.search(cg):
+        amt = cg
+    if not amt:
+        return False
+    if banamex_amount_string_has_leading_sign(amt):
+        return False
+    if sign_char == '-':
+        prev_row['cargos'] = ''
+        prev_row['abonos'] = '-' + amt
+    else:
+        prev_row['abonos'] = ''
+        prev_row['cargos'] = '+' + amt
+    return True
+
+
 def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
     """
     Extract RFC and name (razón social) from PDF text.
@@ -7005,6 +7061,20 @@ def main():
                         continue  # Skip the movements_start line
                 
                 mov_section_line_num += 1
+
+                # Banamex OCR: Monto column sometimes emits '+' or '-' alone on the following line.
+                # Merge onto the previous movement row (same as lookahead in new-format override).
+                if bank_config['name'] == 'Banamex' and movement_rows:
+                    _bnx_sig = banamex_ocr_line_sign_only(all_row_text_orig)
+                    if _bnx_sig:
+                        _prev_m = movement_rows[-1]
+                        if banamex_merge_standalone_sign_to_previous_row(_prev_m, _bnx_sig):
+                            _disp = "MERGED (Banamex +/- line applied to previous movement)"
+                            _debug_mov_line(all_row_text_orig, None, _disp)
+                            continue
+                        _disp = "SKIPPED (Banamex standalone +/-)"
+                        _debug_mov_line(all_row_text_orig, None, _disp)
+                        continue
                 
                 # For Banregio, skip rows that start with "del 01 al" (irrelevant information)
                 if bank_config['name'] == 'Banregio':
