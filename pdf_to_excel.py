@@ -385,7 +385,7 @@ DEC_AMOUNT_RE = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
 #          7.0             504
 #          8.0             576
 #
-OCR_RENDER_ZOOM = 4.2
+OCR_RENDER_ZOOM = 4.0
 
 
 def _parse_ocr_zoom_from_argv():
