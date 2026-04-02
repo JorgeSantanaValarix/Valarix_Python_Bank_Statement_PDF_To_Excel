@@ -1,6 +1,7 @@
 import sys
 import os
 import re
+import subprocess
 import pdfplumber
 import pandas as pd
 
@@ -8,7 +9,7 @@ import pandas as pd
 try:
     import pytesseract
     import fitz  # PyMuPDF - to convert PDF to images
-    from PIL import Image, ImageEnhance, ImageFilter
+    from PIL import Image
     TESSERACT_AVAILABLE = True
 except ImportError:
     TESSERACT_AVAILABLE = False
@@ -369,9 +370,34 @@ BANK_KEYWORDS = {
 # Decimal / thousands amount regex (module-level so helpers can use it)
 DEC_AMOUNT_RE = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
 
-# Tesseract OCR preprocessing (PIL): grayscale → contrast enhance → 3×3 sharpen kernel.
-# Matches pdf_to_excel-BUP.py (Opción A1): contrast 2.0, same sharpen kernel.
-OCR_PREPROCESS_CONTRAST = 1.9
+# Default PyMuPDF render zoom for OCR. Effective DPI ≈ 72 × zoom (PDF points are 1/72 inch; zoom = px per point).
+# Override with ``--ocr-zoom <float>`` or pass ``zoom_factor=`` to ``extract_text_with_tesseract_ocr``.
+#
+#   OCR_RENDER_ZOOM    Approx. DPI
+#   ---------------    -----------
+#          1.0              72
+#          2.0             144
+#          3.0             216
+#          4.0             288
+#       ~4.167             300   (300 ÷ 72)
+#          5.0             360
+#          6.0             432
+#          7.0             504   ← default below
+#          8.0             576
+#
+OCR_RENDER_ZOOM = 5
+
+
+def _parse_ocr_zoom_from_argv():
+    for i, arg in enumerate(sys.argv):
+        if arg == '--ocr-zoom' and i + 1 < len(sys.argv):
+            try:
+                z = float(sys.argv[i + 1])
+                if z > 0:
+                    return z
+            except ValueError:
+                break
+    return None
 
 
 def _parse_output_excel_path_from_argv(default_path):
@@ -386,16 +412,16 @@ def _parse_output_excel_path_from_argv(default_path):
 
 def _preprocess_pil_image_for_tesseract(img):
     """
-    Same PIL pipeline as pdf_to_excel-BUP.py (Opción A1):
-    grayscale → contrast 2.0 → 3×3 sharpening kernel.
+    Pass PyMuPDF raster to Tesseract without grayscale/contrast/sharpen.
+    Only normalizes mode (RGBA → RGB on white; palette → RGB) so pytesseract gets a stable bitmap.
     """
-    img_gray = img.convert('L')
-    enhancer = ImageEnhance.Contrast(img_gray)
-    img_enhanced = enhancer.enhance(OCR_PREPROCESS_CONTRAST)
-    sharpening_kernel = ImageFilter.Kernel(
-        (3, 3), [0, -1, 0, -1, 5, -1, 0, -1, 0], scale=1
-    )
-    return img_enhanced.filter(sharpening_kernel)
+    if img.mode == 'RGBA':
+        bg = Image.new('RGB', img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[3])
+        return bg
+    if img.mode == 'RGB':
+        return img
+    return img.convert('RGB')
 
 
 # Amount normalization function
@@ -1118,7 +1144,9 @@ def convert_ocr_text_to_words_format(ocr_text: str, page_number: int = 1) -> lis
     return words
 
 
-def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages: list = None) -> list:
+def extract_text_with_tesseract_ocr(
+    pdf_path: str, lang: str = 'spa+eng', pages: list = None, zoom_factor: float = None
+) -> list:
     """
     Extracts text from PDF using local Tesseract OCR.
     100% private - does not send data to external servers.
@@ -1128,13 +1156,17 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
         pdf_path: Path to PDF file
         lang: Language for OCR (default: 'spa+eng' for Spanish+English)
         pages: Optional 1-based page numbers to process (e.g. [1, 3]). If None, all pages are processed.
+        zoom_factor: PyMuPDF render scale. If None, uses ``--ocr-zoom`` from sys.argv if set, else ``OCR_RENDER_ZOOM``.
     
     CLI:
+        --ocr-zoom <float>  Render scale (default ``OCR_RENDER_ZOOM``). Word coordinates use ``zoom_factor / 2.0``.
+        --ocr-zoom-sweep        OCR only: zoom 1..8 → ``{stem}_ocr_zoom_sweep/*.txt`` (no Excel).
+        --ocr-zoom-sweep-excel  Full PDF→Excel per zoom → ``{stem}_ocr_zoom_sweep_excel/*_zoom{N}.xlsx``.
         --ocr-save-visual  Optional debug: writes PNGs per page next to the PDF (not in BUP):
-            ``{pdf_stem}_ocr_visual/page_NNN_raw_rgb.png`` — full-color render before preprocessing
-            ``{pdf_stem}_ocr_visual/page_NNN_tesseract_input.png`` — exact image passed to Tesseract
+            ``{pdf_stem}_ocr_visual/page_NNN_raw_rgb.png`` — PNG from PyMuPDF before mode normalization
+            ``{pdf_stem}_ocr_visual/page_NNN_tesseract_input.png`` — exact image passed to Tesseract (RGB; same pixels as raw when already RGB)
             Use these to zoom in and check whether misread digits (e.g. 7 vs 1) come from the bitmap.
-        Tesseract config matches pdf_to_excel-BUP.py: ``--oem 1 --psm 6``; PIL contrast ``OCR_PREPROCESS_CONTRAST`` (2.0).
+        Tesseract config matches pdf_to_excel-BUP.py: ``--oem 1 --psm 6``; no PIL contrast/sharpen (raw raster).
     
     Returns:
         List of dictionaries with format: [{"page": int, "content": str, "words": list}, ...]
@@ -1151,6 +1183,15 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
         raise Exception("Tesseract OCR not found. Install Tesseract from: https://github.com/UB-Mannheim/tesseract/wiki")
     
     print("[INFO] Extracting text with local Tesseract OCR (100% private)...", flush=True)
+    
+    if zoom_factor is not None:
+        zf = float(zoom_factor)
+    else:
+        zf = _parse_ocr_zoom_from_argv()
+        if zf is None:
+            zf = float(OCR_RENDER_ZOOM)
+    zoom_factor = zf
+    print(f"[INFO] OCR render zoom: {zoom_factor} (≈{72.0 * zoom_factor:.0f} DPI effective)", flush=True)
     
     ocr_save_visual = '--ocr-save-visual' in sys.argv
     ocr_visual_dir = None
@@ -1177,13 +1218,9 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
         page_width_inches = page_width_pts / 72.0
         page_height_inches = page_height_pts / 72.0
         
-        # Use fixed zoom factor for optimal OCR quality (7.0x = 504 DPI)
-        # Target DPI: 504 DPI (7.0x zoom factor)
-        target_dpi = 504
-        zoom_factor = 7.0  # Fixed zoom for consistent OCR quality
-        
-        # Calculate effective DPI with fixed zoom
-        effective_dpi = 72.0 * zoom_factor  # 504 DPI
+        # Render zoom resolved above (OCR_RENDER_ZOOM, --ocr-zoom, or zoom_factor argument)
+        target_dpi = int(round(72.0 * zoom_factor))
+        effective_dpi = 72.0 * zoom_factor
         
         # Calculate resulting image dimensions in pixels
         img_width_px = int(page_width_pts * zoom_factor)
@@ -1228,7 +1265,7 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
             from io import BytesIO
             img = Image.open(BytesIO(img_data))
             
-            # Preprocess for Tesseract: grayscale + contrast 2.0 (same as BUP) + 3×3 sharpen kernel
+            # Tesseract input: PyMuPDF bitmap with RGB/RGBA normalization only (no contrast/sharpen).
             img_for_ocr = _preprocess_pil_image_for_tesseract(img)
             
             if ocr_visual_dir:
@@ -1264,6 +1301,86 @@ def extract_text_with_tesseract_ocr(pdf_path: str, lang: str = 'spa+eng', pages:
         
     except Exception as e:
         raise Exception(f"Error en Tesseract OCR: {e}")
+
+
+def run_ocr_zoom_sweep(pdf_path: str, zoom_min: int = 1, zoom_max: int = 8) -> str:
+    """
+    Run ``extract_text_with_tesseract_ocr`` at integer zoom ``zoom_min``..``zoom_max`` (OCR only, no Excel).
+    Writes ``full_text_zoom{N}.txt`` per zoom and ``summary.txt`` under ``{pdf_stem}_ocr_zoom_sweep/``.
+    For the full pipeline (movements, validation, .xlsx), use ``run_ocr_zoom_sweep_excel`` or ``--ocr-zoom-sweep-excel``.
+
+    Returns:
+        Path to the output directory.
+    """
+    if not TESSERACT_AVAILABLE:
+        raise RuntimeError("Tesseract OCR is not available. Install: pip install pytesseract pymupdf pillow")
+    base = os.path.splitext(os.path.abspath(pdf_path))[0]
+    out_dir = base + '_ocr_zoom_sweep'
+    os.makedirs(out_dir, exist_ok=True)
+    summary_lines = [
+        f"# pdf: {pdf_path}",
+        f"# zoom range: {zoom_min}..{zoom_max}",
+        "zoom\tchars\twords\tfile",
+    ]
+    for z in range(zoom_min, zoom_max + 1):
+        print(f"\n========== OCR zoom sweep: zoom={z} ==========", flush=True)
+        data = extract_text_with_tesseract_ocr(pdf_path, zoom_factor=float(z))
+        parts = []
+        nwords = 0
+        for p in data:
+            parts.append(f"\n--- page {p['page']} ---\n")
+            tc = p.get('content') or ''
+            parts.append(tc)
+            nwords += len(p.get('words') or [])
+        blob = ''.join(parts)
+        fname = f'full_text_zoom{z}.txt'
+        out_txt = os.path.join(out_dir, fname)
+        with open(out_txt, 'w', encoding='utf-8') as f:
+            f.write(blob)
+        summary_lines.append(f"{z}\t{len(blob)}\t{nwords}\t{fname}")
+    sum_path = os.path.join(out_dir, 'summary.txt')
+    with open(sum_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(summary_lines) + '\n')
+    print(f"\n[OK] OCR zoom sweep finished.\n  Directory: {out_dir}\n  Summary:   {sum_path}", flush=True)
+    return out_dir
+
+
+def run_ocr_zoom_sweep_excel(pdf_path: str, zoom_min: int = 1, zoom_max: int = 8) -> str:
+    """
+    Run the **full** pdf_to_excel pipeline once per integer zoom (subprocess per zoom so behavior matches a normal run).
+
+    Writes ``{stem}_zoom{N}.xlsx`` and ``summary_excel.txt`` under ``{pdf_stem}_ocr_zoom_sweep_excel/``.
+    Forwards ``--debug`` from the parent argv if present.
+
+    Returns:
+        Path to the output directory.
+    """
+    base = os.path.splitext(os.path.abspath(pdf_path))[0]
+    out_dir = base + '_ocr_zoom_sweep_excel'
+    os.makedirs(out_dir, exist_ok=True)
+    script = os.path.abspath(__file__)
+    stem = os.path.splitext(os.path.basename(pdf_path))[0]
+    summary_lines = [
+        f"# pdf: {pdf_path}",
+        f"# full PDF→Excel per zoom {zoom_min}..{zoom_max}",
+        "zoom\texcel_path\tbytes",
+    ]
+    for z in range(zoom_min, zoom_max + 1):
+        out_xlsx = os.path.join(out_dir, f'{stem}_zoom{z}.xlsx')
+        cmd = [sys.executable, script, pdf_path, '--ocr-zoom', str(z), '--output-excel', out_xlsx]
+        if '--debug' in sys.argv:
+            cmd.append('--debug')
+        print(f"\n========== PDF→Excel zoom sweep: zoom={z} → {out_xlsx} ==========", flush=True)
+        proc = subprocess.run(cmd)
+        if proc.returncode != 0:
+            raise RuntimeError(f"pdf_to_excel subprocess failed for zoom={z} (exit code {proc.returncode})")
+        sz = os.path.getsize(out_xlsx) if os.path.isfile(out_xlsx) else -1
+        summary_lines.append(f"{z}\t{out_xlsx}\t{sz}")
+    sum_path = os.path.join(out_dir, 'summary_excel.txt')
+    with open(sum_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(summary_lines) + '\n')
+    print(f"\n[OK] PDF→Excel zoom sweep finished.\n  Directory: {out_dir}\n  Summary:   {sum_path}", flush=True)
+    return out_dir
 
 
 def filter_hsbc_movements_section(pages_data: list, start_string: str, end_string: str, end_strings_also: list = None) -> list:
@@ -6032,6 +6149,29 @@ def main():
     if not pdf_path.lower().endswith(".pdf"):
         print(f"❌ Error: El archivo debe ser un PDF: {pdf_path}")
         sys.exit(1)
+    
+    if '--ocr-zoom-sweep-excel' in sys.argv:
+        try:
+            run_ocr_zoom_sweep_excel(pdf_path, zoom_min=1, zoom_max=8)
+        except Exception as e:
+            print(f"❌ PDF→Excel zoom sweep failed: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        sys.exit(0)
+    
+    if '--ocr-zoom-sweep' in sys.argv:
+        if not TESSERACT_AVAILABLE:
+            print("❌ OCR zoom sweep requires Tesseract. Install: pip install pytesseract pymupdf pillow", flush=True)
+            sys.exit(1)
+        try:
+            run_ocr_zoom_sweep(pdf_path, zoom_min=1, zoom_max=8)
+        except Exception as e:
+            print(f"❌ OCR zoom sweep failed: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        sys.exit(0)
     
     # Verificar que el PDF no esté bloqueado/abierto por otro proceso
     try:
