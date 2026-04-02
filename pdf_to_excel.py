@@ -378,14 +378,14 @@ DEC_AMOUNT_RE = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
 #          1.0              72
 #          2.0             144
 #          3.0             216
-#          4.0             288
+#          4.0             288   ← default ``OCR_RENDER_ZOOM``
 #       ~4.167             300   (300 ÷ 72)
 #          5.0             360
 #          6.0             432
-#          7.0             504   ← default below
+#          7.0             504
 #          8.0             576
 #
-OCR_RENDER_ZOOM = 5
+OCR_RENDER_ZOOM = 4
 
 
 def _parse_ocr_zoom_from_argv():
@@ -7172,6 +7172,12 @@ def main():
                     _is_new_fmt_line = banamex_new_format or (bool(dates) and bool(re.search(r'-[a-z]{3}-', dates[0])))
                     if dates and amt_m and _is_new_fmt_line:
                         prev_line_text = ' '.join([w.get('text', '') for w in word_rows[row_idx - 1]]) if row_idx > 0 else ''
+                        next_line_text = (
+                            ' '.join([w.get('text', '') for w in word_rows[row_idx + 1]]).strip()
+                            if row_idx + 1 < len(word_rows)
+                            else ''
+                        )
+                        next_only_sign = banamex_ocr_line_sign_only(next_line_text)
                         row_data['fecha'] = dates[-1]  # last date (e.g. 19-oct-2025); keep full DD-mon-YYYY
                         amount_val = amt_m.group().strip()
                         if not amount_val.startswith('$'):
@@ -7181,10 +7187,21 @@ def main():
                         if _bnf_amt_re.search(desc_line) is None and _bnf_amt_re_alt.search(all_row_text_orig):
                             desc_line = _bnf_amt_re_alt.sub(' ', desc_line, count=1)
                         row_data['descripcion'] = ' '.join(desc_line.split()).strip().lstrip('|').strip()
-                        # + on current or previous line = cargo; else abono (next line's + applies to next movement)
+                        # + on current or previous line = cargo; else abono. OCR may put +/- alone on the *next* line.
                         is_cargo = '+' in prev_line_text or '+' in all_row_text_orig
-                        row_data['cargos'] = amount_val if is_cargo else ''
-                        row_data['abonos'] = amount_val if not is_cargo else ''
+                        if next_only_sign == '-':
+                            is_cargo = False
+                        elif next_only_sign == '+':
+                            is_cargo = True
+                        if next_only_sign == '-':
+                            row_data['cargos'] = ''
+                            row_data['abonos'] = ('-' + amount_val) if not amount_val.startswith('-') else amount_val
+                        elif next_only_sign == '+':
+                            row_data['cargos'] = ('+' + amount_val) if not amount_val.startswith('+') else amount_val
+                            row_data['abonos'] = ''
+                        else:
+                            row_data['cargos'] = amount_val if is_cargo else ''
+                            row_data['abonos'] = amount_val if not is_cargo else ''
                         row_data['saldo'] = ''
                         if 'monto' in row_data:
                             del row_data['monto']
