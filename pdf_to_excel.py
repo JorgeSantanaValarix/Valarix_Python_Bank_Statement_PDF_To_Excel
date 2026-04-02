@@ -7277,32 +7277,37 @@ def main():
             
             # Patrón de fecha para HSBC (solo día: 01-31)
             date_pattern = re.compile(r"^(0[1-9]|[12][0-9]|3[01])(?=\s|$)")
+            hsbc_day_ok_re = re.compile(r'^(0[1-9]|[12][0-9]|3[01])$')
+            hsbc_amt_valid_re = re.compile(r'^[\$]?\s*\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})?$')
             
-            # 🔍 HSBC DEBUG: Buffer para guardar últimas 2 filas válidas antes de movements_end
-            last_two_valid_rows = []
-            mov_section_line_num = 0
+            def _hsbc_fecha_day_ok(fecha_str):
+                s = (fecha_str or '').strip().rstrip('.,;:')
+                return bool(hsbc_day_ok_re.match(s))
             
-            # Extraer movimientos usando la misma lógica que otros bancos
-            for row_idx, row_words in enumerate(word_rows):
-                if not row_words:
-                    continue
-                mov_section_line_num += 1
-                
-                # Construir línea original desde palabras (sin ordenar)
+            def _hsbc_row_has_valid_amount(rd):
+                for k in ('cargos', 'abonos', 'saldo'):
+                    v = (rd.get(k) or '').strip()
+                    if not v:
+                        continue
+                    v_clean = v.replace(' ', '').replace(',', '').replace('$', '').strip()
+                    if hsbc_amt_valid_re.match(v_clean):
+                        return True
+                    if DEC_AMOUNT_RE.search(v):
+                        return True
+                return False
+            
+            def _hsbc_row_has_no_amounts(rd):
+                for k in ('cargos', 'abonos', 'saldo'):
+                    if (rd.get(k) or '').strip():
+                        return False
+                return True
+            
+            def _hsbc_ocr_process_row(row_words):
                 line_original = ' '.join([w.get('text', '') for w in row_words])
-                # Solo imprimir debug si la línea contiene "I.V.A." o "IVA"
                 contains_iva = 'I.V.A.' in line_original or 'IVA' in line_original or '1VA' in line_original
-                
-                # Extraer movimiento usando BANK_CONFIGS
                 row_data = extract_movement_row(row_words, columns_config, 'HSBC', date_pattern, debug_only_if_contains_iva=contains_iva)
-                
-                # Obtener amounts_list
                 amounts_list = row_data.get('_amounts', [])
                 
-                # Procesar montos detectados (_amounts) y asignarlos a columnas para HSBC
-                # amounts_list ya fue obtenido arriba (en el bloque de debug o aquí)
-                
-                # Función auxiliar para validar que un valor es un monto válido
                 def is_valid_amount(value):
                     """Valida que un valor sea un monto válido (no texto como '15 de mayo de').
                     Para HSBC acepta también montos sin separador de miles (ej. 12040506.2) para saldo."""
@@ -7311,12 +7316,9 @@ def main():
                     value_clean = value.strip()
                     if not value_clean:
                         return False
-                    # HSBC: aceptar montos con solo decimales sin miles (ej. $12040506.2)
                     if re.match(r'^\$?\s*\d+[.,]\d{2}$', value_clean.replace(' ', '')):
                         return True
-                    # Debe contener al menos un patrón de monto válido
                     if DEC_AMOUNT_RE.search(value_clean):
-                        # Verificar que no sea solo texto sin números significativos
                         invalid_patterns = [
                             r'\b(de|del|al|la|el|en|por|para|con|sin)\b',
                             r'\b(mayo|enero|febrero|marzo|abril|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b',
@@ -7328,30 +7330,23 @@ def main():
                         return True
                     return False
                 
-                # Función auxiliar para verificar si un monto está en el rango de descripción
                 def is_in_description_range(center_x):
-                    """Verifica si un monto está en el rango de la columna descripción"""
                     if 'descripcion' in columns_config:
                         desc_x0, desc_x1 = columns_config['descripcion']
-                        # Validar y corregir rangos invertidos
                         if desc_x0 > desc_x1:
                             desc_x0, desc_x1 = desc_x1, desc_x0
                         return desc_x0 <= center_x <= desc_x1
                     return False
                 
                 if amounts_list and len(amounts_list) >= 1:
-                    # Si hay montos pero no están asignados a columnas, asignarlos basándose en coordenadas X
                     if not row_data.get('cargos') and not row_data.get('abonos') and not row_data.get('saldo'):
-                        # Asignar montos según coordenadas X (solo si son válidos Y no están en descripción)
                         for amt_text, center in amounts_list:
-                            # Verificar que el monto sea válido y que NO esté en el rango de descripción
                             if is_valid_amount(amt_text) and not is_in_description_range(center):
                                 col_name = assign_word_to_column(center - 50, center + 50, columns_config)
                                 if col_name and col_name in ('cargos', 'abonos', 'saldo'):
                                     if not row_data.get(col_name):
                                         row_data[col_name] = amt_text
                     
-                    # Cuando hay 2 montos, asignar por posición X: el más a la derecha = saldo (HSBC)
                     if len(amounts_list) == 2:
                         valid_two = [(a, c) for a, c in amounts_list if is_valid_amount(a)]
                         if len(valid_two) == 2:
@@ -7380,7 +7375,6 @@ def main():
                                     else:
                                         row_data['cargos'] = first_amt
                     elif len(amounts_list) == 1:
-                        # Si solo hay un monto, asignarlo según coordenadas
                         first_amt, first_center = amounts_list[0]
                         if is_valid_amount(first_amt) and not is_in_description_range(first_center):
                             col_name = assign_word_to_column(first_center - 50, first_center + 50, columns_config)
@@ -7388,44 +7382,79 @@ def main():
                                 if not row_data.get(col_name):
                                     row_data[col_name] = first_amt
                 
-                # Limpiar valores inválidos de las columnas de montos
-                # Si se asignó texto no numérico, eliminarlo
                 for col in ['cargos', 'abonos', 'saldo']:
                     if col in row_data and row_data[col]:
                         if not is_valid_amount(row_data[col]):
-                            # Si no es un monto válido, limpiar la columna
                             row_data[col] = ''
                 
-                # Limpiar la fecha antes de validar (por si acaso tiene puntos o caracteres extra)
                 if 'fecha' in row_data and row_data['fecha']:
                     fecha_original = row_data['fecha']
                     fecha_clean = row_data['fecha'].strip().rstrip('.,;:')
                     if fecha_clean != fecha_original:
                         row_data['fecha'] = fecha_clean
                 
-                line_original = ' '.join([w.get('text', '') for w in row_words])
-                # Si la descripción está vacía, rellenar con el texto residual de la línea original (HSBC OCR)
                 if not row_data.get('descripcion') and line_original:
                     residual = line_original
-                    # Quitar valores asignados: montos con espacios flexibles tras comas; fecha como palabra
                     for key in ('cargos', 'abonos', 'saldo'):
                         val = row_data.get(key)
                         if val and isinstance(val, str) and re.search(r'\d', val):
                             pat = re.escape(val).replace(',', r',\s*')
                             residual = re.sub(pat, '', residual, count=1)
-                    # Fecha solo como token separado (no quitar "09" de "08045209")
                     fecha_val = row_data.get('fecha')
                     if fecha_val and isinstance(fecha_val, str):
                         residual = re.sub(r'(?<=\s)' + re.escape(fecha_val) + r'(?=\s|$)', ' ', residual)
                         residual = re.sub(r'^' + re.escape(fecha_val) + r'(?=\s|$)', '', residual)
                     row_data['descripcion'] = re.sub(r'\s+', ' ', residual).strip()
-                # Si la descripción sigue vacía (sin residual o residual vacío), usar "."
                 if not row_data.get('descripcion'):
                     row_data['descripcion'] = '.'
                 
-                # HSBC: ensure saldo contains only one numeric amount (2 decimals), nothing after
                 if row_data.get('saldo'):
                     row_data['saldo'] = normalize_hsbc_single_amount(row_data['saldo'])
+                
+                return line_original, row_data
+            
+            # 🔍 HSBC DEBUG: Buffer para guardar últimas 2 filas válidas antes de movements_end
+            last_two_valid_rows = []
+            mov_section_line_num = 0
+            
+            row_idx = 0
+            while row_idx < len(word_rows):
+                row_words = word_rows[row_idx]
+                if not row_words:
+                    row_idx += 1
+                    continue
+                mov_section_line_num += 1
+                this_row_idx = row_idx
+                
+                line_original, row_data = _hsbc_ocr_process_row(row_words)
+                merged = False
+                if row_idx + 1 < len(word_rows):
+                    next_words = word_rows[row_idx + 1]
+                    if next_words:
+                        line_orig2, row_next = _hsbc_ocr_process_row(next_words)
+                        if (
+                            not _hsbc_fecha_day_ok(row_data.get('fecha'))
+                            and _hsbc_row_has_valid_amount(row_data)
+                            and _hsbc_fecha_day_ok(row_next.get('fecha'))
+                            and _hsbc_row_has_no_amounts(row_next)
+                        ):
+                            row_data['fecha'] = (row_next.get('fecha') or '').strip().rstrip('.,;:')
+                            d1 = (row_data.get('descripcion') or '').strip()
+                            d2 = (row_next.get('descripcion') or '').strip()
+                            if d1 == '.':
+                                d1 = ''
+                            if d2 == '.':
+                                d2 = ''
+                            row_data['descripcion'] = ' '.join(x for x in [d1, d2] if x).strip() or '.'
+                            line_original = line_original + ' | ' + line_orig2
+                            merged = True
+                            row_idx += 2
+                        else:
+                            row_idx += 1
+                    else:
+                        row_idx += 1
+                else:
+                    row_idx += 1
                 
                 # Validar si es una transacción válida
                 is_valid = is_transaction_row(row_data, 'HSBC', debug_only_if_contains_iva=False)
@@ -7436,14 +7465,16 @@ def main():
                     row_debug_info = {
                         'line_original': line_original,
                         'row_data': row_data.copy(),
-                        'row_idx': row_idx,
+                        'row_idx': this_row_idx,
                         'page_num': page_num_ocr
                     }
                     last_two_valid_rows.append(row_debug_info)
                     if len(last_two_valid_rows) > 2:
                         last_two_valid_rows.pop(0)  # Mantener solo las últimas 2
                     
-                    _debug_mov_line(line_original, row_data, "ADDED")
+                    row_data.pop('_amounts', None)
+                    disp = "ADDED" if not merged else "ADDED (HSBC OCR merged fecha from next line)"
+                    _debug_mov_line(line_original, row_data, disp)
                     movement_rows.append(row_data)
                 else:
                     _debug_mov_line(line_original, row_data, "SKIPPED (HSBC OCR invalid)")
