@@ -2205,8 +2205,47 @@ def extract_name_from_tarjeta_titular_line(full_text: str):
         for sep in (" | ", "|", "\n"):
             name = name.split(sep)[0].strip()
         if name:
-            return name
+            return trim_banamex_nombre_at_movements_table(name)
     return None
+
+
+def trim_banamex_nombre_at_movements_table(name: str) -> str:
+    """
+    Banamex mixed/OCR often glues the cardholder name to the movements table header on one line.
+    Trim everything from the first occurrence of known table/header markers (e.g.
+    "Fecha de la Fecha Descripción del movimiento Monto", "DESGLOSE DE MOVIMIENTOS").
+    """
+    if not name or not str(name).strip():
+        return name
+    s = str(name).strip()
+    cut_patterns = [
+        # OCR duplicate "Fecha" + movements column headers (new-format table)
+        r'Fecha\s+de\s+la\s+Fecha\s+Descripción\s+del\s+movimiento\s+Monto',
+        r'Fecha\s+dela\s+Fecha\s+Descripción\s+del\s+movimiento',  # typo "dela"
+        r'Descripción\s+del\s+movimiento\s+Monto',
+        r'Descripcion\s+del\s+movimiento\s+Monto',
+        r'Descripción\s+del\s+movimiento',
+        r'DESGLOSE\s+DE\s+MOVIMIENTOS',
+        r'CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES',
+        r'CARGOS,?\s+ABONOS\s+Y\s+COMPRAS',
+        # Summary lines sometimes glued after name
+        r'Total\s+cargos',
+        r'Total\s+abonos',
+        # Legal / footer (if OCR order leaves this on the same line as the name)
+        r'ATENCI[ÓO]N\s+DE\s+QUEJAS',
+        r'NOTAS\s+ACLARATORIAS',
+    ]
+    earliest = None
+    for pat in cut_patterns:
+        m = re.search(pat, s, re.IGNORECASE)
+        if m:
+            pos = m.start()
+            if earliest is None or pos < earliest:
+                earliest = pos
+    if earliest is not None and earliest > 0:
+        s = s[:earliest].strip()
+    s = re.sub(r'\s+', ' ', s).strip(' ,.-')
+    return s if s else name
 
 
 def banamex_ocr_line_sign_only(text):
@@ -2939,6 +2978,9 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
             name = line_stripped
             _name_debug("NOMBRE_MATCH (company suffix): %s" % name)
             break
+
+    if detected_bank == 'Banamex' and name:
+        name = trim_banamex_nombre_at_movements_table(name)
 
     return (rfc, name)
 
@@ -9266,7 +9308,7 @@ def main():
                 nom = name_ocr
                 for sep in (" | ", "|", "\n"):
                     nom = nom.split(sep)[0].strip()
-                pdf_summary['name'] = nom
+                pdf_summary['name'] = trim_banamex_nombre_at_movements_table(nom)
             # Fallback: if name still missing, try "Tarjeta titular: 55462590 32436034 SANDRA ISABEL CHAN BALAN" -> Nombre = SANDRA ISABEL CHAN BALAN
             if not (pdf_summary.get('name') or '').strip():
                 name_from_titular = extract_name_from_tarjeta_titular_line(full_text_ocr)
