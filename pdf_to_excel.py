@@ -3992,14 +3992,20 @@ def calculate_extracted_totals(df_mov: pd.DataFrame, bank_name: str) -> dict:
     if 'Abonos' in df_for_totals.columns:
         # For HSBC, use df_for_abonos (which excludes "PAGO DE INTERES NOMINAL", "COMISION", and "REV")
         # For other banks, df_for_abonos will be the same as df_for_totals
-        
-        totals['total_abonos'] = df_for_abonos['Abonos'].apply(normalize_amount_str).sum()
+        # Banamex new format: abonos often stored as negative (e.g. -$438.55); validation uses magnitudes
+        if bank_name == 'Banamex':
+            totals['total_abonos'] = df_for_abonos['Abonos'].apply(lambda x: abs(normalize_amount_str(x))).sum()
+        else:
+            totals['total_abonos'] = df_for_abonos['Abonos'].apply(normalize_amount_str).sum()
         totals['total_depositos'] = totals['total_abonos']
     
     if 'Cargos' in df_for_totals.columns:
         # For Scotiabank, Banorte, and HSBC, use df_for_cargos (which excludes commission rows)
         # For other banks, df_for_cargos will be the same as df_for_totals
-        totals['total_cargos'] = df_for_cargos['Cargos'].apply(normalize_amount_str).sum()
+        if bank_name == 'Banamex':
+            totals['total_cargos'] = df_for_cargos['Cargos'].apply(lambda x: abs(normalize_amount_str(x))).sum()
+        else:
+            totals['total_cargos'] = df_for_cargos['Cargos'].apply(normalize_amount_str).sum()
         totals['total_retiros'] = totals['total_cargos']
     
     # Get final balance (last row's saldo if available)
@@ -9594,11 +9600,12 @@ def main():
                     has_total_not_plus = bool(re_amount_total.search(block_norm)) and not re_total_plus.search(block_norm)
                     # "Total +" line (e.g. "$1,127.00 Total +") → Total Cargos
                     if need_cargos and has_total_plus:
-                        banamex_new_fmt_totals['total_cargos'] = all_amts[0]
+                        # Magnitude only: statement/OCR may associate minus with abonos column convention
+                        banamex_new_fmt_totals['total_cargos'] = abs(all_amts[0])
                         need_cargos = False
                     # "Total" line (e.g. "$438.55 Total", not "Total +") → Total Abonos
                     if need_abonos and has_total_not_plus:
-                        banamex_new_fmt_totals['total_abonos'] = all_amts[-1]
+                        banamex_new_fmt_totals['total_abonos'] = abs(all_amts[-1])
                         need_abonos = False
                 if not need_abonos and not need_cargos:
                     break
@@ -9607,9 +9614,9 @@ def main():
         if pdf_summary is None:
             pdf_summary = {}
         if banamex_new_fmt_totals.get('total_cargos') is not None:
-            pdf_summary['total_cargos'] = banamex_new_fmt_totals['total_cargos']
+            pdf_summary['total_cargos'] = abs(banamex_new_fmt_totals['total_cargos'])
         if banamex_new_fmt_totals.get('total_abonos') is not None:
-            pdf_summary['total_abonos'] = banamex_new_fmt_totals['total_abonos']
+            pdf_summary['total_abonos'] = abs(banamex_new_fmt_totals['total_abonos'])
     # Si es HSBC con OCR, pdf_summary ya fue extraído arriba en extract_hsbc_summary_from_ocr_text
     # Debug: write movements debug file for coordinate path (RFC log + summary + movements; HSBC OCR path writes earlier)
     if debug_path is not None and not (is_hsbc and used_ocr):
