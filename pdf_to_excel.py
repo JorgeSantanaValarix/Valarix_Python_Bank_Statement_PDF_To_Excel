@@ -866,32 +866,75 @@ def is_pdf_text_illegible(pdf_path: str, cid_threshold: float = 0.05) -> tuple:
         return True, 1.0, 0.0
 
 
-def extract_text_from_ocr_data(ocr_data: dict) -> str:
+def _ocr_word_confidence_strict(conf) -> bool:
+    """Default OCR pipeline: same as historical behavior (exclude conf 0 and -1)."""
+    try:
+        return float(conf) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _ocr_word_confidence_included_weak(conf) -> bool:
+    """Banamex mixed RFC-only pass: include conf 0; exclude -1 only."""
+    try:
+        return float(conf) >= 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def build_multiline_text_from_ocr_words(words: list) -> str:
+    """
+    Build page text from OCR words: one Tesseract line per row, words left-to-right.
+    Used only for Banamex mixed RFC auxiliary text (not for movements / default content).
+    """
+    if not words:
+        return ''
+    by_line = {}
+    for w in words:
+        ln = int(w.get('line_num') or 0)
+        by_line.setdefault(ln, []).append(w)
+    rows = []
+    for ln in sorted(by_line.keys()):
+        row = sorted(by_line[ln], key=lambda x: (x.get('x0') or 0))
+        parts = []
+        for x in row:
+            t = (x.get('text') or '').strip()
+            if t:
+                parts.append(t)
+        if parts:
+            rows.append(' '.join(parts))
+    return '\n'.join(rows)
+
+
+def extract_text_from_ocr_data(ocr_data: dict, include_weak_confidence: bool = False) -> str:
     """
     Extracts plain text from OCR data to maintain compatibility with 'content'.
     
     Args:
         ocr_data: Dictionary with data from pytesseract.image_to_data()
+        include_weak_confidence: If True, include Tesseract words with conf 0 (Banamex RFC-only path).
     
     Returns:
         Plain text extracted from OCR
     """
+    ok = _ocr_word_confidence_included_weak if include_weak_confidence else _ocr_word_confidence_strict
     text_parts = []
     n_items = len(ocr_data.get('text', []))
     
     for i in range(n_items):
         level = ocr_data.get('level', [])[i] if i < len(ocr_data.get('level', [])) else 0
         text = ocr_data.get('text', [])[i] if i < len(ocr_data.get('text', [])) else ''
-        conf = float(ocr_data.get('conf', [])[i]) if i < len(ocr_data.get('conf', [])) else 0
+        conf = ocr_data.get('conf', [])[i] if i < len(ocr_data.get('conf', [])) else 0
         
-        # Only add words (level == 5) with text and confidence > 0
-        if level == 5 and text and conf > 0:
+        if level == 5 and text and ok(conf):
             text_parts.append(text)
     
     return ' '.join(text_parts)
 
 
-def convert_ocr_data_to_words_format(ocr_data: dict, zoom_normalization_factor: float = 1.0) -> list:
+def convert_ocr_data_to_words_format(
+    ocr_data: dict, zoom_normalization_factor: float = 1.0, include_weak_confidence: bool = False
+) -> list:
     """
     Converts OCR data from pytesseract.image_to_data() to word format with real coordinates.
     Compatible with the format expected by the rest of the code.
@@ -900,21 +943,22 @@ def convert_ocr_data_to_words_format(ocr_data: dict, zoom_normalization_factor: 
         ocr_data: Dictionary with data from pytesseract.image_to_data()
         zoom_normalization_factor: Factor to normalize coordinates (e.g.: 3.0/2.0 = 1.5 if using 3.0x zoom
                                    but ranges are calibrated for 2.0x). Default: 1.0 (no normalization)
+        include_weak_confidence: If True, include words with conf 0 (Banamex mixed RFC-only auxiliary words).
     
     Returns:
         List of dictionaries with format: 
         [{'text': str, 'x0': float, 'top': float, 'x1': float, 'bottom': float, 'conf': float, 'line_num': int}, ...]
     """
+    ok = _ocr_word_confidence_included_weak if include_weak_confidence else _ocr_word_confidence_strict
     words = []
     n_items = len(ocr_data.get('text', []))
     
     for i in range(n_items):
         level = ocr_data.get('level', [])[i] if i < len(ocr_data.get('level', [])) else 0
         text = ocr_data.get('text', [])[i] if i < len(ocr_data.get('text', [])) else ''
-        conf = float(ocr_data.get('conf', [])[i]) if i < len(ocr_data.get('conf', [])) else 0
+        conf = ocr_data.get('conf', [])[i] if i < len(ocr_data.get('conf', [])) else 0
         
-        # Only process words (level == 5) with text and reasonable confidence
-        if level == 5 and text and conf > 0:
+        if level == 5 and text and ok(conf):
             left = float(ocr_data.get('left', [])[i]) if i < len(ocr_data.get('left', [])) else 0
             top = float(ocr_data.get('top', [])[i]) if i < len(ocr_data.get('top', [])) else 0
             width = float(ocr_data.get('width', [])[i]) if i < len(ocr_data.get('width', [])) else 0
@@ -933,13 +977,17 @@ def convert_ocr_data_to_words_format(ocr_data: dict, zoom_normalization_factor: 
             # Examples: "30_ PAGO SERVICIO" → "30 PAGO SERVICIO", "06_1V.A." → "06 1V.A."
             text_cleaned = text.replace('_', ' ').strip()
             
+            try:
+                conf_f = float(conf)
+            except (TypeError, ValueError):
+                conf_f = 0.0
             words.append({
                 'text': text_cleaned,
                 'x0': left,
                 'top': top,
                 'x1': left + width,
                 'bottom': top + height,
-                'conf': conf,
+                'conf': conf_f,
                 'line_num': line_num
             })
     
@@ -1145,7 +1193,11 @@ def convert_ocr_text_to_words_format(ocr_text: str, page_number: int = 1) -> lis
 
 
 def extract_text_with_tesseract_ocr(
-    pdf_path: str, lang: str = 'spa+eng', pages: list = None, zoom_factor: float = None
+    pdf_path: str,
+    lang: str = 'spa+eng',
+    pages: list = None,
+    zoom_factor: float = None,
+    banamex_mixed_rfc: bool = False,
 ) -> list:
     """
     Extracts text from PDF using local Tesseract OCR.
@@ -1157,6 +1209,11 @@ def extract_text_with_tesseract_ocr(
         lang: Language for OCR (default: 'spa+eng' for Spanish+English)
         pages: Optional 1-based page numbers to process (e.g. [1, 3]). If None, all pages are processed.
         zoom_factor: PyMuPDF render scale. If None, uses ``--ocr-zoom`` from sys.argv if set, else ``OCR_RENDER_ZOOM``.
+        banamex_mixed_rfc: If True (Banamex mixed PDFs only), also fill per-page ``banamex_rfc_ocr_text`` and
+            ``words_rfc`` using row-ordered text and weaker confidence thresholds — **RFC extraction only**;
+            on pages 1–2, may also set ``banamex_rfc_band_ocr_text`` from a second OCR pass on the pixel band
+            between tarjeta and sucursal (bold/image RFC values). Default ``content`` / ``words`` stay unchanged
+            for movements and the rest of the pipeline.
     
     CLI:
         --ocr-zoom <float>  Render scale (default ``OCR_RENDER_ZOOM``). Word coordinates use ``zoom_factor / 2.0``.
@@ -1280,19 +1337,28 @@ def extract_text_with_tesseract_ocr(
             tesseract_config = r'--oem 1 --psm 6'
             ocr_data = pytesseract.image_to_data(img_for_ocr, lang=lang, output_type=pytesseract.Output.DICT, config=tesseract_config)
             
-            # Extract plain text to maintain compatibility with 'content'
-            text = extract_text_from_ocr_data(ocr_data)
-            
-            # Convert OCR data to word format with real coordinates
-            # IMPORTANT: Normalize coordinates by dividing by zoom_factor to maintain compatibility
-            # with column ranges calibrated for 2.0x
-            words = convert_ocr_data_to_words_format(ocr_data, zoom_normalization_factor=zoom_factor / 2.0)
-            
-            extracted_data.append({
+            # Default pipeline: strict confidence + legacy flat text (same as pdf_to_excel-BUP).
+            zn = zoom_factor / 2.0
+            words = convert_ocr_data_to_words_format(ocr_data, zoom_normalization_factor=zn, include_weak_confidence=False)
+            text = extract_text_from_ocr_data(ocr_data, include_weak_confidence=False)
+            page_entry = {
                 "page": page_num + 1,
                 "content": text,
-                "words": words
-            })
+                "words": words,
+            }
+            # Banamex mixed only: auxiliary row-ordered text + weaker words for RFC regex / geometry (not for movements).
+            if banamex_mixed_rfc:
+                words_rfc = convert_ocr_data_to_words_format(ocr_data, zoom_normalization_factor=zn, include_weak_confidence=True)
+                page_entry["words_rfc"] = words_rfc
+                page_entry["banamex_rfc_ocr_text"] = build_multiline_text_from_ocr_words(words_rfc)
+                # Bold / image-only RFC between tarjeta and sucursal: second pass on that pixel band only.
+                if page_num + 1 in (1, 2):
+                    _raw_band, _rfc_band = banamex_second_pass_rfc_tarjeta_sucursal_band(
+                        img_for_ocr, words_rfc, zoom_factor, lang=lang
+                    )
+                    if _raw_band:
+                        page_entry["banamex_rfc_band_ocr_text"] = _raw_band
+            extracted_data.append(page_entry)
         
         doc.close()
         
@@ -2171,6 +2237,287 @@ def extract_rfc_from_raw_konfio(raw_first_page_text: str):
     return None
 
 
+def _banamex_normalize_rfc_candidate(cand_raw) -> str:
+    """SAT-shaped RFC string or empty string if invalid."""
+    c = re.sub(r'\s+', '', (cand_raw or '')).upper()
+    if len(c) not in (12, 13):
+        return None
+    if c == 'XAXX010101000':
+        return None
+    mid = c[4:10] if len(c) == 13 else c[3:9]
+    if not mid.isdigit():
+        return None
+    return c
+
+
+def banamex_page_looks_like_statement_cover_not_cfdi(page_text: str) -> bool:
+    """
+    True for pages like the monthly statement cover (Periodo + account block), not CFDI / invoice pages.
+    Avoids hardcoding page 1: any page that has the summary + account fields qualifies.
+    """
+    if not page_text or len(page_text.strip()) < 30:
+        return False
+    u = page_text.upper()
+    if 'ESTE DOCUMENTO ES UNA REPRESENTACI' in u and 'CFDI' in u:
+        return False
+    if 'RFC DEL EMISOR' in u and 'RFC DEL RECEPTOR' in u and 'UUID' in u:
+        return False
+    if 'CFDI DE PAGO' in u or 'CADENA ORIGINAL' in u:
+        return False
+    has_tarjeta = bool(re.search(r'N[uú]mero\s+de\s+tarjeta', page_text, re.IGNORECASE))
+    has_suc = bool(re.search(r'N[uú]mero\s+de\s+sucursal', page_text, re.IGNORECASE))
+    has_periodo = bool(re.search(r'Periodo\s*:', page_text, re.IGNORECASE))
+    cover_hint = (
+        has_periodo
+        or 'ESTADO DE CUENTA' in u
+        or 'TU PAGO REQUERIDO' in u
+        or 'FECHA DE CORTE' in u
+    )
+    return has_tarjeta and has_suc and cover_hint
+
+
+def extract_banamex_rfc_tarjeta_sucursal_only(page_text: str) -> str:
+    """
+    Single-page OCR text: RFC between first 'Número de tarjeta' and next 'Número de sucursal' (holder RFC).
+    """
+    if not page_text or not page_text.strip():
+        return None
+    full_joined = ' '.join(x.strip() for x in page_text.splitlines() if (x or '').strip())
+    m_t = re.search(r'N[uú]mero\s+de\s+tarjeta', full_joined, re.IGNORECASE)
+    if not m_t:
+        return None
+    after_t = full_joined[m_t.start() :]
+    m_s = re.search(r'N[uú]mero\s+de\s+sucursal', after_t, re.IGNORECASE)
+    if not m_s:
+        return None
+    seg = after_t[: m_s.start()]
+    m_l = re.search(
+        r'(?:RFC|R\.?\s*F\.?\s*C\.?)\s*:?\s*([A-ZÑ]{2,4}\s*\d{6}\s*[A-Z0-9]{2,3})',
+        seg,
+        re.IGNORECASE,
+    )
+    if m_l:
+        c = _banamex_normalize_rfc_candidate(m_l.group(1))
+        if c:
+            return c
+    banamex_rfc_val = re.compile(r'\b([A-ZÑ]{2,4}\s*\d{6}\s*[A-Z0-9]{2,3})\b', re.IGNORECASE)
+    for mx in banamex_rfc_val.finditer(seg):
+        c = _banamex_normalize_rfc_candidate(mx.group(1))
+        if c:
+            return c
+    return None
+
+
+def extract_banamex_rfc_loose_ocr_line(text: str) -> str:
+    """
+    RFC from a small OCR crop (e.g. band between tarjeta and sucursal) without tarjeta/sucursal markers.
+    Used when the value is bold / rendered as an image and the full-page pass missed it.
+    """
+    if not text or not text.strip():
+        return None
+    full_joined = ' '.join(x.strip() for x in text.splitlines() if (x or '').strip())
+    m_l = re.search(
+        r'(?:RFC|R\.?\s*F\.?\s*C\.?)\s*:?\s*([A-ZÑ]{2,4}\s*\d{6}\s*[A-Z0-9]{2,3})',
+        full_joined,
+        re.IGNORECASE,
+    )
+    if m_l:
+        c = _banamex_normalize_rfc_candidate(m_l.group(1))
+        if c:
+            return c
+    banamex_rfc_val = re.compile(r'\b([A-ZÑ]{2,4}\s*\d{6}\s*[A-Z0-9]{2,3})\b', re.IGNORECASE)
+    for mx in banamex_rfc_val.finditer(full_joined):
+        c = _banamex_normalize_rfc_candidate(mx.group(1))
+        if c:
+            return c
+    return None
+
+
+def banamex_second_pass_rfc_tarjeta_sucursal_band(
+    pil_rgb: Image.Image,
+    words_rfc: list,
+    zoom_factor: float,
+    lang: str = 'spa+eng',
+):
+    """
+    Re-OCR a tight vertical crop between the 'Número de tarjeta' and 'Número de sucursal' rows.
+    Banamex often prints the RFC in bold or as an image between those labels; the main pass can miss it
+    while still finding the label lines from weaker words.
+
+    Returns:
+        (raw_band_text: str, rfc: str|None) or (None, None) if the band cannot be built or OCR fails.
+    """
+    if not TESSERACT_AVAILABLE or not pil_rgb or not words_rfc:
+        return None, None
+    zn = float(zoom_factor) / 2.0
+    if zn <= 0:
+        return None, None
+
+    by_line = {}
+    for w in words_rfc:
+        ln = int(w.get('line_num') or 0)
+        by_line.setdefault(ln, []).append(w)
+
+    tarjeta_line = None
+    sucursal_line = None
+    for ln in sorted(by_line.keys()):
+        row = sorted(by_line[ln], key=lambda x: (x.get('x0') or 0))
+        blob = ' '.join((x.get('text') or '').strip() for x in row)
+        if tarjeta_line is None and re.search(r'N[uú]mero\s+de\s+tarjeta', blob, re.IGNORECASE):
+            tarjeta_line = ln
+            continue
+        if tarjeta_line is not None and sucursal_line is None and re.search(
+            r'N[uú]mero\s+de\s+sucursal', blob, re.IGNORECASE
+        ):
+            sucursal_line = ln
+            break
+
+    if tarjeta_line is None or sucursal_line is None or tarjeta_line >= sucursal_line:
+        return None, None
+
+    def _line_extrema_pixels(line_num):
+        ws = [w for w in words_rfc if int(w.get('line_num') or 0) == line_num]
+        if not ws:
+            return None
+        tops = [(w.get('top') or 0) * zn for w in ws]
+        bottoms = [(w.get('bottom') or 0) * zn for w in ws]
+        return min(tops), max(bottoms)
+
+    ext_t = _line_extrema_pixels(tarjeta_line)
+    ext_s = _line_extrema_pixels(sucursal_line)
+    if not ext_t or not ext_s:
+        return None, None
+    _top_t, bot_t = ext_t
+    top_s, _bot_s = ext_s
+    if bot_t >= top_s:
+        return None, None
+    crop_top = int(bot_t) + 1
+    crop_bottom = int(top_s) - 1
+    if crop_bottom - crop_top < 8:
+        return None, None
+
+    w_px, h_px = pil_rgb.size
+    crop_top = max(0, min(crop_top, h_px - 1))
+    crop_bottom = max(crop_top + 1, min(crop_bottom, h_px))
+    left = 0
+    right = w_px
+    try:
+        band = pil_rgb.crop((left, crop_top, right, crop_bottom))
+    except (ValueError, OSError):
+        return None, None
+
+    try:
+        _LANCZOS = Image.Resampling.LANCZOS
+    except AttributeError:
+        _LANCZOS = Image.LANCZOS
+    bw, bh = band.size
+    scale = 3 if bh < 48 else 2
+    band_up = band.resize((bw * scale, bh * scale), _LANCZOS)
+
+    tesseract_config = r'--oem 1 --psm 6'
+    try:
+        raw = pytesseract.image_to_string(band_up, lang=lang, config=tesseract_config)
+    except Exception:
+        return None, None
+    if not raw or not raw.strip():
+        return None, None
+    rfc = extract_banamex_rfc_loose_ocr_line(raw)
+    return raw.strip(), rfc
+
+
+def extract_banamex_rfc_from_ocr_words(words: list) -> str:
+    """
+    Banamex mixed: Tesseract line-based `content` often lists labels ('RFC', 'Número de sucursal')
+    on separate lines without the value that sits to the right on the same row in the PDF.
+    Use per-word geometry (line_num + x0): value is typically in words to the right of the 'RFC' token
+    on the same line, or on the following line.
+    Returns normalized RFC or None.
+    """
+    if not words:
+        return None
+
+    def _accept(cand_raw):
+        c = re.sub(r'\s+', '', (cand_raw or '')).upper()
+        if len(c) not in (12, 13):
+            return None
+        if c == 'XAXX010101000':
+            return None
+        mid = c[4:10] if len(c) == 13 else c[3:9]
+        if not mid.isdigit():
+            return None
+        return c
+
+    rfc_token = re.compile(r'([A-ZÑ]{2,4}\s*\d{6}\s*[A-Z0-9]{2,3})', re.IGNORECASE)
+
+    def _scan_text_blob(blob: str):
+        if not blob:
+            return None
+        m = rfc_token.search(blob)
+        if m:
+            return _accept(m.group(1))
+        compact = re.sub(r'\s+', '', blob)
+        m2 = re.match(r'^([A-ZÑ]{2,4}\d{6}[A-Z0-9]{2,3})', compact, re.IGNORECASE)
+        if m2:
+            return _accept(m2.group(1))
+        return None
+
+    by_line = {}
+    for w in words:
+        ln = int(w.get('line_num') or 0)
+        by_line.setdefault(ln, []).append(w)
+
+    def _is_rfc_label_word(t: str) -> bool:
+        t = (t or '').strip()
+        if not t:
+            return False
+        if re.match(r'^RFC:?$', t, re.IGNORECASE):
+            return True
+        return bool(re.match(r'^R\.?\s*F\.?\s*C\.?:?$', t, re.IGNORECASE))
+
+    line_nums = sorted(by_line.keys())
+    for ln in line_nums:
+        row = sorted(by_line[ln], key=lambda x: (x.get('x0') or 0))
+        parts = [(w.get('text') or '').strip() for w in row]
+        joined = ' '.join(p for p in parts if p)
+
+        # Row contains an RFC label: scan whole line first (value may be left/right of label in reading order)
+        if any(_is_rfc_label_word(p) for p in parts) or re.search(r'\bRFC\b', joined, re.IGNORECASE):
+            got = _scan_text_blob(joined)
+            if got:
+                return got
+
+        # Words to the right of the first RFC label token
+        for i, w in enumerate(row):
+            t = (w.get('text') or '').strip()
+            if not _is_rfc_label_word(t):
+                continue
+            right = row[i + 1 :]
+            blob = ' '.join((x.get('text') or '').strip() for x in right)
+            got = _scan_text_blob(blob)
+            if got:
+                return got
+            for x in right:
+                got = _scan_text_blob((x.get('text') or '').strip())
+                if got:
+                    return got
+
+    # Label-only line: value on next Tesseract line
+    for idx, ln in enumerate(line_nums):
+        row = sorted(by_line[ln], key=lambda x: (x.get('x0') or 0))
+        label_only = len(row) == 1 and _is_rfc_label_word((row[0].get('text') or '').strip())
+        if not label_only:
+            continue
+        if idx + 1 >= len(line_nums):
+            continue
+        nxt_row = sorted(by_line[line_nums[idx + 1]], key=lambda x: (x.get('x0') or 0))
+        blob = ' '.join((x.get('text') or '').strip() for x in nxt_row)
+        got = _scan_text_blob(blob)
+        if got:
+            return got
+
+    return None
+
+
 # When --debug: collect lines for RFC/Nombre extraction log (written to _movements_debug.txt)
 RFC_DEBUG_LINES = []
 NAME_DEBUG_LINES = []
@@ -2458,23 +2805,26 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
 
     banregio_rfc_label_required = re.compile(r'RFC\s*:', re.IGNORECASE)
 
-    for line in lines:
-        line_stripped = line.strip()
-        if not line_stripped:
-            continue
-        if rfc is None:
-            if detected_bank == 'Banregio' and not banregio_rfc_label_required.search(line_stripped):
-                _rfc_debug("RFC_SKIP (Banregio missing RFC:): %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
+    # Banamex: do not use generic RFC patterns on every line — merged OCR can match "RFC" + wrong value
+    # in glossary/legal text before the Banamex-specific anchor (tarjeta–sucursal block) runs.
+    if detected_bank != 'Banamex':
+        for line in lines:
+            line_stripped = line.strip()
+            if not line_stripped:
                 continue
-            _rfc_debug("RFC_CHECK: %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
-            for pat in rfc_patterns:
-                m = pat.search(line_stripped)
-                if m:
-                    rfc = re.sub(r'\s+', '', m.group(1)).upper()
-                    _rfc_debug("RFC_MATCH: %s" % rfc)
+            if rfc is None:
+                if detected_bank == 'Banregio' and not banregio_rfc_label_required.search(line_stripped):
+                    _rfc_debug("RFC_SKIP (Banregio missing RFC:): %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
+                    continue
+                _rfc_debug("RFC_CHECK: %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
+                for pat in rfc_patterns:
+                    m = pat.search(line_stripped)
+                    if m:
+                        rfc = re.sub(r'\s+', '', m.group(1)).upper()
+                        _rfc_debug("RFC_MATCH: %s" % rfc)
+                        break
+                if rfc is not None:
                     break
-            if rfc is not None:
-                break
     # HSBC only: line contains "RFC" (anywhere), then value on same line or 1-2 lines after. Match first value with RFC structure.
     # RFC structure (SAT): Persona física 13 chars (4 letters + 6 digits yymmdd + 3 homoclave), persona moral 12 chars (3 letters + 6 digits + 3 homoclave).
     if rfc is None and detected_bank == 'HSBC':
@@ -2512,7 +2862,7 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                     break
                 break
     # Fallback: whole line is just RFC value (no prefix)
-    if rfc is None:
+    if rfc is None and detected_bank != 'Banamex':
         for line in lines:
             line_stripped = line.strip()
             if 10 <= len(line_stripped) <= 14:
@@ -2520,6 +2870,161 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
                 if only_rfc_pattern.match(line_stripped):
                     rfc = re.sub(r'\s+', '', line_stripped).upper()
                     _rfc_debug("RFC_MATCH (fallback): %s" % rfc)
+                    break
+
+    # Banamex mixed/OCR: columns merge into mega-lines; "RFC" and value may be far apart on one line, or only recoverable from a full-text search.
+    if rfc is None and detected_bank == 'Banamex':
+        def _banamex_accept_rfc(cand_raw):
+            c = re.sub(r'\s+', '', (cand_raw or '')).upper()
+            if len(c) not in (12, 13):
+                return None
+            if c == 'XAXX010101000':
+                return None
+            mid = c[4:10] if len(c) == 13 else c[3:9]
+            if not mid.isdigit():
+                return None
+            return c
+
+        banamex_rfc_val = re.compile(r'\b([A-ZÑ]{2,4}\s*\d{6}\s*[A-Z0-9]{2,3})\b', re.IGNORECASE)
+        banamex_rfc_labeled = re.compile(
+            r'(?:Registro\s+Federal\s+de\s+Contribuyentes|R\s*\.?\s*F\s*\.?\s*C\s*\.?|RFC)\s*:?\s*(?:Cliente\s+)?([A-ZÑ]{2,4}\s*\d{6}\s*[A-Z0-9]{2,3})',
+            re.IGNORECASE,
+        )
+        # Exclude CFDI lines: "RFC Proveedor", "RFC del Emisor", "RFC del Receptor".
+        banamex_label = re.compile(
+            r'\b(?:R\.F\.C\.?|RFC)\b(?!\s+(?:Proveedor|del\s+(?:Emisor|Receptor|Proveedor)))',
+            re.IGNORECASE,
+        )
+        full_joined = ' '.join((ln or '') for ln in lines)
+        cut_at = len(full_joined)
+        for cm in (
+            r'DESGLOSE\s+DE\s+MOVIMIENTOS',
+            r'DETALLE\s+DE\s+OPERACIONES',
+            r'ESTE\s+DOCUMENTO\s+ES\s+UNA\s+REPRESENTACI[ÓO]N\s+IMPRESA\s+DE\s+UN\s+CFDI',
+            r'\bGLOSARIO\b',
+            r'GLOSARIO\s+DE\s+TERMINOS',
+            r'NOTAS\s+ACLARATORIAS',
+            r'MENSAJES\s+ADICIONALES',
+        ):
+            mcut = re.search(cm, full_joined, re.IGNORECASE)
+            if mcut:
+                cut_at = min(cut_at, mcut.start())
+        header_text = full_joined[:cut_at]
+
+        def _banamex_trim_line_at_section_noise(s):
+            """Drop glossary/legal tails so \\bRFC\\b does not match glossary lines merged with page 1."""
+            s = s or ''
+            for bad in (
+                r'\bGLOSARIO\b',
+                r'GLOSARIO\s+DE\s+TERMINOS',
+                r'NOTAS\s+ACLARATORIAS',
+                r'MENSAJES\s+ADICIONALES',
+                r'DESGLOSE\s+DE\s+MOVIMIENTOS',
+                r'DETALLE\s+DE\s+OPERACIONES',
+                r'ESTE\s+DOCUMENTO\s+ES\s+UNA',
+            ):
+                m = re.search(bad, s, re.IGNORECASE)
+                if m:
+                    s = s[: m.start()]
+            return s.strip()
+
+        def _banamex_line_is_provider_or_cfdi_rfc_noise(line_stripped):
+            """CFDI / electronic invoice lines — not the cardholder RFC on the statement cover."""
+            u = (line_stripped or '').upper()
+            if re.search(r'RFC\s+DEL\s+EMISOR|RFC\s+DEL\s+RECEPTOR', u):
+                return True
+            if re.search(r'RFC\s+PROVEEDOR|PROVEEDOR\s+CERTIFICADO', u):
+                return True
+            if 'REPRESENTACI' in u and 'CFDI' in u:
+                return True
+            if re.search(r'FECHA\s+DE\s+EXPEDICI', u) and 'RFC' in u and 'PROVEEDOR' in u:
+                return True
+            return False
+
+        # Primary: account block — RFC sits between first "Número de tarjeta" and next "Número de sucursal".
+        # Use full_joined (not header_text): cutting at "CFDI" can remove "Número de sucursal" from header_text
+        # and break the segment even when both markers exist in the full OCR.
+        if rfc is None:
+            m_t = re.search(r'N[uú]mero\s+de\s+tarjeta', full_joined, re.IGNORECASE)
+            if m_t:
+                after_t = full_joined[m_t.start() :]
+                m_s = re.search(r'N[uú]mero\s+de\s+sucursal', after_t, re.IGNORECASE)
+                if m_s:
+                    seg = after_t[: m_s.start()]
+                    m_l = re.search(
+                        r'(?:RFC|R\.?\s*F\.?\s*C\.?)\s*:?\s*([A-ZÑ]{2,4}\s*\d{6}\s*[A-Z0-9]{2,3})',
+                        seg,
+                        re.IGNORECASE,
+                    )
+                    if m_l:
+                        c = _banamex_accept_rfc(m_l.group(1))
+                        if c:
+                            rfc = c
+                            _rfc_debug("RFC_MATCH (Banamex tarjeta–sucursal block): %s" % rfc)
+                    if rfc is None:
+                        for mx in banamex_rfc_val.finditer(seg):
+                            c = _banamex_accept_rfc(mx.group(1))
+                            if c:
+                                rfc = c
+                                _rfc_debug("RFC_MATCH (Banamex tarjeta–sucursal token): %s" % rfc)
+                                break
+
+        m = None if rfc is not None else banamex_rfc_labeled.search(header_text)
+        if m:
+            c = _banamex_accept_rfc(m.group(1))
+            if c:
+                rfc = c
+                _rfc_debug("RFC_MATCH (Banamex labeled, header region): %s" % rfc)
+        if rfc is None:
+            for i, line in enumerate(lines):
+                line_stripped = _banamex_trim_line_at_section_noise((line or '').strip())
+                if not line_stripped:
+                    continue
+                if _banamex_line_is_provider_or_cfdi_rfc_noise(line_stripped):
+                    continue
+                lm = banamex_label.search(line_stripped)
+                if not lm:
+                    continue
+                _rfc_debug("RFC_CHECK (Banamex label line): %s" % (line_stripped[:200] + '...' if len(line_stripped) > 200 else line_stripped))
+                after = line_stripped[lm.end() :]
+                m2 = banamex_rfc_val.search(after)
+                if m2:
+                    c = _banamex_accept_rfc(m2.group(1))
+                    if c:
+                        rfc = c
+                        _rfc_debug("RFC_MATCH (Banamex after label same line): %s" % rfc)
+                        break
+                for j in range(i + 1, min(i + 5, len(lines))):
+                    nxt = _banamex_trim_line_at_section_noise((lines[j] or '').strip())
+                    if not nxt:
+                        continue
+                    m2 = banamex_rfc_val.search(nxt)
+                    if m2:
+                        c = _banamex_accept_rfc(m2.group(1))
+                        if c:
+                            rfc = c
+                            _rfc_debug("RFC_MATCH (Banamex after label next line): %s" % rfc)
+                            break
+                if rfc is not None:
+                    break
+        if rfc is None:
+            # Prefer first plausible token only in tarjeta–sucursal window if we can slice it (same as above: full_joined)
+            ts_seg = None
+            m_t2 = re.search(r'N[uú]mero\s+de\s+tarjeta', full_joined, re.IGNORECASE)
+            if m_t2:
+                after_t = full_joined[m_t2.start() :]
+                m_s2 = re.search(r'N[uú]mero\s+de\s+sucursal', after_t, re.IGNORECASE)
+                if m_s2:
+                    ts_seg = after_t[: m_s2.start()]
+            scan_blob = ts_seg if ts_seg else header_text
+            for m3 in banamex_rfc_val.finditer(scan_blob):
+                c = _banamex_accept_rfc(m3.group(1))
+                if c:
+                    rfc = c
+                    _rfc_debug(
+                        "RFC_MATCH (Banamex token in %s): %s"
+                        % ("tarjeta–sucursal slice" if ts_seg else "header region", rfc)
+                    )
                     break
 
     # HSBC fallback: if RFC (or name) still blank, look for a line that contains a valid Mexican regimen (601-626) and an RFC
@@ -4677,7 +5182,7 @@ def extract_text_from_pdf(pdf_path: str) -> list:
         print(f"[INFO] Bank will be detected after processing with OCR...", flush=True)
         try:
             # Use Tesseract OCR
-            extracted_data = extract_text_with_tesseract_ocr(pdf_path)
+            extracted_data = extract_text_with_tesseract_ocr(pdf_path, banamex_mixed_rfc=use_ocr_banamex_mixed)
             # Mark that OCR was used
             for page_data in extracted_data:
                 page_data['_used_ocr'] = True
@@ -9294,26 +9799,78 @@ def main():
     # Para otros casos, extraer desde PDF
     if not (is_hsbc and used_ocr):
         pdf_summary = extract_summary_from_pdf(pdf_path, movement_start_page=movement_start_page)
-    # Banamex with OCR/mixed: reuse HSBC OCR logic to get Nombre and RFC from OCR text (same as extract_hsbc_summary_from_ocr_text)
+    # Banamex with OCR/mixed: Nombre from default `content`. RFC: between Número de tarjeta and Número de
+    # sucursal on pages 1–2 only (OCR); skip CFDI pages elsewhere via cover heuristic on those pages.
     if bank_config['name'] == 'Banamex' and used_ocr and extracted_data:
-        full_text_ocr = '\n'.join(p.get('content', '') or '' for p in extracted_data)
-        if full_text_ocr:
-            rfc_ocr, name_ocr = extract_rfc_and_name_from_text(full_text_ocr, detected_bank='Banamex')
-            if pdf_summary is None:
-                pdf_summary = {}
-            if rfc_ocr is not None:
-                pdf_summary['rfc'] = rfc_ocr
-            if name_ocr is not None:
-                # OCR may concatenate with " | " or "|"; keep only the name (e.g. "SANDRA ISABEL CHAN BALAN")
-                nom = name_ocr
-                for sep in (" | ", "|", "\n"):
-                    nom = nom.split(sep)[0].strip()
-                pdf_summary['name'] = trim_banamex_nombre_at_movements_table(nom)
-            # Fallback: if name still missing, try "Tarjeta titular: 55462590 32436034 SANDRA ISABEL CHAN BALAN" -> Nombre = SANDRA ISABEL CHAN BALAN
-            if not (pdf_summary.get('name') or '').strip():
-                name_from_titular = extract_name_from_tarjeta_titular_line(full_text_ocr)
-                if name_from_titular:
-                    pdf_summary['name'] = name_from_titular
+        name_source = '\n'.join(p.get('content', '') or '' for p in extracted_data)
+        rfc_source_pages_1_2 = '\n'.join(
+            (p.get('banamex_rfc_ocr_text') or p.get('content') or '')
+            for p in extracted_data
+            if (p.get('page') or 0) in (1, 2)
+        )
+        name_ocr = None
+        if name_source.strip():
+            _, name_ocr = extract_rfc_and_name_from_text(name_source, detected_bank='Banamex')
+        rfc_ocr = None
+        for p in extracted_data:
+            if (p.get('page') or 0) not in (1, 2):
+                continue
+            page_txt = (p.get('banamex_rfc_ocr_text') or p.get('content') or '')
+            if not banamex_page_looks_like_statement_cover_not_cfdi(page_txt):
+                continue
+            rfc_ocr = extract_banamex_rfc_tarjeta_sucursal_only(page_txt)
+            if rfc_ocr:
+                if '--debug' in sys.argv:
+                    msg = "RFC_MATCH (Banamex tarjeta–sucursal, statement page %s): %s" % (p.get('page'), rfc_ocr)
+                    RFC_DEBUG_LINES.append(msg)
+                    print(msg, flush=True)
+                break
+        if not rfc_ocr:
+            for p in extracted_data:
+                if (p.get('page') or 0) not in (1, 2):
+                    continue
+                band_txt = (p.get('banamex_rfc_band_ocr_text') or '').strip()
+                if not band_txt:
+                    continue
+                rfc_ocr = extract_banamex_rfc_loose_ocr_line(band_txt)
+                if rfc_ocr:
+                    if '--debug' in sys.argv:
+                        msg = "RFC_MATCH (Banamex band re-OCR, page %s): %s" % (p.get('page'), rfc_ocr)
+                        RFC_DEBUG_LINES.append(msg)
+                        print(msg, flush=True)
+                    break
+        if not rfc_ocr:
+            for p in extracted_data:
+                if (p.get('page') or 0) not in (1, 2):
+                    continue
+                page_txt = (p.get('banamex_rfc_ocr_text') or p.get('content') or '')
+                if not banamex_page_looks_like_statement_cover_not_cfdi(page_txt):
+                    continue
+                rfc_geom = extract_banamex_rfc_from_ocr_words(p.get('words_rfc') or p.get('words') or [])
+                if rfc_geom:
+                    rfc_ocr = rfc_geom
+                    if '--debug' in sys.argv:
+                        msg = "RFC_MATCH (Banamex OCR word geometry, page %s): %s" % (p.get('page'), rfc_ocr)
+                        RFC_DEBUG_LINES.append(msg)
+                        print(msg, flush=True)
+                    break
+        if not rfc_ocr and rfc_source_pages_1_2.strip():
+            rfc_ocr, _ = extract_rfc_and_name_from_text(rfc_source_pages_1_2, detected_bank='Banamex')
+        if pdf_summary is None:
+            pdf_summary = {}
+        if rfc_ocr is not None:
+            pdf_summary['rfc'] = rfc_ocr
+        if name_ocr is not None:
+            # OCR may concatenate with " | " or "|"; keep only the name (e.g. "SANDRA ISABEL CHAN BALAN")
+            nom = name_ocr
+            for sep in (" | ", "|", "\n"):
+                nom = nom.split(sep)[0].strip()
+            pdf_summary['name'] = trim_banamex_nombre_at_movements_table(nom)
+        # Fallback: if name still missing, try "Tarjeta titular: ..." in default OCR text (not banamex_rfc_ocr_text).
+        if not (pdf_summary.get('name') or '').strip():
+            name_from_titular = extract_name_from_tarjeta_titular_line(name_source)
+            if name_from_titular:
+                pdf_summary['name'] = name_from_titular
     # BBVA with OCR: use OCR text for RFC/Nombre/Periodo to avoid illegible raw-PDF artifacts.
     if bank_config['name'] == 'BBVA' and used_ocr and extracted_data:
         full_text_ocr = '\n'.join(p.get('content', '') or '' for p in extracted_data)
