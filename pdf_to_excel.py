@@ -385,7 +385,7 @@ DEC_AMOUNT_RE = re.compile(r"\d{1,3}(?:[\.,\s]\d{3})*(?:[\.,]\d{2})")
 #          7.0             504
 #          8.0             576
 #
-OCR_RENDER_ZOOM = 4
+OCR_RENDER_ZOOM = 4.2
 
 
 def _parse_ocr_zoom_from_argv():
@@ -7413,9 +7413,36 @@ def main():
                 
                 return line_original, row_data
             
+            def _hsbc_try_infer_cargo_abono_from_running_saldo(row_data, prev_saldo):
+                """
+                When OCR drops the cargo/abono but keeps saldo (e.g. '$' misread before '15', missing '11,518.80'),
+                infer movement amount from running balance: cargo = prev_saldo - curr_saldo, abono = curr_saldo - prev_saldo.
+                Only if cargos and abonos are both empty and saldo parses. Returns True if a column was filled.
+                """
+                if prev_saldo is None:
+                    return False
+                if (row_data.get('cargos') or '').strip() or (row_data.get('abonos') or '').strip():
+                    return False
+                saldo_s = (row_data.get('saldo') or '').strip()
+                if not saldo_s:
+                    return False
+                curr_saldo = normalize_amount_str(saldo_s)
+                delta = prev_saldo - curr_saldo
+                if abs(delta) < 0.01:
+                    return False
+                amt = round(abs(delta), 2)
+                fmt = f"${amt:,.2f}"
+                if delta > 0:
+                    row_data['cargos'] = fmt
+                else:
+                    row_data['abonos'] = fmt
+                return True
+            
             # 🔍 HSBC DEBUG: Buffer para guardar últimas 2 filas válidas antes de movements_end
             last_two_valid_rows = []
             mov_section_line_num = 0
+            # Saldo impreso en la fila anterior (balance después del movimiento previo); para inferir cargo/abono OCR
+            hsbc_running_saldo_prev = None
             
             row_idx = 0
             while row_idx < len(word_rows):
@@ -7456,6 +7483,8 @@ def main():
                 else:
                     row_idx += 1
                 
+                inferred_amt = _hsbc_try_infer_cargo_abono_from_running_saldo(row_data, hsbc_running_saldo_prev)
+                
                 # Validar si es una transacción válida
                 is_valid = is_transaction_row(row_data, 'HSBC', debug_only_if_contains_iva=False)
                 
@@ -7474,10 +7503,15 @@ def main():
                     
                     row_data.pop('_amounts', None)
                     disp = "ADDED" if not merged else "ADDED (HSBC OCR merged fecha from next line)"
+                    if inferred_amt:
+                        disp = disp + " (inferred cargo/abono from running saldo)"
                     _debug_mov_line(line_original, row_data, disp)
                     movement_rows.append(row_data)
                 else:
                     _debug_mov_line(line_original, row_data, "SKIPPED (HSBC OCR invalid)")
+                
+                if (row_data.get('saldo') or '').strip():
+                    hsbc_running_saldo_prev = normalize_amount_str(row_data['saldo'])
         
         df_mov = pd.DataFrame(movement_rows) if movement_rows else pd.DataFrame(columns=['fecha', 'descripcion', 'cargos', 'abonos', 'saldo'])
         
