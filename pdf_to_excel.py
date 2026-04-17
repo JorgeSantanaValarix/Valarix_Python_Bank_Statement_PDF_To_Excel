@@ -86,6 +86,16 @@ BANK_CONFIGS = {
         # Only this duplicated-letter full phrase (no loose patterns: no "Detalles de movimientos", no d+e+ alone, no tertiary header)
         "movements_start_secondary": r'D+e+t+a+l+l+e+\s+d+e+\s+m+o+v+i+m+i+e+n+t+o+s+\s+c+u+e+n+t+a+',
         "movements_end": "TOTAL",
+        # OCR path (CID / Tesseract): coords from OCR word geometry (~288 DPI zoom 4); calibrate with --find
+        "movements_start_ocr": r'DETALLE\s+DE\s+MOVIMIENTOS.*?CUENTA\s+DE\s+CHEQUES',
+        "movements_end_ocr": "SALDO FINAL DEL PERIODO",
+        "columns_ocr": {
+            "fecha": (60, 158),
+            "descripcion": (220, 945),
+            "cargos": (943, 995),
+            "abonos": (793, 860),
+            "saldo": (1095, 1165),
+        },
         "metas_start": "DETALLE DE MOVIMIENTOS MIS METAS SANTANDER",
         "metas_end": "INFORMACION FISCAL",
         "columns": {
@@ -754,6 +764,13 @@ def detect_bank_from_text(text: str, from_ocr: bool = False) -> str:
     
     max_count = max(bank_counts.values()) if bank_counts else 0
     if max_count == 0:
+        # OCR: header lines often include amounts/dates so Phase 1/2 skip them; recognize institution names in first chunk.
+        if from_ocr:
+            head = (text or '')[:8000]
+            if re.search(r'\bBANCO\s+SANTANDER\b', head, re.I) or re.search(
+                r'\bGRUPO\s+FINANCIERO\s+SANTANDER\b', head, re.I
+            ):
+                return 'Santander'
         return "HSBC" if from_ocr else DEFAULT_BANK
     return max(bank_counts, key=bank_counts.get)
 
@@ -6871,9 +6888,17 @@ def main():
         bank_config["name"] = detected_bank
     
     columns_config = bank_config.get("columns", {})
+    santander_ocr_mode = False
     # BBVA OCR: use OCR-calibrated coordinates so row splitting matches illegible PDFs.
     if bank_config.get('name') == 'BBVA' and used_ocr and bank_config.get('columns_ocr'):
         columns_config = bank_config.get('columns_ocr', {}).copy()
+    elif bank_config.get('name') == 'Santander' and used_ocr and bank_config.get('columns_ocr'):
+        columns_config = bank_config.get('columns_ocr', {}).copy()
+        santander_ocr_mode = True
+
+    santander_ocr_start_re = None
+    if santander_ocr_mode and bank_config.get('movements_start_ocr'):
+        santander_ocr_start_re = re.compile(bank_config['movements_start_ocr'], re.I)
 
     # find where movements start (first line anywhere that matches a date or contains header keywords)
     # Pattern for dates: supports multiple formats:
@@ -6946,6 +6971,9 @@ def main():
             else:
                 # Create pattern from movements_start string (escape special chars)
                 movement_start_pattern = re.compile(re.escape(movement_start_string), re.I)
+
+    if santander_ocr_start_re:
+        movement_start_pattern = santander_ocr_start_re
     
     # Track if we've found the movements section start
     movement_section_found = False
@@ -6978,6 +7006,16 @@ def main():
         n3 = _normalize_line_for_marker(lines[idx + 3])
         return (cur == 'DETALLE' and n1 == 'DE' and n2 == 'MOVIMIENTOS' and n3 == 'REALIZADOS')
 
+    def _santander_ocr_start_marker_at(lines, idx, start_re):
+        """Santander OCR: header may be one line or split; match movements_start_ocr on normalized text."""
+        if not start_re or idx >= len(lines):
+            return False
+        one = lines[idx] or ''
+        if start_re.search(_normalize_line_for_marker(one)):
+            return True
+        chunk = ' '.join(_normalize_line_for_marker(lines[j]) for j in range(idx, min(idx + 8, len(lines))))
+        return bool(start_re.search(chunk))
+
     def _sanitize_bbva_ocr_fecha(value):
         """
         BBVA OCR date cleanup:
@@ -7002,6 +7040,17 @@ def main():
                     movement_start_page = p['page']
                     movement_start_index = i
                     # Start after header line to avoid adding it as movement content
+                    movements_lines.extend(p['lines'][i + 1:])
+                    break
+                if (
+                    bank_config['name'] == 'Santander'
+                    and used_ocr
+                    and santander_ocr_start_re
+                    and _santander_ocr_start_marker_at(p['lines'], i, santander_ocr_start_re)
+                ):
+                    movement_start_found = True
+                    movement_start_page = p['page']
+                    movement_start_index = i
                     movements_lines.extend(p['lines'][i + 1:])
                     break
                 # Generic movement_start_pattern from BANK_CONFIGS (for all banks)
@@ -7550,10 +7599,18 @@ def main():
         # First, try to use movements_end from BANK_CONFIGS (for all banks)
         movement_end_pattern = None
         movement_end_string = bank_config.get('movements_end_new_format') if (bank_config['name'] == 'Banamex' and banamex_new_format) else bank_config.get('movements_end')
+        if bank_config['name'] == 'Santander' and santander_ocr_mode and bank_config.get('movements_end_ocr'):
+            movement_end_string = bank_config.get('movements_end_ocr')
         if movement_end_string:
             # Create pattern from movements_end string (escape special chars)
             # For Santander, Banregio, Hey, and Clara, we need special handling for patterns with numbers
-            if bank_config['name'] == 'Santander' or bank_config['name'] == 'Banregio' or bank_config['name'] == 'Hey' or bank_config['name'] == 'INTERCAM':
+            if bank_config['name'] == 'Santander' and santander_ocr_mode:
+                eos = (movement_end_string or '').strip().rstrip(':')
+                # Do not match opening-balance line "SALDO FINAL DEL PERIODO ANTERIOR"
+                movement_end_pattern = re.compile(
+                    re.escape(eos) + r'(?!\s+ANTERIOR)' + r'\s*:?', re.I
+                )
+            elif bank_config['name'] == 'Santander' or bank_config['name'] == 'Banregio' or bank_config['name'] == 'Hey' or bank_config['name'] == 'INTERCAM':
                 # Santander/Banregio/Hey/INTERCAM: movements_end is "TOTAL"/"Total", match followed by 3 numeric amounts
                 # Example: "TOTAL 821,646.20 820,238.73 1,417.18" or "Total 45,998.00 49,675.60 4,580.78"
                 movement_end_pattern = re.compile(re.escape(movement_end_string) + r'\s+[\d,\.]+\s+[\d,\.]+\s+[\d,\.]+', re.I)
@@ -7634,7 +7691,7 @@ def main():
             # For Konfio, use a larger y_tolerance to capture multi-line descriptions
             # Use y_tolerance=3 for all banks to avoid grouping multiple movements into one row
             # The split_row_if_multiple_movements function will handle cases where movements are still grouped
-            y_tol = 8 if bank_config['name'] == 'Konfio' else 3
+            y_tol = 8 if bank_config['name'] == 'Konfio' else (5 if santander_ocr_mode else 3)
             word_rows = group_words_by_row(words, y_tolerance=y_tol)
             
             # Check if grouped rows contain multiple movements and split them
@@ -7701,6 +7758,21 @@ def main():
                         _debug_mov_line(all_row_text_orig, None, _disp)
                         continue  # Skip irrelevant information rows
 
+                if bank_config['name'] == 'Santander' and santander_ocr_mode:
+                    u = (all_row_text or '').upper()
+                    if 'PERIODO DEL' in u and re.search(r'\bAL\s+\d{1,2}\s*[-/]', all_row_text, re.I):
+                        _disp = "SKIPPED (Santander OCR period line)"
+                        _debug_mov_line(all_row_text_orig, None, _disp)
+                        continue
+                    if 'SALDO FINAL DEL PERIODO ANTERIOR' in u or 'SALDO DEL PERIODO ANTERIOR' in u:
+                        _disp = "SKIPPED (Santander OCR saldo periodo anterior)"
+                        _debug_mov_line(all_row_text_orig, None, _disp)
+                        continue
+                    if 'FECHA' in u and 'FOLIO' in u and 'DESCRIPCION' in u:
+                        _disp = "SKIPPED (Santander OCR column header)"
+                        _debug_mov_line(all_row_text_orig, None, _disp)
+                        continue
+
                 # Check for end pattern (for Banamex, Santander, Banregio, Scotiabank, Konfio, Clara, etc.)
                 if movement_end_pattern:
                     all_text = ' '.join([w.get('text', '') for w in row_words])
@@ -7734,6 +7806,9 @@ def main():
                                     if pattern.search(all_text):
                                         match_found = True
                                         break
+                    elif bank_config['name'] == 'Santander' and santander_ocr_mode:
+                        if movement_end_pattern and movement_end_pattern.search(all_text):
+                            match_found = True
                     elif bank_config['name'] == 'Santander' or bank_config['name'] == 'Banregio' or bank_config['name'] == 'Hey':
                         # For Santander/Banregio/Hey, use the pattern with 3 numeric amounts (already created in movement_end_pattern)
                         if movement_end_pattern.search(all_text):
@@ -7933,6 +8008,9 @@ def main():
                         # For Clara, check if fecha contains a valid date pattern (e.g., "01 ENE" or "01 E N E")
                         clara_date_pattern = re.compile(r'\d{1,2}\s+[A-Z]{3}|\d{1,2}\s+[A-Z]\s+[A-Z]\s+[A-Z]', re.I)
                         has_date = bool(clara_date_pattern.search(fecha_val))
+                    elif bank_config['name'] == 'Santander' and santander_ocr_mode:
+                        fv0 = ((fecha_val or '').strip().split() or [''])[0]
+                        has_date = bool(re.match(r'^(?:0?[1-9]|[12][0-9]|3[01])-[A-Za-z]{3}-\d{4}$', fv0, re.I))
                     elif bank_config['name'] == 'Banamex':
                         # Classic: day + 3-letter month (e.g. "30 ENE"). New format: DD-mon-YYYY (e.g. 13-oct-2025)
                         banamex_dd_mon_yyyy = re.compile(r'\b(0?[1-9]|[12][0-9]|3[01])-[a-z]{3}-\d{4}\b', re.I)
@@ -9854,8 +9932,9 @@ def main():
     if bank_config['name'] == 'Santander':
         metas_start = bank_config.get('metas_start')
         metas_end = bank_config.get('metas_end')
-        if metas_start and metas_end and columns_config:
-            df_metas = extract_santander_metas_from_pdf(extracted_data, columns_config, metas_start, metas_end)
+        metas_columns = bank_config.get('columns') if (santander_ocr_mode and bank_config.get('columns')) else columns_config
+        if metas_start and metas_end and metas_columns:
+            df_metas = extract_santander_metas_from_pdf(extracted_data, metas_columns, metas_start, metas_end)
     
     # Extract summary from PDF and calculate totals for validation
     # IMPORTANT: Calculate totals AFTER removing DIGITEM rows and BEFORE adding the "Total" row
