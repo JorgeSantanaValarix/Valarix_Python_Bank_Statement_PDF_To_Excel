@@ -2263,6 +2263,144 @@ def extract_santander_summary_from_ocr_text(pages_data: list) -> dict:
     return summary_data
 
 
+def _santander_ocr_name_before_codigo_cliente(pre_movement_text: str) -> str:
+    """
+    Name appears immediately before 'CODIGO DE CLIENTE' (often after 'ESTADO DE CUENTA').
+    Example OCR line: '... ESTADO DE CUENTA ADOLFO VELAZQUEZ ARAIZA CODIGO DE CLIENTE NO.33565989'
+    """
+    if not pre_movement_text or not pre_movement_text.strip():
+        return ''
+    flat = re.sub(r'\s+', ' ', pre_movement_text.strip())
+    m = re.search(
+        r'ESTADO\s+DE\s+CUENTA\s+(.+?)\s+CODIGO\s+DE\s+CLIENTE\b',
+        flat,
+        re.I,
+    )
+    raw = None
+    if m:
+        raw = m.group(1).strip()
+    else:
+        idx = flat.upper().find('CODIGO DE CLIENTE')
+        if idx <= 0:
+            return ''
+        before = flat[:idx].strip()
+        parts = re.split(r'ESTADO\s+DE\s+CUENTA\s+', before, flags=re.I)
+        raw = parts[-1].strip() if parts else before
+    if not raw:
+        return ''
+    pm = re.search(r'\bPERIODO\b', raw, re.I)
+    if pm:
+        raw = raw[: pm.start()].strip()
+    raw = re.sub(r'\s+NO\.?\s*\d[\d\s\-]*$', '', raw).strip()
+    return raw[:500].strip()
+
+
+def enrich_santander_ocr_pdf_summary_header(
+    pdf_summary: dict,
+    full_text_ocr: str,
+    pages_lines: list,
+    movement_start_page,
+    movement_start_index,
+    santander_start_re,
+):
+    """
+    Fill pdf_summary rfc, name, period_text from OCR text strictly before movements_start
+    (same idea as BBVA OCR pre-movement window). Uses R.F.C. label scan and CODIGO DE CLIENTE name rule.
+    """
+    if pdf_summary is None or not full_text_ocr or not full_text_ocr.strip():
+        return
+
+    cut_positions = []
+    if santander_start_re:
+        m0 = santander_start_re.search(full_text_ocr)
+        if m0:
+            cut_positions.append(m0.start())
+    for needle in ('detalle de movimientos cuenta de cheques', 'detalle de movimientos'):
+        idx = full_text_ocr.lower().find(needle)
+        if idx >= 0:
+            cut_positions.append(idx)
+
+    pre_movement_text_ocr = full_text_ocr[: min(cut_positions)] if cut_positions else full_text_ocr
+
+    pre_movement_lines = []
+    if pages_lines:
+        for _p in pages_lines:
+            _page_no = _p.get('page')
+            _lines = _p.get('lines') or []
+            if movement_start_page is None:
+                pre_movement_lines.extend(_lines)
+                continue
+            if _page_no < movement_start_page:
+                pre_movement_lines.extend(_lines)
+            elif _page_no == movement_start_page:
+                _cut = movement_start_index if isinstance(movement_start_index, int) else len(_lines)
+                pre_movement_lines.extend(_lines[: max(0, _cut)])
+                break
+            else:
+                break
+    if not pre_movement_lines and pre_movement_text_ocr:
+        pre_movement_lines = pre_movement_text_ocr.split('\n')
+
+    bbva_rfc_label_re = re.compile(r'\bR\s*\.?\s*F\s*\.?\s*C\s*\.?\b', re.I)
+    bbva_rfc_value_re = re.compile(r'\b([A-ZÑ]{3,4}\s*\d{6}\s*[A-Z0-9]{3})\b', re.I)
+    bbva_rfc_after_label_re = re.compile(
+        r'R\s*\.?\s*F\s*\.?\s*C\s*\.?\s*:?\s*([A-ZÑ]{3,4}\s*\d{6}\s*[A-Z0-9]{3})',
+        re.I,
+    )
+
+    rfc_pref = None
+    m_direct = bbva_rfc_after_label_re.search(pre_movement_text_ocr or '')
+    if m_direct:
+        rfc_pref = re.sub(r'\s+', '', m_direct.group(1)).upper()
+        if '--debug' in sys.argv:
+            print(f"RFC_MATCH (Santander OCR pre-mov R.F.C direct): {rfc_pref}", flush=True)
+
+    for i, ln in enumerate(pre_movement_lines):
+        if rfc_pref is not None:
+            break
+        line = (ln or '').strip()
+        if not line:
+            continue
+        m_label = bbva_rfc_label_re.search(line)
+        if not m_label:
+            continue
+        if '--debug' in sys.argv:
+            print(
+                "RFC_CHECK (Santander OCR pre-mov R.F.C): %s"
+                % (line[:220] + '...' if len(line) > 220 else line),
+                flush=True,
+            )
+        after = line[m_label.end() :].strip()
+        m_val = bbva_rfc_value_re.search(after) or bbva_rfc_value_re.search(line)
+        if m_val is None and i + 1 < len(pre_movement_lines):
+            nxt = (pre_movement_lines[i + 1] or '').strip()
+            if '--debug' in sys.argv and nxt:
+                print(
+                    "RFC_CHECK (Santander OCR pre-mov next): %s"
+                    % (nxt[:220] + '...' if len(nxt) > 220 else nxt),
+                    flush=True,
+                )
+            m_val = bbva_rfc_value_re.search(nxt)
+        if m_val:
+            rfc_pref = re.sub(r'\s+', '', m_val.group(1)).upper()
+            if '--debug' in sys.argv:
+                print(f"RFC_MATCH (Santander OCR pre-mov R.F.C): {rfc_pref}", flush=True)
+            break
+
+    if rfc_pref:
+        pdf_summary['rfc'] = rfc_pref
+
+    period_ocr = extract_period_text_from_text(pre_movement_text_ocr)
+    if period_ocr:
+        pdf_summary['period_text'] = period_ocr
+
+    name_ocr = _santander_ocr_name_before_codigo_cliente(pre_movement_text_ocr)
+    if name_ocr:
+        pdf_summary['name'] = name_ocr
+        if '--debug' in sys.argv:
+            print(f"NOMBRE_MATCH (Santander OCR pre-mov CODIGO DE CLIENTE): {name_ocr}", flush=True)
+
+
 def extract_period_text_from_text(full_text: str):
     """
     Extract period string from PDF text (e.g. "Corte al Día 29 - 29 Días", "Del 01 Oct. 2024 al 31 Oct. 2024").
@@ -10040,6 +10178,15 @@ def main():
         for key in ('total_depositos', 'total_abonos', 'total_retiros', 'total_cargos', 'saldo_final'):
             if ocr_sum.get(key) is not None:
                 pdf_summary[key] = ocr_sum[key]
+        full_text_ocr_san = '\n'.join(p.get('content', '') or '' for p in extracted_data)
+        enrich_santander_ocr_pdf_summary_header(
+            pdf_summary,
+            full_text_ocr_san,
+            pages_lines,
+            movement_start_page,
+            movement_start_index,
+            santander_ocr_start_re,
+        )
     # Banamex with OCR/mixed: Nombre from default `content`. RFC: between Número de tarjeta and Número de
     # sucursal on pages 1–2 only (OCR); skip CFDI pages elsewhere via cover heuristic on those pages.
     if bank_config['name'] == 'Banamex' and used_ocr and extracted_data:
