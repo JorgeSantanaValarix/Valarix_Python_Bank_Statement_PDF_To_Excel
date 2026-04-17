@@ -7945,6 +7945,9 @@ def main():
         banbajio_detected_rows = 0
         # For BBVA, track when we're in the movements section
         in_bbva_movements_section = False
+        # Banamex new format: OCR table "COMPRAS Y CARGOS DIFERIDOS A MESES..." appears before
+        # "CARGOS, ABONOS Y COMPRAS REGULARES" but matches DD-mon-YYYY + amounts — gate until real header row.
+        in_banamex_regular_movements_section = False
         # 🔍 HSBC DEBUG: Buffer para guardar últimas 2 filas válidas antes de movements_end
         last_two_valid_rows = []
         total_pages = len(extracted_data)
@@ -8012,10 +8015,24 @@ def main():
                         # For BBVA, activate movements section when start pattern is found
                         if bank_config['name'] == 'BBVA' and not in_bbva_movements_section:
                             in_bbva_movements_section = True
+                        elif bank_config['name'] == 'Banamex' and banamex_new_format:
+                            in_banamex_regular_movements_section = True
                         mov_section_line_num += 1
                         _disp = "SKIPPED (movements_start header)"
                         _debug_mov_line(all_row_text_orig, None, _disp)
                         continue  # Skip the movements_start line
+
+                # Banamex new format only: deferred/benefit tables precede regular movements — do not extract them.
+                if (
+                    bank_config['name'] == 'Banamex'
+                    and banamex_new_format
+                    and movement_start_pattern
+                    and not in_banamex_regular_movements_section
+                ):
+                    mov_section_line_num += 1
+                    _disp = "SKIPPED (before Banamex regular movements section)"
+                    _debug_mov_line(all_row_text_orig, None, _disp)
+                    continue
                 
                 mov_section_line_num += 1
 
