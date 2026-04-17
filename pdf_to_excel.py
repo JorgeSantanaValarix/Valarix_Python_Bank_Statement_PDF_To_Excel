@@ -2178,6 +2178,91 @@ def extract_hsbc_summary_from_ocr_text(pages_data: list) -> dict:
     return summary_data
 
 
+def extract_santander_summary_from_ocr_text(pages_data: list) -> dict:
+    """
+    Extract Santander summary totals from OCR text for validation (Valor en PDF).
+    Matches the checking-account summary block:
+      + Depósitos -> total abonos / depósitos
+      - Retiros -> total cargos / retiros
+      Saldo final (= optional) -> saldo final (allows 0.00)
+    Avoids 'SALDO FINAL DEL PERIODO ANTERIOR' / period-resume lines.
+    """
+    summary_data = {
+        'total_depositos': None,
+        'total_retiros': None,
+        'total_cargos': None,
+        'total_abonos': None,
+        'saldo_final': None,
+        'total_movimientos': None,
+        'saldo_anterior': None,
+        'rfc': None,
+        'name': None,
+        'period_text': None,
+    }
+    if not pages_data:
+        return summary_data
+
+    n = min(3, len(pages_data))
+    full = '\n'.join((pages_data[i].get('content') or '') for i in range(n))
+    if not full.strip():
+        return summary_data
+
+    full_flat = re.sub(r'\s+', ' ', full).strip()
+
+    dep_re = re.compile(
+        r'\+\s*Dep[oó]sitos\s*:?\s*(?:\$)?\s*([\d,\s]+\.?\d{0,2})',
+        re.I,
+    )
+    dep_re_ascii = re.compile(
+        r'\+\s*Depositos\s*:?\s*(?:\$)?\s*([\d,\s]+\.?\d{0,2})',
+        re.I,
+    )
+    ret_re = re.compile(
+        r'-\s*Retiros\s*:?\s*(?:\$)?\s*([\d,\s]+\.?\d{0,2})',
+        re.I,
+    )
+    # After "Saldo final", must not be "del periodo" (opening summary / other headers)
+    saldo_re = re.compile(
+        r'(?:=\s*)?Saldo\s+final(?!\s+del\s+periodo)(?!\s+del\s+)\s*:?\s*(?:\$)?\s*([\d,\s]+\.?\d{0,2})',
+        re.I,
+    )
+
+    def _amount_from_m(m: re.Match) -> float:
+        s = re.sub(r'\s+', '', (m.group(1) or '').strip())
+        return normalize_amount_str(s)
+
+    for block in (full, full_flat):
+        if summary_data['total_abonos'] is None:
+            for rx in (dep_re, dep_re_ascii):
+                m = rx.search(block)
+                if m:
+                    amt = _amount_from_m(m)
+                    if amt >= 0:
+                        summary_data['total_depositos'] = amt
+                        summary_data['total_abonos'] = amt
+                    break
+        if summary_data['total_cargos'] is None:
+            m = ret_re.search(block)
+            if m:
+                amt = _amount_from_m(m)
+                if amt >= 0:
+                    summary_data['total_retiros'] = amt
+                    summary_data['total_cargos'] = amt
+        if summary_data['saldo_final'] is None:
+            m = saldo_re.search(block)
+            if m:
+                amt = _amount_from_m(m)
+                summary_data['saldo_final'] = amt
+        if (
+            summary_data['total_abonos'] is not None
+            and summary_data['total_cargos'] is not None
+            and summary_data['saldo_final'] is not None
+        ):
+            break
+
+    return summary_data
+
+
 def extract_period_text_from_text(full_text: str):
     """
     Extract period string from PDF text (e.g. "Corte al Día 29 - 29 Días", "Del 01 Oct. 2024 al 31 Oct. 2024").
@@ -4612,30 +4697,34 @@ def create_validation_sheet(pdf_summary: dict, extracted_totals: dict, has_saldo
     tolerance = 0.01
     
     # Compare Abonos/Depositos
-    pdf_abonos = pdf_summary.get('total_abonos') or pdf_summary.get('total_depositos')
+    pdf_abonos = pdf_summary.get('total_abonos')
+    if pdf_abonos is None:
+        pdf_abonos = pdf_summary.get('total_depositos')
     ext_abonos = extracted_totals.get('total_abonos', 0.0)
     
     abonos_match = pdf_abonos is None or abs(pdf_abonos - ext_abonos) < tolerance
-    valor_en_pdf = f"${pdf_abonos:,.2f}" if pdf_abonos else "Not found"
+    valor_en_pdf = f"${pdf_abonos:,.2f}" if pdf_abonos is not None else "Not found"
     
     validation_row = {
         'Concepto': 'Total Abonos / Depósitos',
         'Valor en PDF': valor_en_pdf,
         'Valor Extraído': f"${ext_abonos:,.2f}",
-        'Diferencia': f"${abs(pdf_abonos - ext_abonos):,.2f}" if pdf_abonos else "N/A",
+        'Diferencia': f"${abs(pdf_abonos - ext_abonos):,.2f}" if pdf_abonos is not None else "N/A",
         'Estado': '✓' if abonos_match else '✗'
     }
     validation_data.append(validation_row)
     
     # Compare Cargos/Retiros
-    pdf_cargos = pdf_summary.get('total_cargos') or pdf_summary.get('total_retiros')
+    pdf_cargos = pdf_summary.get('total_cargos')
+    if pdf_cargos is None:
+        pdf_cargos = pdf_summary.get('total_retiros')
     ext_cargos = extracted_totals.get('total_cargos', 0.0)
     cargos_match = pdf_cargos is None or abs(pdf_cargos - ext_cargos) < tolerance
     validation_data.append({
         'Concepto': 'Total Cargos / Retiros',
-        'Valor en PDF': f"${pdf_cargos:,.2f}" if pdf_cargos else "Not found",
+        'Valor en PDF': f"${pdf_cargos:,.2f}" if pdf_cargos is not None else "Not found",
         'Valor Extraído': f"${ext_cargos:,.2f}",
-        'Diferencia': f"${abs(pdf_cargos - ext_cargos):,.2f}" if pdf_cargos else "N/A",
+        'Diferencia': f"${abs(pdf_cargos - ext_cargos):,.2f}" if pdf_cargos is not None else "N/A",
         'Estado': '✓' if cargos_match else '✗'
     })
     
@@ -4647,9 +4736,9 @@ def create_validation_sheet(pdf_summary: dict, extracted_totals: dict, has_saldo
         saldo_match = pdf_saldo is None or abs(pdf_saldo - ext_saldo) < tolerance
         validation_data.append({
             'Concepto': 'Saldo Final',
-            'Valor en PDF': f"${pdf_saldo:,.2f}" if pdf_saldo else "Not found",
+            'Valor en PDF': f"${pdf_saldo:,.2f}" if pdf_saldo is not None else "Not found",
             'Valor Extraído': f"${ext_saldo:,.2f}",
-            'Diferencia': f"${abs(pdf_saldo - ext_saldo):,.2f}" if pdf_saldo else "N/A",
+            'Diferencia': f"${abs(pdf_saldo - ext_saldo):,.2f}" if pdf_saldo is not None else "N/A",
             'Estado': '✓' if saldo_match else '✗'
         })
     
@@ -9943,6 +10032,14 @@ def main():
     # Para otros casos, extraer desde PDF
     if not (is_hsbc and used_ocr):
         pdf_summary = extract_summary_from_pdf(pdf_path, movement_start_page=movement_start_page)
+    # Santander OCR (CID illegible PDF): totals for validation come from OCR text (+ Depósitos / - Retiros / Saldo final).
+    if bank_config['name'] == 'Santander' and santander_ocr_mode and extracted_data:
+        ocr_sum = extract_santander_summary_from_ocr_text(extracted_data)
+        if pdf_summary is None:
+            pdf_summary = {}
+        for key in ('total_depositos', 'total_abonos', 'total_retiros', 'total_cargos', 'saldo_final'):
+            if ocr_sum.get(key) is not None:
+                pdf_summary[key] = ocr_sum[key]
     # Banamex with OCR/mixed: Nombre from default `content`. RFC: between Número de tarjeta and Número de
     # sucursal on pages 1–2 only (OCR); skip CFDI pages elsewhere via cover heuristic on those pages.
     if bank_config['name'] == 'Banamex' and used_ocr and extracted_data:
