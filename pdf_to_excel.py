@@ -220,10 +220,14 @@ BANK_CONFIGS = {
         "name": "Banamex",
         "movements_start": "DETALLE DE OPERACIONES",  # String that marks the start of the movements section
         "movements_start_secondary": "DESGLOSE DE MOVIMIENTOS",  # New format (mixed text/image); OCR may output as separate words (--find row Y≈852)
-        "movements_start_tertiary": [r"CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES"],  # Flexible match for OCR (comma optional, whitespace)
-        "movements_end": "SALDO PROMEDIO MINIMO REQUERIDO",    # String that marks the end of the movements section
+        # Mixed/OCR: section header often includes "(NO A MESES)"; comma optional between CARGOS and ABONOS
+        "movements_start_tertiary": [
+            r"CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES(?:\s*\([^)]*\))?",
+        ],
+        "movements_end": "SALDO PROMEDIO MINIMO REQUERIDO",    # String that marks the end of the movements section (classic / non–new-format)
         "movements_end_secondary": "SALDO MINIMO REQUERIDO",    # Alternative end string in some Banamex PDFs
-        "movements_end_new_format": "Total cargos +",           # End for new format (do not parse the numeric value after)
+        # New format / mixed OCR: footer summary row "Total cargos +" / "Total cargos +:" (pattern allows optional +)
+        "movements_end_new_format": "Total cargos",
         "columns": {
             "fecha": (17, 45),             # Operation Date column
             "descripcion": (55, 260),      # Description column (expanded to capture better)
@@ -7201,6 +7205,18 @@ def main():
 
     if santander_ocr_start_re:
         movement_start_pattern = santander_ocr_start_re
+
+    # Banamex mixed (OCR): use CARGOS…REGULARES (+ optional DESGLOSE) as section headers — not DETALLE DE OPERACIONES (avoids wrong matches).
+    if bank_config.get('name') == 'Banamex' and used_ocr and movement_start_pattern is not None:
+        _bm_parts = []
+        _tert = bank_config.get('movements_start_tertiary')
+        _tert_list = _tert if isinstance(_tert, list) else ([_tert] if _tert else [])
+        _bm_parts.extend(t for t in _tert_list if t)
+        _bm_sec = bank_config.get('movements_start_secondary')
+        if _bm_sec:
+            _bm_parts.append(re.escape(_bm_sec))
+        if _bm_parts:
+            movement_start_pattern = re.compile(r'(?:%s)' % '|'.join(_bm_parts), re.I)
     
     # Track if we've found the movements section start
     movement_section_found = False
@@ -7292,7 +7308,11 @@ def main():
                             banamex_new_format = True
                             continue
                         # OCR may split "CARGOS, ABONOS Y COMPRAS REGULARES" across lines; check combined chunk
-                        if len(combined_banamex) <= 120 and re.search(r"CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES", combined_banamex, re.I):
+                        if len(combined_banamex) <= 220 and re.search(
+                            r"CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES(?:\s*\([^)]*\))?",
+                            combined_banamex,
+                            re.I,
+                        ):
                             movement_section_found = True
                             banamex_new_format = True
                             continue
@@ -7301,10 +7321,14 @@ def main():
                         # Banamex new format: "DESGLOSE DE MOVIMIENTOS" (--find row Y≈802) or "CARGOS, ABONOS Y COMPRAS REGULARES"; only when line is short
                         is_banamex_short_header = (
                             bank_config['name'] == 'Banamex'
-                            and len(ln_stripped) <= 80
+                            and len(ln_stripped) <= 120
                             and (
                                 re.search(r"DESGLOSE\s+DE\s+MOVIMIENTOS", ln, re.I)
-                                or re.search(r"CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES", ln, re.I)
+                                or re.search(
+                                    r"CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES(?:\s*\([^)]*\))?",
+                                    ln,
+                                    re.I,
+                                )
                             )
                         )
                         is_other_bank_or_classic = (
@@ -7322,9 +7346,17 @@ def main():
                         # (e.g. "Banamex Pagina ... Número de tarjeta ... MENSAJES" would wrongly match regex)
                         if bank_config['name'] == 'Banamex' and (
                             re.search(r"DESGLOSE\s+DE\s+MOVIMIENTOS", ln, re.I)
-                            or re.search(r"CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES", ln, re.I)
+                            or re.search(
+                                r"CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES(?:\s*\([^)]*\))?",
+                                ln,
+                                re.I,
+                            )
                         ):
-                            if not re.search(r'Pagina|Número de tarjeta|MENSAJES ADICIONALES', (ln or ''), re.I):
+                            if not re.search(
+                                r'Pagina|N[uú]mero\s+de\s+tarjeta|MENSAJES\s+ADICIONALES',
+                                (ln or ''),
+                                re.I,
+                            ):
                                 movement_section_found = True
                                 banamex_new_format = True
                                 continue
@@ -7385,6 +7417,25 @@ def main():
                             movement_start_index = i
                             movements_lines.extend(p['lines'][i:])
                             break
+                    # Banamex new format (OCR): rows use DD-mon-YYYY; generic day_re matches glossary dates anywhere in long lines.
+                    elif bank_config['name'] == 'Banamex' and banamex_new_format:
+                        ln_st = (ln or '').strip()
+                        _bnx_ps_date_m = re.search(r'\d{1,2}-[a-z]{3}-\d{4}', ln_st, re.I)
+                        _bnx_ok_date = _bnx_ps_date_m is not None and _bnx_ps_date_m.start() <= 36
+                        _bnx_hdr = (
+                            re.search(r'fecha\s+de\s+la\s+operaci[oó]n', ln_st, re.I)
+                            or re.search(r'fecha\s+de\s+cargo', ln_st, re.I)
+                            or (
+                                re.search(r'\bfecha\b', ln_st, re.I)
+                                and re.search(r'descripci[oó]n(?:\s+del\s+movimiento)?', ln_st, re.I)
+                            )
+                        )
+                        if _bnx_ok_date or _bnx_hdr:
+                            movement_start_found = True
+                            movement_start_page = p['page']
+                            movement_start_index = i
+                            movements_lines.extend(p['lines'][i:])
+                            break
                     # For other banks, look for date or header keywords
                     else:
                         if day_re.search(ln) or header_keywords_re.search(ln):
@@ -7432,7 +7483,11 @@ def main():
     # Banamex with OCR (mixed content): if new format not detected from lines, scan full content for new-format headers
     if (bank_config['name'] == 'Banamex' and used_ocr and not banamex_new_format and extracted_data):
         full_text = ' '.join((p.get('content') or '') for p in extracted_data)
-        if re.search(r"DESGLOSE\s+DE\s+MOVIMIENTOS", full_text, re.I) or re.search(r"CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES", full_text, re.I):
+        if re.search(r"DESGLOSE\s+DE\s+MOVIMIENTOS", full_text, re.I) or re.search(
+            r"CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES(?:\s*\([^)]*\))?",
+            full_text,
+            re.I,
+        ):
             banamex_new_format = True
 
     # Banamex new format: use columns_new_format, date DD-mon-YYYY (e.g. 13-oct-2025), and movements_end_new_format
@@ -7850,8 +7905,8 @@ def main():
                     re.escape(movement_end_string) + r'\s+\$?[\d,\.\-]+\.\d{2}', re.I
                 )
             elif bank_config['name'] == 'Banamex' and banamex_new_format:
-                # Banamex new format: "Total +" or "Total cargos +" marks end
-                movement_end_pattern = re.compile(r'Total\s+(?:cargos\s+)?\+', re.I)
+                # Mixed/new format: summary row "Total cargos" (optional + / : before amount), e.g. "Total cargos +:" "$21,578.32"
+                movement_end_pattern = re.compile(r'\bTotal\s+cargos\b(?:\s*[+:])?', re.I)
             else:
                 # For other banks, use simple string matching
                 movement_end_pattern = re.compile(re.escape(movement_end_string), re.I)
