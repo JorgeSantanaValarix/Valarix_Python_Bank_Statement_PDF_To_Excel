@@ -2867,6 +2867,132 @@ def banamex_amount_string_has_leading_sign(s):
     return False
 
 
+def banamex_normalize_sign_chars(s):
+    """Map common OCR Unicode plus/minus to ASCII so sign detection matches Tesseract variants."""
+    if not s:
+        return ''
+    t = str(s)
+    t = t.replace('\uff0b', '+').replace('＋', '+').replace('\u207a', '+')
+    for ch in ('\u2212', '−', '–', '\ufe63', '\u2011'):
+        t = t.replace(ch, '-')
+    return t
+
+
+def banamex_monto_text_to_cargo_abono(raw_monto):
+    """
+    Banamex new format: one monto column; '-' = Abono, '+' = Cargo.
+    OCR often puts '+' after '$39.00' or uses fullwidth plus — handle leading/trailing signs.
+    Returns (cargos_str, abonos_str) each '' if unknown.
+    """
+    m = (raw_monto or '').strip()
+    if not m:
+        return '', ''
+    mt = banamex_normalize_sign_chars(m)
+    if mt.startswith('+'):
+        return m, ''
+    if mt.startswith('-'):
+        return '', m
+    # Trailing sign glued to amount (e.g. "$39.00+", "$39.00 +")
+    if re.search(r'\$\s*[\d,]+\.\d{2}\s*\+', mt):
+        amt = re.search(r'(\$\s*[\d,]+\.\d{2})', mt)
+        if amt:
+            return '+' + amt.group(1).replace(' ', '').strip(), ''
+    if re.search(r'\$\s*[\d,]+\.\d{2}\s*-', mt):
+        amt = re.search(r'(\$\s*[\d,]+\.\d{2})', mt)
+        if amt:
+            return '', '-' + amt.group(1).replace(' ', '').strip()
+    return '', ''
+
+
+_BANAMEX_OCR_LINE_AMOUNT_ONLY = re.compile(r'^\s*\$\s*[\d,]+\.\d{2}\s*$', re.I)
+_BANAMEX_OCR_LINE_DATE_ONLY_DD_MON = re.compile(
+    r'^\s*(?:0?[1-9]|[12][0-9]|3[01])-[A-Za-z]{3}-\d{4}\s*$',
+    re.I,
+)
+_BANAMEX_DD_MON_YYYY_IN_LINE = re.compile(
+    r'\b(0?[1-9]|[12][0-9]|3[01])-[A-Za-z]{3}-\d{4}\b',
+    re.I,
+)
+
+
+def _banamex_join_row_words_text(row_words):
+    return ' '.join((w.get('text') or '').strip() for w in (row_words or [])).strip()
+
+
+def _banamex_prev_row_is_heading_without_amount(prev_words):
+    """Movement heading line (dates + merchant) before OCR splits monto onto the next lines."""
+    if not prev_words:
+        return False
+    t = _banamex_join_row_words_text(prev_words)
+    if DEC_AMOUNT_RE.search(t):
+        return False
+    return bool(_BANAMEX_DD_MON_YYYY_IN_LINE.search(t))
+
+
+def banamex_merge_split_monto_ocr_rows(word_rows):
+    """
+    Banamex mixed OCR: amount and '+' sometimes land on consecutive baselines (e.g. $39.00 on Y=756,
+    '+' on Y=757; see --find). Merge with the preceding row when that row is a heading only (DD-mon
+    dates, no dollar amount), so one logical line matches '$660 +'-style rows. Optionally append a
+    third row that is only DD-mon-YYYY (posting date).
+    """
+    if not word_rows or len(word_rows) < 2:
+        return word_rows
+    out = []
+    i = 0
+    while i < len(word_rows):
+        rw = word_rows[i]
+        line_n = banamex_normalize_sign_chars(_banamex_join_row_words_text(rw))
+        sig2 = (
+            banamex_ocr_line_sign_only(_banamex_join_row_words_text(word_rows[i + 1]))
+            if i + 1 < len(word_rows)
+            else None
+        )
+        if _BANAMEX_OCR_LINE_AMOUNT_ONLY.match(line_n) and sig2 in ('+', '-'):
+            pieces = []
+            if out and _banamex_prev_row_is_heading_without_amount(out[-1]):
+                pieces.append(out.pop())
+            pieces.append(rw)
+            pieces.append(word_rows[i + 1])
+            advance = 2
+            if i + 2 < len(word_rows):
+                third = _banamex_join_row_words_text(word_rows[i + 2])
+                if _BANAMEX_OCR_LINE_DATE_ONLY_DD_MON.match(third):
+                    pieces.append(word_rows[i + 2])
+                    advance = 3
+            merged = []
+            for p in pieces:
+                merged.extend(p)
+            merged.sort(key=lambda w: (w.get('top', 0), w.get('x0', 0)))
+            out.append(merged)
+            i += advance
+            continue
+        out.append(rw)
+        i += 1
+    return out
+
+
+def banamex_standalone_sign_is_footer_artifact(word_rows, row_idx):
+    """
+    Footer OCR often emits 'Total cargos +', 'Total abonos', then a lone '-' on the next line
+    (layout artifact, not a sign for the last transaction). Those must not merge into movement_rows[-1].
+    """
+    if row_idx <= 0 or not word_rows:
+        return False
+    prev = _banamex_join_row_words_text(word_rows[row_idx - 1])
+    if not prev:
+        return False
+    pu = prev.upper()
+    if re.search(r'TOTAL\s+ABONOS', pu, re.I):
+        return True
+    if re.search(r'TOTAL\s+CARGOS', pu, re.I):
+        return True
+    # e.g. "$21,578.32 Total +" summary row
+    if 'TOTAL' in pu and '$' in prev and '+' in prev:
+        return True
+    return False
+
+
 def banamex_merge_standalone_sign_to_previous_row(prev_row, sign_char):
     """
     Banamex new format: '-' => abono, '+' => cargo. Prepend sign to the amount on the
@@ -6719,9 +6845,16 @@ def extract_movement_row(words, columns, bank_name=None, date_pattern=None, debu
 
     # Banamex new format: single "monto" column; "-" prefix = Abono, "+" prefix = Cargo
     if bank_name == 'Banamex' and 'monto' in row_data:
+        cg, ab = banamex_monto_text_to_cargo_abono(row_data.get('monto'))
         m = (row_data.get('monto') or '').strip()
-        row_data['cargos'] = m if m.startswith('+') else ''
-        row_data['abonos'] = m if m.startswith('-') else ''
+        # Legacy: only leading +/- (handled above); if still empty, fall back to startswith
+        if not cg and not ab:
+            mn = banamex_normalize_sign_chars(m)
+            row_data['cargos'] = m if mn.startswith('+') else ''
+            row_data['abonos'] = m if mn.startswith('-') else ''
+        else:
+            row_data['cargos'] = cg
+            row_data['abonos'] = ab
         row_data['saldo'] = ''
         del row_data['monto']
 
@@ -7993,6 +8126,9 @@ def main():
                     split_rows.extend(split_result)
                 
                 word_rows = split_rows
+            # Banamex OCR: merge '$39.00' + next-line '+' (+ optional fecha-only line) into one row
+            if bank_config['name'] == 'Banamex' and used_ocr:
+                word_rows = banamex_merge_split_monto_ocr_rows(word_rows)
             # Inbursa only: skip next row when it was consumed as fecha day (e.g. "01") for previous line
             inbursa_skip_next_row = False
             for row_idx, row_words in enumerate(word_rows):
@@ -8038,9 +8174,15 @@ def main():
 
                 # Banamex OCR: Monto column sometimes emits '+' or '-' alone on the following line.
                 # Merge onto the previous movement row (same as lookahead in new-format override).
+                # Do not merge footer lines: e.g. '-' after "$30,000.00 Total abonos" is not the abono sign
+                # for the last real movement (it would clear Cargos and put the amount in Abonos).
                 if bank_config['name'] == 'Banamex' and movement_rows:
                     _bnx_sig = banamex_ocr_line_sign_only(all_row_text_orig)
                     if _bnx_sig:
+                        if banamex_standalone_sign_is_footer_artifact(word_rows, row_idx):
+                            _disp = "SKIPPED (Banamex footer +/-, not merged to last movement)"
+                            _debug_mov_line(all_row_text_orig, None, _disp)
+                            continue
                         _prev_m = movement_rows[-1]
                         if banamex_merge_standalone_sign_to_previous_row(_prev_m, _bnx_sig):
                             _disp = "MERGED (Banamex +/- line applied to previous movement)"
@@ -8249,8 +8391,27 @@ def main():
                         if _bnf_amt_re.search(desc_line) is None and _bnf_amt_re_alt.search(all_row_text_orig):
                             desc_line = _bnf_amt_re_alt.sub(' ', desc_line, count=1)
                         row_data['descripcion'] = ' '.join(desc_line.split()).strip().lstrip('|').strip()
-                        # + on current or previous line = cargo; else abono. OCR may put +/- alone on the *next* line.
-                        is_cargo = '+' in prev_line_text or '+' in all_row_text_orig
+                        # +/- relative to amount (handles Unicode +/− and OCR that omits ASCII '+' in line scan).
+                        _tail_snip = all_row_text_orig[amt_m.end():amt_m.end() + 36]
+                        _tail_n = banamex_normalize_sign_chars(_tail_snip).lstrip()
+                        _head_snip = all_row_text_orig[max(0, amt_m.start() - 10):amt_m.start()]
+                        _head_n = banamex_normalize_sign_chars(_head_snip).rstrip()
+                        sign_after = _tail_n[:1] if _tail_n else ''
+                        sign_before = _head_n[-1:] if _head_n else ''
+                        _np = banamex_normalize_sign_chars(prev_line_text)
+                        _nc = banamex_normalize_sign_chars(all_row_text_orig)
+                        # Prefer sign immediately after amount (e.g. "$39.00 + 12-mar-2026"), then before amount.
+                        if sign_after == '+':
+                            is_cargo = True
+                        elif sign_after == '-':
+                            is_cargo = False
+                        elif sign_before == '+':
+                            is_cargo = True
+                        elif sign_before == '-':
+                            is_cargo = False
+                        else:
+                            # + on current or previous line = cargo; else abono. OCR may put +/- alone on the *next* line.
+                            is_cargo = '+' in _np or '+' in _nc
                         if next_only_sign == '-':
                             is_cargo = False
                         elif next_only_sign == '+':
