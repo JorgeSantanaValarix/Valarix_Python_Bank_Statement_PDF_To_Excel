@@ -2800,6 +2800,47 @@ def extract_name_from_tarjeta_titular_line(full_text: str):
     return None
 
 
+def banamex_restrict_text_for_header_fields(full_text: str) -> str:
+    """
+    Mixed OCR merges page headers with distant tables into one blob. RFC/Nombre extraction should
+    only see content before the first movements / installment / summary-table section — not débitos
+    tables (SORIANA, dates, amounts) glued after the cardholder line.
+    Returns truncated text from the start of the PDF/string to the earliest section marker.
+    """
+    if not full_text or not full_text.strip():
+        return full_text
+    earliest = len(full_text)
+    # Order matters only for choosing the earliest match across the whole document.
+    markers = [
+        r'SALDO\s+SOBRE\s+EL\s+QUE\s+SE\s+CALCULARON\s+LOS\s+INTERESES',
+        r'DISTRIBUCI[ÓO]N\s+[ÚU]LTIMO\s+DE\s+TU\s+PAGO',
+        r'COMPRAS\s+Y\s+CARGOS\s+DIFERIDOS\s+A\s+MESES',
+        r'MOVIMIENTOS\s+DESGLOSE\s+DE',
+        r'\d+\s+MOVIMIENTOS\s+DESGLOSE\s+DE',
+        r'DETALLE\s+DE\s+OPERACIONES',
+        r'DESGLOSE\s+DE\s+MOVIMIENTOS',
+        r'CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES',
+        r'CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\b',
+        # Installment schedule header often glued after name on OCR mega-lines
+        # Broad: OCR may read "interés" as "ET" / garbage — cut at "Fecha N Tasa de"
+        r'\bFecha\s*\d+\s+Tasa\s+de\b',
+        r'Fecha\s*\d+\s*Tasa\s+de\s+(?:la\s+)?inter',
+        r'\bMonto\s+Saldo\s+Pago\b',
+        r'\bSaldo\s+Pago\s+N[uú]m\b',
+        r'Original\s+pendiente\s+requerido\s+de\s+pago',
+    ]
+    for pat in markers:
+        try:
+            m = re.search(pat, full_text, re.IGNORECASE)
+            if m and m.start() < earliest:
+                earliest = m.start()
+        except re.error:
+            continue
+    if earliest < len(full_text) and earliest > 0:
+        return full_text[:earliest].strip()
+    return full_text
+
+
 def trim_banamex_nombre_at_movements_table(name: str) -> str:
     """
     Banamex mixed/OCR often glues the cardholder name to the movements table header on one line.
@@ -2819,6 +2860,9 @@ def trim_banamex_nombre_at_movements_table(name: str) -> str:
         r'DESGLOSE\s+DE\s+MOVIMIENTOS',
         r'CARGOS,?\s+ABONOS\s+Y\s+COMPRAS\s+REGULARES',
         r'CARGOS,?\s+ABONOS\s+Y\s+COMPRAS',
+        r'\bFecha\s*\d+\s+Tasa\s+de\b',
+        r'\bMonto\s+Saldo\s+Pago\b',
+        r'\bSaldo\s+Pago\s+N[uú]m\b',
         # Summary lines sometimes glued after name
         r'Total\s+cargos',
         r'Total\s+abonos',
@@ -3031,6 +3075,8 @@ def extract_rfc_and_name_from_text(full_text: str, detected_bank=None):
     name = None
     if not full_text or not full_text.strip():
         return (rfc, name)
+    if detected_bank == 'Banamex':
+        full_text = banamex_restrict_text_for_header_fields(full_text)
     lines = full_text.split('\n')
     bank_keywords = BANK_KEYWORDS.get(detected_bank, []) if detected_bank else []
 
