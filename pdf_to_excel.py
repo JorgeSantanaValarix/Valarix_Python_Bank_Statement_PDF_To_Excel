@@ -10922,6 +10922,12 @@ def main():
                 if bank_config['name'] == 'Clara' and col == 'Abonos':
                     # Format as currency with 2 decimals (always show, even if negative or zero)
                     total_row[col] = f"{total:,.2f}"
+                elif bank_config['name'] == 'Banamex' and col in ('Abonos', 'Cargos'):
+                    # Credits (abonos) are stored negative; sum is often < 0 — still show footer total as magnitude
+                    if total != 0:
+                        total_row[col] = f"{abs(total):,.2f}"
+                    else:
+                        total_row[col] = ''
                 elif total > 0:
                     # Format as currency with 2 decimals
                     total_row[col] = f"{total:,.2f}"
