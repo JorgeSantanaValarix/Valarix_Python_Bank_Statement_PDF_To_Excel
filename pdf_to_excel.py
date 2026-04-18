@@ -7689,7 +7689,7 @@ def main():
     movement_rows = []
     df_mov = None  # Initialize to avoid UnboundLocalError
     pdf_summary = None  # Initialize to avoid UnboundLocalError
-    banamex_new_fmt_totals = {}  # Total cargos/abonos from "Total +" and "Total" lines for Valor en PDF (Banamex new format only)
+    banamex_new_fmt_totals = {}  # Footer totals for Valor en PDF: "Total cargos +" → cargos, "Total abonos -" → abonos (Banamex new format)
     # So trim block (later) can run for any path (e.g. HSBC OCR) without NameError
     movement_end_string = bank_config.get('movements_end')
     movement_end_pattern = None
@@ -10827,16 +10827,60 @@ def main():
                         and pdf_summary.get('saldo_final') is not None
                     ):
                         break
-    # Banamex new format only: Valor en PDF from "Total +" line → Total Cargos, "Total" line (e.g. "$438.55 Total") → Total Abonos. Scan ALL PDF pages.
+    # Banamex new format: "Total cargos +" / "Total abonos -" in footer (OCR) → Valor en PDF for Cargos/Abonos validation;
+    # legacy: "… Total +" and "… Total" (amount before word Total) for older statements.
     if bank_config['name'] == 'Banamex' and banamex_new_format and extracted_data:
         need_abonos = banamex_new_fmt_totals.get('total_abonos') is None
         need_cargos = banamex_new_fmt_totals.get('total_cargos') is None
         if need_abonos or need_cargos:
             re_amt = re.compile(r'\$\s*([\d,]+\.\d{2})|(?<!\d)(\d{1,3}(?:,\d{3})*\.\d{2})(?=\s|$|[^\d])')
-            re_total_plus = re.compile(r'Total\s*\+', re.I)
-            # Amount followed by "Total" (e.g. "$438.55 Total") for Total Abonos; avoids matching "Total de Movimientos" etc.
-            re_amount_total = re.compile(r'[\d,]+\.\d{2}\s+Total(?:\s|$)', re.I)
+            re_footer_cargos = re.compile(r'total\s+cargos\s*\+', re.I)
+            re_footer_abonos = re.compile(r'total\s+abonos\s*-', re.I)
+            re_total_plus_loose = re.compile(r'Total\s*\+', re.I)
+            # "$438.55 Total" at end or before punctuation — not "$30,000.00 Total abonos" (that uses labeled pattern).
+            re_amount_plain_total = re.compile(
+                r'[\d,]+\.\d{2}\s+Total\b(?!\s+[a-zA-ZáéíóúÁÉÍÓÚñÑ]{2})',
+                re.I,
+            )
             WINDOW_SIZE = 4
+
+            def _bnx_footer_amounts(block_txt):
+                out = []
+                if not block_txt:
+                    return out
+                for m in re_amt.finditer(block_txt):
+                    _v = m.group(1) or m.group(2)
+                    try:
+                        out.append(normalize_amount_str(_v))
+                    except Exception:
+                        pass
+                return out
+
+            def _consume_footer_block(block_norm):
+                nonlocal need_abonos, need_cargos
+                if not need_abonos and not need_cargos:
+                    return
+                all_amts = _bnx_footer_amounts(block_norm)
+                if not all_amts:
+                    return
+                mag = abs(all_amts[-1])
+                if need_cargos and re_footer_cargos.search(block_norm):
+                    banamex_new_fmt_totals['total_cargos'] = mag
+                    need_cargos = False
+                if need_abonos and re_footer_abonos.search(block_norm):
+                    banamex_new_fmt_totals['total_abonos'] = mag
+                    need_abonos = False
+                if need_cargos and re_total_plus_loose.search(block_norm) and not re_footer_abonos.search(block_norm):
+                    banamex_new_fmt_totals['total_cargos'] = mag
+                    need_cargos = False
+                if (
+                    need_abonos
+                    and re_amount_plain_total.search(block_norm)
+                    and not re_total_plus_loose.search(block_norm)
+                ):
+                    banamex_new_fmt_totals['total_abonos'] = mag
+                    need_abonos = False
+
             for page_data in extracted_data:
                 words = page_data.get('words', [])
                 if not words:
@@ -10845,44 +10889,42 @@ def main():
                 for r in range(len(word_rows)):
                     if not need_abonos and not need_cargos:
                         break
-                    window_rows = word_rows[r:r + WINDOW_SIZE]
+                    window_rows = word_rows[r : r + WINDOW_SIZE]
                     row_texts = []
                     for row_words in window_rows:
                         if not row_words:
                             continue
                         row_texts.append(' '.join([w.get('text', '') for w in row_words]))
-                    block = ' '.join(row_texts)
-                    block_norm = ' '.join(block.split())
-                    all_amts = []
-                    for m in re_amt.finditer(block):
-                        _v = m.group(1) or m.group(2)
-                        try:
-                            all_amts.append(normalize_amount_str(_v))
-                        except Exception:
-                            pass
-                    if not all_amts:
-                        continue
-                    has_total_plus = bool(re_total_plus.search(block_norm))
-                    has_total_not_plus = bool(re_amount_total.search(block_norm)) and not re_total_plus.search(block_norm)
-                    # "Total +" line (e.g. "$1,127.00 Total +") → Total Cargos
-                    if need_cargos and has_total_plus:
-                        # Magnitude only: statement/OCR may associate minus with abonos column convention
-                        banamex_new_fmt_totals['total_cargos'] = abs(all_amts[0])
-                        need_cargos = False
-                    # "Total" line (e.g. "$438.55 Total", not "Total +") → Total Abonos
-                    if need_abonos and has_total_not_plus:
-                        banamex_new_fmt_totals['total_abonos'] = abs(all_amts[-1])
-                        need_abonos = False
+                    block_norm = ' '.join(' '.join(row_texts).split())
+                    _consume_footer_block(block_norm)
                 if not need_abonos and not need_cargos:
                     break
+
+            if need_abonos or need_cargos:
+                content_blob = '\n'.join((p.get('content') or '') for p in extracted_data)
+                content_lines = []
+                for line in content_blob.replace('\r', '').split('\n'):
+                    line_n = ' '.join(line.split())
+                    if line_n:
+                        content_lines.append(line_n)
+                for i, line_n in enumerate(content_lines):
+                    if not need_abonos and not need_cargos:
+                        break
+                    merged = line_n
+                    if i + 1 < len(content_lines):
+                        merged = line_n + ' ' + content_lines[i + 1]
+                    _consume_footer_block(merged)
+                    _consume_footer_block(line_n)
     # Banamex new format: write summary-line totals into pdf_summary for Valor en PDF validation
     if bank_config['name'] == 'Banamex' and banamex_new_format and banamex_new_fmt_totals:
         if pdf_summary is None:
             pdf_summary = {}
         if banamex_new_fmt_totals.get('total_cargos') is not None:
             pdf_summary['total_cargos'] = abs(banamex_new_fmt_totals['total_cargos'])
+            pdf_summary['total_retiros'] = pdf_summary['total_cargos']
         if banamex_new_fmt_totals.get('total_abonos') is not None:
             pdf_summary['total_abonos'] = abs(banamex_new_fmt_totals['total_abonos'])
+            pdf_summary['total_depositos'] = pdf_summary['total_abonos']
     # Si es HSBC con OCR, pdf_summary ya fue extraído arriba en extract_hsbc_summary_from_ocr_text
     # Debug: write movements debug file for coordinate path (RFC log + summary + movements; HSBC OCR path writes earlier)
     if debug_path is not None and not (is_hsbc and used_ocr):
